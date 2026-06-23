@@ -89,7 +89,7 @@ object TtsRoadMediaItems {
             .setExtras(extras)
             .setIsBrowsable(false)
             .setIsPlayable(true)
-            .setMediaType(MediaMetadata.MEDIA_TYPE_TITLE)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
 
         cover?.let { metadataBuilder.setArtworkUri(it.toUri()) }
         durationMs?.let { metadataBuilder.setDurationMs(it) }

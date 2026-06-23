@@ -12,3 +12,4 @@ externalNativeBuild/
 *.jks
 *.keystore
 
+.kotlin/

@@ -5,12 +5,12 @@ import com.squareup.moshi.Json
 data class LoginRequest(
     val username: String,
     val password: String,
-    @Json(name = "device_name") val deviceName: String,
+    @param:Json(name = "device_name") val deviceName: String,
 )
 
 data class LoginResponse(
     val token: String,
-    @Json(name = "token_type") val tokenType: String = "bearer",
+    @param:Json(name = "token_type") val tokenType: String = "bearer",
     val user: MobileUser,
     val server: ServerInfo? = null,
 )
@@ -27,24 +27,24 @@ data class CurrentUserResponse(
 data class MobileUser(
     val id: Int,
     val username: String,
-    @Json(name = "is_admin") val isAdmin: Boolean = false,
+    @param:Json(name = "is_admin") val isAdmin: Boolean = false,
 )
 
 data class ServerInfo(
     val name: String = "TTSRoad",
-    @Json(name = "base_url") val baseUrl: String? = null,
-    @Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "base_url") val baseUrl: String? = null,
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
 )
 
 data class LibraryResponse(
-    @Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
     val fictions: List<FictionSummary> = emptyList(),
-    @Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
-    @Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
+    @param:Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
+    @param:Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
 )
 
 data class ChaptersResponse(
-    @Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
     val fiction: FictionSummary,
     val total: Int = 0,
     val chapters: List<ChapterSummary> = emptyList(),
@@ -55,29 +55,29 @@ data class FictionSummary(
     val title: String = "Untitled",
     val author: String? = null,
     val slug: String? = null,
-    @Json(name = "cover_image_url") val coverImageUrl: String? = null,
-    @Json(name = "total_chapters") val totalChapters: Int = 0,
-    @Json(name = "done_chapters") val doneChapters: Int = 0,
+    @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
+    @param:Json(name = "total_chapters") val totalChapters: Int = 0,
+    @param:Json(name = "done_chapters") val doneChapters: Int = 0,
 )
 
 data class ChapterSummary(
     val id: Int = 0,
-    @Json(name = "fiction_id") val fictionId: Int = 0,
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
     val title: String = "Untitled chapter",
-    @Json(name = "chapter_number") val chapterNumber: Double? = null,
-    @Json(name = "display_number") val displayNumber: Double? = null,
-    @Json(name = "player_index") val playerIndex: Int? = null,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
+    @param:Json(name = "display_number") val displayNumber: Double? = null,
+    @param:Json(name = "player_index") val playerIndex: Int? = null,
     val status: String? = null,
     val playable: Boolean = false,
-    @Json(name = "audio_duration") val audioDuration: Double? = null,
-    @Json(name = "audio_duration_label") val audioDurationLabel: String? = null,
-    @Json(name = "audio_filesize") val audioFileSize: Long? = null,
+    @param:Json(name = "audio_duration") val audioDuration: Double? = null,
+    @param:Json(name = "audio_duration_label") val audioDurationLabel: String? = null,
+    @param:Json(name = "audio_filesize") val audioFileSize: Long? = null,
     val audio: AudioInfo? = null,
     val playback: PlaybackInfo? = null,
     val fiction: FictionSummary? = null,
-    @Json(name = "fiction_title") val fictionTitle: String? = null,
-    @Json(name = "fiction_author") val fictionAuthor: String? = null,
-    @Json(name = "cover_image_url") val coverImageUrl: String? = null,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    @param:Json(name = "fiction_author") val fictionAuthor: String? = null,
+    @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
 ) {
     val resolvedFictionTitle: String?
         get() = fiction?.title ?: fictionTitle
@@ -93,38 +93,38 @@ data class AudioInfo(
     val filename: String? = null,
     val path: String? = null,
     val url: String,
-    @Json(name = "requires_bearer_auth") val requiresBearerAuth: Boolean = true,
+    @param:Json(name = "requires_bearer_auth") val requiresBearerAuth: Boolean = true,
 )
 
 data class PlaybackInfo(
-    @Json(name = "position_seconds") val positionSeconds: Double = 0.0,
-    @Json(name = "is_played") val isPlayed: Boolean = false,
-    @Json(name = "last_listened_at") val lastListenedAt: String? = null,
-    @Json(name = "remaining_seconds") val remainingSeconds: Double? = null,
-    @Json(name = "remaining_label") val remainingLabel: String? = null,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "is_played") val isPlayed: Boolean = false,
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
+    @param:Json(name = "remaining_seconds") val remainingSeconds: Double? = null,
+    @param:Json(name = "remaining_label") val remainingLabel: String? = null,
 )
 
 data class PlaybackProgressRequest(
-    @Json(name = "fiction_id") val fictionId: Int,
-    @Json(name = "chapter_id") val chapterId: Int,
-    @Json(name = "position_seconds") val positionSeconds: Double,
-    @Json(name = "is_played") val isPlayed: Boolean,
+    @param:Json(name = "fiction_id") val fictionId: Int,
+    @param:Json(name = "chapter_id") val chapterId: Int,
+    @param:Json(name = "position_seconds") val positionSeconds: Double,
+    @param:Json(name = "is_played") val isPlayed: Boolean,
 )
 
 data class PlaybackProgressResponse(
     val status: String = "",
-    @Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
 )
 
 data class PlaybackMarkRequest(
-    @Json(name = "chapter_ids") val chapterIds: List<Int>,
+    @param:Json(name = "chapter_ids") val chapterIds: List<Int>,
     val played: Boolean,
 )
 
 data class PlaybackMarkResponse(
     val status: String = "",
     val played: Boolean = false,
-    @Json(name = "chapter_ids") val chapterIds: List<Int> = emptyList(),
+    @param:Json(name = "chapter_ids") val chapterIds: List<Int> = emptyList(),
     val count: Int = 0,
 )
 

@@ -13,12 +13,16 @@ The project is pinned to:
 - Kotlin 2.3.10
 - Compose BOM 2026.06.00
 
-This workspace does not currently have Java, Gradle, or the Android SDK on PATH, so command-line builds could not be run here.
+Android Studio includes the JDK and SDK needed for local builds. If building from PowerShell and `java` is not on PATH, set `JAVA_HOME` first:
 
-This environment did not have a local Gradle install, so the Gradle wrapper scripts and wrapper JAR could not be generated here. Android Studio can generate or repair the wrapper after the first sync; after that, build a personal debug APK with:
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Android\Android Studio\jbr'
+```
 
-```bash
-./gradlew assembleDebug
+Build a personal debug APK with:
+
+```powershell
+.\gradlew.bat assembleDebug
 ```
 
 Install it with:
