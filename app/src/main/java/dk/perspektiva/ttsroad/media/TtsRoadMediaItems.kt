@@ -72,7 +72,7 @@ object TtsRoadMediaItems {
             putInt("fiction_id", chapter.resolvedFictionId)
             putInt("chapter_id", chapter.resolvedChapterId)
             chapter.displayNumber?.let { putDouble("display_number", it) }
-            chapter.playback?.positionSeconds?.let { putDouble("position_seconds", it) }
+            chapter.resolvedPositionSeconds.takeIf { it > 0.0 }?.let { putDouble("position_seconds", it) }
         }
         val fictionTitle = fiction?.title ?: chapter.resolvedFictionTitle
         val author = fiction?.author ?: chapter.resolvedAuthor
@@ -82,7 +82,7 @@ object TtsRoadMediaItems {
             ?.let { (it * 1000).toLong() }
 
         val metadataBuilder = MediaMetadata.Builder()
-            .setTitle(chapter.title)
+            .setTitle(chapter.resolvedTitle)
             .setAlbumTitle(fictionTitle)
             .setArtist(author)
             .setSubtitle(chapter.audioDurationLabel)

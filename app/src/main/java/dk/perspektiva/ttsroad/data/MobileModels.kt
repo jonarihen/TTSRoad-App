@@ -65,6 +65,7 @@ data class ChapterSummary(
     @param:Json(name = "chapter_id") val apiChapterId: Int? = null,
     @param:Json(name = "fiction_id") val fictionId: Int = 0,
     val title: String = "Untitled chapter",
+    @param:Json(name = "chapter_title") val chapterTitle: String? = null,
     @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
     @param:Json(name = "display_number") val displayNumber: Double? = null,
     @param:Json(name = "player_index") val playerIndex: Int? = null,
@@ -79,12 +80,21 @@ data class ChapterSummary(
     @param:Json(name = "fiction_title") val fictionTitle: String? = null,
     @param:Json(name = "fiction_author") val fictionAuthor: String? = null,
     @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
+    @param:Json(name = "resume_seconds") val resumeSeconds: Double? = null,
+    @param:Json(name = "resume_time_label") val resumeTimeLabel: String? = null,
+    @param:Json(name = "resume_label") val resumeLabel: String? = null,
 ) {
     val resolvedChapterId: Int
         get() = id.takeIf { it > 0 } ?: apiChapterId ?: 0
 
     val resolvedFictionId: Int
         get() = fictionId.takeIf { it > 0 } ?: fiction?.id ?: 0
+
+    val resolvedTitle: String
+        get() = chapterTitle ?: title
+
+    val resolvedPositionSeconds: Double
+        get() = playback?.positionSeconds ?: resumeSeconds ?: 0.0
 
     val resolvedFictionTitle: String?
         get() = fiction?.title ?: fictionTitle

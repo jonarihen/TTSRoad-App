@@ -592,12 +592,12 @@ private fun ChapterRow(
         ) {
             CoverThumb(
                 imageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
-                fallback = fiction?.title ?: chapter.resolvedFictionTitle ?: chapter.title,
+                fallback = fiction?.title ?: chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
             )
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = chapter.title,
+                    text = chapter.resolvedTitle,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 2,
@@ -607,7 +607,7 @@ private fun ChapterRow(
                     text = listOfNotNull(
                         fiction?.title ?: chapter.resolvedFictionTitle,
                         chapter.audioDurationLabel,
-                        chapter.playback?.remainingLabel?.let { "$it left" },
+                        chapter.playback?.remainingLabel?.let { "$it left" } ?: chapter.resumeTimeLabel?.let { "$it in" },
                     ).joinToString(" - "),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -634,7 +634,7 @@ private fun ChapterRow(
                         onOpenPlayer()
                     }
                 },
-                enabled = chapter.audio != null && chapter.playable,
+                enabled = chapter.audio != null,
             ) {
                 Text("Play")
             }

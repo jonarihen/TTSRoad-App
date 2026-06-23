@@ -63,12 +63,12 @@ class PlaybackController(
         currentPlayback = CurrentPlayback(
             fictionId = chapter.resolvedFictionId,
             chapterId = chapter.resolvedChapterId,
-            title = chapter.title,
+            title = chapter.resolvedTitle,
             fictionTitle = fiction?.title ?: chapter.resolvedFictionTitle,
         )
 
-        val startPositionMs = chapter.playback?.positionSeconds
-            ?.takeIf { it > 0.0 }
+        val startPositionMs = chapter.resolvedPositionSeconds
+            .takeIf { it > 0.0 }
             ?.let { (it * 1000).roundToLong() }
             ?: 0L
 
