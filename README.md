@@ -27,6 +27,30 @@ Install it with:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+## Test On Desktop Emulator
+
+This machine needs Android Studio, the Android SDK, and emulator support before it can run the app locally. On Windows, Android Studio can be installed with:
+
+```powershell
+winget install --id Google.AndroidStudio -e --accept-package-agreements --accept-source-agreements
+```
+
+After Android Studio is installed:
+
+1. Open this repository folder in Android Studio.
+2. Let Gradle sync download the Android Gradle plugin, Kotlin, Compose, Media3, and SDK packages.
+3. Open Device Manager and create a Pixel virtual device with a Google APIs system image.
+4. Run the `app` configuration on the emulator.
+5. On the login screen, enter the TTSRoad backend URL.
+
+For a backend running on the same desktop as the emulator, Android's emulator host alias is:
+
+```text
+http://10.0.2.2:8000
+```
+
+Debug builds allow cleartext HTTP for local testing. Release builds should use HTTPS.
+
 ## App Scope
 
 The first pass includes:
