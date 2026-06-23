@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,6 +56,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -335,53 +337,66 @@ private fun LibraryScreen(
 
         is LoadState.Loaded -> {
             val library = state.value
+            val fictionForChapter: (ChapterSummary) -> FictionSummary? = { chapter ->
+                chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
+            }
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(22.dp),
             ) {
                 item {
-                    SectionHeader(
-                        title = "Continue listening",
-                        actionLabel = "Refresh",
-                        onAction = ::refresh,
-                    )
-                }
-                if (library.continueListening.isEmpty()) {
-                    item { EmptyCard("No active chapters") }
-                } else {
-                    itemsIndexed(library.continueListening, key = { index, chapter -> "continue-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
-                        ChapterRow(
-                            chapter = chapter,
-                            fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId },
-                            playbackController = playbackController,
-                            onOpenPlayer = onOpenPlayer,
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SectionHeader(
+                            title = "Continue listening",
+                            actionLabel = "Refresh",
+                            onAction = ::refresh,
                         )
+                        if (library.continueListening.isEmpty()) {
+                            EmptyCard("No active chapters")
+                        } else {
+                            HorizontalChapterRail(
+                                chapters = library.continueListening,
+                                fictionForChapter = fictionForChapter,
+                                keyPrefix = "continue",
+                                playbackController = playbackController,
+                                onOpenPlayer = onOpenPlayer,
+                            )
+                        }
                     }
                 }
 
-                item { SectionHeader(title = "Fictions") }
-                if (library.fictions.isEmpty()) {
-                    item { EmptyCard("No fictions found") }
-                } else {
-                    itemsIndexed(library.fictions, key = { index, fiction -> "fiction-${fiction.id}-$index" }) { _, fiction ->
-                        FictionRow(fiction = fiction, onClick = { onOpenFiction(fiction) })
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SectionHeader(title = "Fictions")
+                        if (library.fictions.isEmpty()) {
+                            EmptyCard("No fictions found")
+                        } else {
+                            HorizontalFictionRail(
+                                fictions = library.fictions,
+                                onOpenFiction = onOpenFiction,
+                            )
+                        }
                     }
                 }
 
-                item { SectionHeader(title = "Recent") }
-                if (library.recentChapters.isEmpty()) {
-                    item { EmptyCard("No recent chapters") }
-                } else {
-                    itemsIndexed(library.recentChapters, key = { index, chapter -> "recent-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
-                        ChapterRow(
-                            chapter = chapter,
-                            fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId },
-                            playbackController = playbackController,
-                            onOpenPlayer = onOpenPlayer,
-                        )
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SectionHeader(title = "Recent")
+                        if (library.recentChapters.isEmpty()) {
+                            EmptyCard("No recent chapters")
+                        } else {
+                            HorizontalChapterRail(
+                                chapters = library.recentChapters,
+                                fictionForChapter = fictionForChapter,
+                                keyPrefix = "recent",
+                                playbackController = playbackController,
+                                onOpenPlayer = onOpenPlayer,
+                            )
+                        }
                     }
                 }
             }
@@ -474,12 +489,19 @@ private fun PlayerScreen(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        CoverThumb(
+            imageUrl = playerState.coverImageUrl,
+            fallback = playerState.fictionTitle ?: playerState.title,
+            size = 220,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = playerState.title,
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
         )
         playerState.fictionTitle?.let {
             Spacer(modifier = Modifier.height(8.dp))
@@ -489,6 +511,7 @@ private fun PlayerScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
             )
         }
         Spacer(modifier = Modifier.height(28.dp))
@@ -567,6 +590,148 @@ private fun SettingsScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (isBusy) "Signing out" else "Sign out")
+        }
+    }
+}
+
+@Composable
+private fun HorizontalChapterRail(
+    chapters: List<ChapterSummary>,
+    fictionForChapter: (ChapterSummary) -> FictionSummary?,
+    keyPrefix: String,
+    playbackController: PlaybackController,
+    onOpenPlayer: () -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        itemsIndexed(
+            chapters,
+            key = { index, chapter -> "$keyPrefix-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" },
+        ) { _, chapter ->
+            ChapterTile(
+                chapter = chapter,
+                fiction = fictionForChapter(chapter),
+                playbackController = playbackController,
+                onOpenPlayer = onOpenPlayer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HorizontalFictionRail(
+    fictions: List<FictionSummary>,
+    onOpenFiction: (FictionSummary) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        itemsIndexed(fictions, key = { index, fiction -> "fiction-${fiction.id}-$index" }) { _, fiction ->
+            FictionTile(fiction = fiction, onClick = { onOpenFiction(fiction) })
+        }
+    }
+}
+
+@Composable
+private fun ChapterTile(
+    chapter: ChapterSummary,
+    fiction: FictionSummary?,
+    playbackController: PlaybackController,
+    onOpenPlayer: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    Card(
+        modifier = Modifier
+            .width(232.dp)
+            .height(330.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            CoverThumb(
+                imageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
+                fallback = fiction?.title ?: chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
+                size = 128,
+            )
+            Text(
+                text = chapter.resolvedTitle,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = listOfNotNull(
+                    fiction?.title ?: chapter.resolvedFictionTitle,
+                    chapter.audioDurationLabel,
+                    chapter.playback?.remainingLabel?.let { "$it left" } ?: chapter.resumeTimeLabel?.let { "$it in" },
+                ).joinToString(" - "),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(modifier = Modifier.weight(1f, fill = true))
+            Button(
+                onClick = {
+                    scope.launch {
+                        playbackController.play(chapter, fiction)
+                        onOpenPlayer()
+                    }
+                },
+                enabled = chapter.audio != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (chapter.resolvedPositionSeconds > 0.0) "Resume" else "Play")
+            }
+        }
+    }
+}
+
+@Composable
+private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .width(172.dp)
+            .height(268.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            CoverThumb(
+                imageUrl = fiction.coverImageUrl,
+                fallback = fiction.title,
+                size = 132,
+            )
+            Text(
+                text = fiction.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = listOfNotNull(
+                    fiction.author,
+                    "${fiction.doneChapters}/${fiction.totalChapters} ready",
+                ).joinToString(" - "),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

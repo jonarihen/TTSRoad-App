@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 data class PlayerUiState(
     val title: String = "Nothing playing",
     val fictionTitle: String? = null,
+    val coverImageUrl: String? = null,
     val isPlaying: Boolean = false,
     val hasMedia: Boolean = false,
     val positionMs: Long = 0L,
@@ -39,6 +40,7 @@ private data class CurrentPlayback(
     val chapterId: Int,
     val title: String,
     val fictionTitle: String?,
+    val coverImageUrl: String?,
 )
 
 class PlaybackController(
@@ -65,6 +67,7 @@ class PlaybackController(
             chapterId = chapter.resolvedChapterId,
             title = chapter.resolvedTitle,
             fictionTitle = fiction?.title ?: chapter.resolvedFictionTitle,
+            coverImageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
         )
 
         val startPositionMs = chapter.resolvedPositionSeconds
@@ -205,6 +208,8 @@ class PlaybackController(
                 .ifBlank { "Nothing playing" },
             fictionTitle = playback?.fictionTitle
                 ?: player.currentMediaItem?.mediaMetadata?.albumTitle?.toString(),
+            coverImageUrl = playback?.coverImageUrl
+                ?: player.currentMediaItem?.mediaMetadata?.artworkUri?.toString(),
             isPlaying = player.isPlaying,
             hasMedia = player.currentMediaItem != null,
             positionMs = player.currentPosition.coerceAtLeast(0L),

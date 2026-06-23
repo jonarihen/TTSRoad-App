@@ -1,22 +1,9 @@
 package dk.perspektiva.ttsroad.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-
-private val LightColors = lightColorScheme(
-    primary = Color(0xFF155E75),
-    onPrimary = Color.White,
-    secondary = Color(0xFF0F766E),
-    tertiary = Color(0xFFB45309),
-    background = Color(0xFFFAFAFA),
-    surface = Color(0xFFFFFFFF),
-    surfaceVariant = Color(0xFFE2E8F0),
-    outline = Color(0xFF64748B),
-)
 
 private val DarkColors = darkColorScheme(
     primary = Color(0xFF67E8F9),
@@ -31,7 +18,7 @@ private val DarkColors = darkColorScheme(
 @Composable
 fun TtsRoadTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
+        colorScheme = DarkColors,
         content = content,
     )
 }
