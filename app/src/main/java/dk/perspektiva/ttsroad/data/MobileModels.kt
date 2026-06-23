@@ -62,6 +62,7 @@ data class FictionSummary(
 
 data class ChapterSummary(
     val id: Int = 0,
+    @param:Json(name = "chapter_id") val apiChapterId: Int? = null,
     @param:Json(name = "fiction_id") val fictionId: Int = 0,
     val title: String = "Untitled chapter",
     @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
@@ -79,6 +80,12 @@ data class ChapterSummary(
     @param:Json(name = "fiction_author") val fictionAuthor: String? = null,
     @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
 ) {
+    val resolvedChapterId: Int
+        get() = id.takeIf { it > 0 } ?: apiChapterId ?: 0
+
+    val resolvedFictionId: Int
+        get() = fictionId.takeIf { it > 0 } ?: fiction?.id ?: 0
+
     val resolvedFictionTitle: String?
         get() = fiction?.title ?: fictionTitle
 

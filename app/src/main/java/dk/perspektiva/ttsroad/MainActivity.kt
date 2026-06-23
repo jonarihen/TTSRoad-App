@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -352,10 +352,10 @@ private fun LibraryScreen(
                 if (library.continueListening.isEmpty()) {
                     item { EmptyCard("No active chapters") }
                 } else {
-                    items(library.continueListening, key = { "continue-${it.id}" }) { chapter ->
+                    itemsIndexed(library.continueListening, key = { index, chapter -> "continue-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
                         ChapterRow(
                             chapter = chapter,
-                            fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.fictionId },
+                            fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId },
                             playbackController = playbackController,
                             onOpenPlayer = onOpenPlayer,
                         )
@@ -366,7 +366,7 @@ private fun LibraryScreen(
                 if (library.fictions.isEmpty()) {
                     item { EmptyCard("No fictions found") }
                 } else {
-                    items(library.fictions, key = { "fiction-${it.id}" }) { fiction ->
+                    itemsIndexed(library.fictions, key = { index, fiction -> "fiction-${fiction.id}-$index" }) { _, fiction ->
                         FictionRow(fiction = fiction, onClick = { onOpenFiction(fiction) })
                     }
                 }
@@ -375,10 +375,10 @@ private fun LibraryScreen(
                 if (library.recentChapters.isEmpty()) {
                     item { EmptyCard("No recent chapters") }
                 } else {
-                    items(library.recentChapters, key = { "recent-${it.id}" }) { chapter ->
+                    itemsIndexed(library.recentChapters, key = { index, chapter -> "recent-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
                         ChapterRow(
                             chapter = chapter,
-                            fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.fictionId },
+                            fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId },
                             playbackController = playbackController,
                             onOpenPlayer = onOpenPlayer,
                         )
@@ -437,7 +437,7 @@ private fun FictionScreen(
                     Text(text = it, color = MaterialTheme.colorScheme.error)
                 }
             }
-            items(state.value, key = { it.id }) { chapter ->
+            itemsIndexed(state.value, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
                 ChapterRow(
                     chapter = chapter,
                     fiction = fiction,
@@ -447,7 +447,7 @@ private fun FictionScreen(
                         scope.launch {
                             error = null
                             runCatching {
-                                repository.markPlayed(listOf(chapter.id), played)
+                                repository.markPlayed(listOf(chapter.resolvedChapterId), played)
                                 refresh()
                             }.onFailure {
                                 error = it.message ?: "Could not update chapter"

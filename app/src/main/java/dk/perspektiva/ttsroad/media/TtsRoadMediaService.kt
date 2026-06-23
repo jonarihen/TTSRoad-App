@@ -174,7 +174,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         private suspend fun continueItems(): List<MediaItem> {
             val library = service.library() ?: return emptyList()
             return library.continueListening.mapNotNull { chapter ->
-                val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.fictionId }
+                val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction)
             }
         }
@@ -187,7 +187,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         private suspend fun recentItems(): List<MediaItem> {
             val library = service.library() ?: return emptyList()
             return library.recentChapters.mapNotNull { chapter ->
-                val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.fictionId }
+                val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction)
             }
         }

@@ -61,8 +61,8 @@ class PlaybackController(
         val session = tokenStore.current()
         val player = ensurePlayer(session.authorizationHeader)
         currentPlayback = CurrentPlayback(
-            fictionId = chapter.fictionId,
-            chapterId = chapter.id,
+            fictionId = chapter.resolvedFictionId,
+            chapterId = chapter.resolvedChapterId,
             title = chapter.title,
             fictionTitle = fiction?.title ?: chapter.resolvedFictionTitle,
         )

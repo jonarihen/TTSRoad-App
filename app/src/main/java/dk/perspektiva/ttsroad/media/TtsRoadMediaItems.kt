@@ -69,8 +69,8 @@ object TtsRoadMediaItems {
     fun chapter(chapter: ChapterSummary, fiction: FictionSummary? = chapter.fiction): MediaItem? {
         val audioUrl = chapter.audio?.url ?: return null
         val extras = Bundle().apply {
-            putInt("fiction_id", chapter.fictionId)
-            putInt("chapter_id", chapter.id)
+            putInt("fiction_id", chapter.resolvedFictionId)
+            putInt("chapter_id", chapter.resolvedChapterId)
             chapter.displayNumber?.let { putDouble("display_number", it) }
             chapter.playback?.positionSeconds?.let { putDouble("position_seconds", it) }
         }
@@ -95,7 +95,7 @@ object TtsRoadMediaItems {
         durationMs?.let { metadataBuilder.setDurationMs(it) }
 
         return MediaItem.Builder()
-            .setMediaId(TtsRoadMediaIds.chapter(chapter.id))
+            .setMediaId(TtsRoadMediaIds.chapter(chapter.resolvedChapterId))
             .setUri(Uri.parse(audioUrl))
             .setMediaMetadata(metadataBuilder.build())
             .build()
