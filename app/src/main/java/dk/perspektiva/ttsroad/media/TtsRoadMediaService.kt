@@ -1,9 +1,12 @@
 package dk.perspektiva.ttsroad.media
 
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.LibraryResult
@@ -12,6 +15,7 @@ import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
 import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
@@ -24,10 +28,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -37,16 +41,28 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var session: MediaLibrarySession
     private var lastLibrary: LibraryResponse? = null
 
+    @Volatile
+    private var authHeader: String? = null
+
     override fun onCreate() {
         super.onCreate()
         tokenStore = ServiceLocator.tokenStore(this)
         repository = ServiceLocator.repository(this)
+        serviceScope.launch {
+            tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
+        }
         player = createPlayer()
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
                         serviceScope.launch { saveCurrentProgress(forcePlayed = true) }
+                    }
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (!isPlaying) {
+                        serviceScope.launch { saveCurrentProgress(forcePlayed = false) }
                     }
                 }
             },
@@ -65,13 +81,28 @@ class TtsRoadMediaService : MediaLibraryService() {
     }
 
     private fun createPlayer(): ExoPlayer {
-        val authHeader = runBlocking { tokenStore.current().authorizationHeader }
-        val headers = authHeader?.let { mapOf("Authorization" to it) }.orEmpty()
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(headers)
-        val mediaSourceFactory = DefaultMediaSourceFactory(httpFactory)
+        // The Authorization header is resolved per-request from the latest session token, so the
+        // player keeps working across logout/login without being recreated.
+        val resolvingFactory = ResolvingDataSource.Factory(
+            DefaultHttpDataSource.Factory(),
+            object : ResolvingDataSource.Resolver {
+                override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
+                    val header = authHeader ?: return dataSpec
+                    return dataSpec.withAdditionalHeaders(mapOf("Authorization" to header))
+                }
+            },
+        )
+        val mediaSourceFactory = DefaultMediaSourceFactory(resolvingFactory)
         return ExoPlayer.Builder(this)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                    .setUsage(C.USAGE_MEDIA)
+                    .build(),
+                /* handleAudioFocus = */ true,
+            )
+            .setHandleAudioBecomingNoisy(true)
             .build()
     }
 
@@ -79,13 +110,12 @@ class TtsRoadMediaService : MediaLibraryService() {
         serviceScope.launch {
             while (isActive) {
                 delay(15_000)
-                saveCurrentProgress(forcePlayed = false)
+                if (player.isPlaying) saveCurrentProgress(forcePlayed = false)
             }
         }
     }
 
     private suspend fun saveCurrentProgress(forcePlayed: Boolean) {
-        if (!player.isPlaying && !forcePlayed) return
         val mediaItem = player.currentMediaItem ?: return
         val extras = mediaItem.mediaMetadata.extras ?: return
         val fictionId = extras.getInt("fiction_id").takeIf { it > 0 } ?: return
@@ -105,6 +135,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             )
         }
     }
+
+    private suspend fun serverUrl(): String = tokenStore.current().serverUrl
 
     private suspend fun library(): LibraryResponse? {
         val loaded = runCatching { repository.library() }.getOrNull()
@@ -132,6 +164,20 @@ class TtsRoadMediaService : MediaLibraryService() {
             service.serviceScope.future {
                 LibraryResult.ofItem(TtsRoadMediaItems.root(), params)
             }
+
+        // Controllers (the app UI and Android Auto) send media items back across the binder without
+        // their playback URI. Restore it from the request metadata we stashed when building them.
+        override fun onAddMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: MutableList<MediaItem>,
+        ): ListenableFuture<MutableList<MediaItem>> {
+            val resolved = mediaItems.map { item ->
+                val uri = item.requestMetadata.mediaUri
+                if (uri != null) item.buildUpon().setUri(uri).build() else item
+            }.toMutableList()
+            return Futures.immediateFuture(resolved)
+        }
 
         override fun onGetChildren(
             session: MediaLibrarySession,
@@ -173,9 +219,10 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         private suspend fun continueItems(): List<MediaItem> {
             val library = service.library() ?: return emptyList()
+            val serverUrl = service.serverUrl()
             return library.continueListening.mapNotNull { chapter ->
                 val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction)
+                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
             }
         }
 
@@ -186,16 +233,18 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         private suspend fun recentItems(): List<MediaItem> {
             val library = service.library() ?: return emptyList()
+            val serverUrl = service.serverUrl()
             return library.recentChapters.mapNotNull { chapter ->
                 val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction)
+                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
             }
         }
 
         private suspend fun fictionChildren(parentId: String): List<MediaItem> {
             val fictionId = TtsRoadMediaIds.fictionId(parentId) ?: return emptyList()
             val (fiction, chapters) = service.fictionChapters(fictionId) ?: return emptyList()
-            return chapters.mapNotNull { TtsRoadMediaItems.chapter(it, fiction) }
+            val serverUrl = service.serverUrl()
+            return chapters.mapNotNull { TtsRoadMediaItems.chapter(it, fiction, serverUrl) }
         }
 
         private fun page(items: List<MediaItem>, page: Int, pageSize: Int): List<MediaItem> {

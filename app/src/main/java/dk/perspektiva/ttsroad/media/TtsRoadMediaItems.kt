@@ -1,6 +1,5 @@
 package dk.perspektiva.ttsroad.media
 
-import android.net.Uri
 import android.os.Bundle
 import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
@@ -66,8 +65,13 @@ object TtsRoadMediaItems {
             .build()
     }
 
-    fun chapter(chapter: ChapterSummary, fiction: FictionSummary? = chapter.fiction): MediaItem? {
-        val audioUrl = chapter.audio?.url ?: return null
+    fun chapter(
+        chapter: ChapterSummary,
+        fiction: FictionSummary? = chapter.fiction,
+        serverUrl: String? = null,
+    ): MediaItem? {
+        val rawUrl = chapter.audio?.url ?: return null
+        val audioUri = rewriteHost(rawUrl, serverUrl).toUri()
         val extras = Bundle().apply {
             putInt("fiction_id", chapter.resolvedFictionId)
             putInt("chapter_id", chapter.resolvedChapterId)
@@ -96,9 +100,35 @@ object TtsRoadMediaItems {
 
         return MediaItem.Builder()
             .setMediaId(TtsRoadMediaIds.chapter(chapter.resolvedChapterId))
-            .setUri(Uri.parse(audioUrl))
+            .setUri(audioUri)
+            .setRequestMetadata(
+                MediaItem.RequestMetadata.Builder()
+                    .setMediaUri(audioUri)
+                    .build(),
+            )
             .setMediaMetadata(metadataBuilder.build())
             .build()
+    }
+
+    /**
+     * The server builds absolute audio URLs from its configured BASE_URL, which may not be the
+     * host the device actually used to log in (and may even be relative if BASE_URL is unset).
+     * Rewrite the scheme/host/port to the server the user is connected to so playback works
+     * regardless of how BASE_URL is configured.
+     */
+    private fun rewriteHost(url: String, serverUrl: String?): String {
+        if (serverUrl.isNullOrBlank()) return url
+        return try {
+            val base = serverUrl.toUri()
+            if (base.scheme.isNullOrBlank() || base.authority.isNullOrBlank()) return url
+            url.toUri().buildUpon()
+                .scheme(base.scheme)
+                .encodedAuthority(base.authority)
+                .build()
+                .toString()
+        } catch (_: Exception) {
+            url
+        }
     }
 }
 

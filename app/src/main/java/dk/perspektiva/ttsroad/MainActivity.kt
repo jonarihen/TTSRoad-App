@@ -108,8 +108,11 @@ private fun TtsRoadApp() {
     var screen by remember { mutableStateOf<AppScreen>(AppScreen.Library) }
 
     LaunchedEffect(session.isLoggedIn) {
-        if (!session.isLoggedIn) {
+        if (session.isLoggedIn) {
+            playbackController.connect()
+        } else {
             screen = AppScreen.Library
+            playbackController.stop()
         }
     }
 
@@ -802,44 +805,6 @@ private fun ChapterRow(
                 enabled = chapter.audio != null,
             ) {
                 Text("Play")
-            }
-        }
-    }
-}
-
-@Composable
-private fun FictionRow(fiction: FictionSummary, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CoverThumb(imageUrl = fiction.coverImageUrl, fallback = fiction.title)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = fiction.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = listOfNotNull(
-                        fiction.author,
-                        "${fiction.doneChapters}/${fiction.totalChapters} ready",
-                    ).joinToString(" - "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
         }
     }

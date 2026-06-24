@@ -36,7 +36,6 @@ object ServiceLocator {
             playbackController ?: PlaybackController(
                 context = context.applicationContext,
                 tokenStore = tokenStore(context),
-                repository = repository(context),
             ).also { playbackController = it }
         }
 }
