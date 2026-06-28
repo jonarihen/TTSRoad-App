@@ -1,4 +1,7 @@
 <resources>
-    <color name="ttsroad_splash">#0F172A</color>
-</resources>
+    <!-- AARIS canonical base background -->
 
+    <color name="ttsroad_bg">#0E1014</color>
+    <color name="ttsroad_splash">#0E1014</color>
+    <color name="ttsroad_accent">#FF5A1F</color>
+</resources>

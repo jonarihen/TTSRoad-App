@@ -1,8 +1,9 @@
 <resources>
-    <style name="Theme.TTSRoad" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:navigationBarColor">@android:color/white</item>
+    <style name="Theme.TTSRoad" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ttsroad_bg</item>
+        <item name="android:statusBarColor">@color/ttsroad_bg</item>
+        <item name="android:navigationBarColor">@color/ttsroad_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
 </resources>
-
