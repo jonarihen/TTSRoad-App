@@ -23,6 +23,24 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
         .add(KotlinJsonAdapterFactory())
         .build()
 
+    // One shared client (and one Retrofit per base URL) so connections, the TLS
+    // session, and thread pools are reused across calls — a new OkHttpClient per
+    // request would force a fresh handshake every time (e.g. each progress save).
+    @Volatile
+    private var authHeader: String? = null
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            val builder = chain.request().newBuilder()
+            authHeader?.let { builder.header("Authorization", it) }
+            chain.proceed(builder.build())
+        }
+        .build()
+
+    private val apiCache = HashMap<String, TtsRoadApi>()
+
     suspend fun login(
         baseUrl: String,
         username: String,
@@ -31,8 +49,9 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
         totpCode: String? = null,
     ): LoginResult = withContext(Dispatchers.IO) {
         val normalized = normalizeBaseUrl(baseUrl)
+        authHeader = null
         try {
-            val response = api(normalized, token = null).login(
+            val response = api(normalized).login(
                 LoginRequest(
                     username = username.trim(),
                     password = password,
@@ -73,7 +92,8 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
         val session = tokenStore.current()
         runCatching {
             if (session.isLoggedIn) {
-                api(session.serverUrl, session.token).logout()
+                authHeader = session.authorizationHeader
+                api(session.serverUrl).logout()
             }
         }
         tokenStore.clearToken()
@@ -101,7 +121,8 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
     ): PlaybackProgressResponse? = withContext(Dispatchers.IO) {
         val session = tokenStore.current()
         if (!session.isLoggedIn) return@withContext null
-        api(session.serverUrl, session.token).saveProgress(
+        authHeader = session.authorizationHeader
+        api(session.serverUrl).saveProgress(
             PlaybackProgressRequest(
                 fictionId = fictionId,
                 chapterId = chapterId,
@@ -125,28 +146,22 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
         withContext(Dispatchers.IO) {
             val session = tokenStore.current()
             require(session.isLoggedIn) { "Not logged in" }
-            block(api(session.serverUrl, session.token))
+            authHeader = session.authorizationHeader
+            block(api(session.serverUrl))
         }
 
-    private fun api(baseUrl: String, token: String?): TtsRoadApi {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .addInterceptor { chain ->
-                val builder = chain.request().newBuilder()
-                if (!token.isNullOrBlank()) {
-                    builder.header("Authorization", "Bearer $token")
-                }
-                chain.proceed(builder.build())
+    private fun api(baseUrl: String): TtsRoadApi {
+        val normalized = normalizeBaseUrl(baseUrl)
+        return synchronized(apiCache) {
+            apiCache.getOrPut(normalized) {
+                Retrofit.Builder()
+                    .baseUrl(normalized)
+                    .client(client)
+                    .addConverterFactory(MoshiConverterFactory.create(moshi))
+                    .build()
+                    .create(TtsRoadApi::class.java)
             }
-            .build()
-
-        return Retrofit.Builder()
-            .baseUrl(normalizeBaseUrl(baseUrl))
-            .client(client)
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
-            .build()
-            .create(TtsRoadApi::class.java)
+        }
     }
 }
 

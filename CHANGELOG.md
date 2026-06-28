@@ -2,7 +2,16 @@
 
 Notable changes to the TTSRoad Android client.
 
-## 2026-06-28
+## 0.2.0 — 2026-06-28
+
+### Performance & correctness
+
+- **Networking now reuses a single `OkHttpClient`.** Every API call previously built a
+  brand-new client and Retrofit instance, forcing a fresh TLS handshake per request (worst
+  during playback, which saves progress frequently). The shared client with a dynamic auth
+  header and a per-base-URL Retrofit cache restores connection pooling.
+
+### Earlier on 2026-06-28
 
 ### Library & browsing
 
