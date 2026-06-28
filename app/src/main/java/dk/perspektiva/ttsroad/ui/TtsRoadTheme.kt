@@ -1,6 +1,8 @@
 package dk.perspektiva.ttsroad.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -153,6 +155,24 @@ fun MetaText(
             fontWeight = FontWeight.Medium,
             fontSize = 11.sp,
             letterSpacing = 1.3.sp,
+        ),
+    )
+}
+
+/** Mono uppercase bordered chip — the AARIS `.tag`. Used for fiction tags/genres. */
+@Composable
+fun AarisTag(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text.uppercase(),
+        modifier = modifier
+            .border(1.dp, AarisColor.Line)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        color = AarisColor.Muted,
+        style = TextStyle(
+            fontFamily = MonoFamily,
+            fontWeight = FontWeight.Medium,
+            fontSize = 10.sp,
+            letterSpacing = 1.2.sp,
         ),
     )
 }

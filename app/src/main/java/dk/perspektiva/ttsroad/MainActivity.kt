@@ -9,18 +9,25 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -31,6 +38,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -60,6 +68,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import java.util.Locale
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
@@ -71,12 +80,14 @@ import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
+import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import kotlinx.coroutines.launch
 
 private sealed interface AppScreen {
     data object Library : AppScreen
+    data object Fictions : AppScreen
     data class Fiction(val fiction: FictionSummary) : AppScreen
     data object Player : AppScreen
     data object Settings : AppScreen
@@ -271,6 +282,7 @@ private fun MainScaffold(
     val title = when (screen) {
         is AppScreen.Fiction -> screen.fiction.title
         AppScreen.Library -> session.serverName
+        AppScreen.Fictions -> "All fictions"
         AppScreen.Player -> "Now playing"
         AppScreen.Settings -> "Settings"
     }
@@ -289,7 +301,7 @@ private fun MainScaffold(
                         )
                     },
                     navigationIcon = {
-                        if (screen is AppScreen.Fiction || screen == AppScreen.Player || screen == AppScreen.Settings) {
+                        if (screen != AppScreen.Library) {
                             TextButton(onClick = { onScreenChange(AppScreen.Library) }) {
                                 Text("BACK")
                             }
@@ -325,6 +337,13 @@ private fun MainScaffold(
                 playbackController = playbackController,
                 onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                 onOpenPlayer = { onScreenChange(AppScreen.Player) },
+                onBrowseFictions = { onScreenChange(AppScreen.Fictions) },
+            )
+
+            AppScreen.Fictions -> FictionsScreen(
+                padding = padding,
+                repository = repository,
+                onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
             )
 
             is AppScreen.Fiction -> FictionScreen(
@@ -357,6 +376,7 @@ private fun LibraryScreen(
     playbackController: PlaybackController,
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenPlayer: () -> Unit,
+    onBrowseFictions: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var libraryState by remember { mutableStateOf<LoadState<LibraryResponse>>(LoadState.Loading) }
@@ -419,7 +439,12 @@ private fun LibraryScreen(
 
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(kicker = "02", title = "Fictions")
+                        SectionHeader(
+                            kicker = "02",
+                            title = "Fictions",
+                            actionLabel = if (library.fictions.isEmpty()) null else "Browse all",
+                            onAction = onBrowseFictions.takeIf { library.fictions.isNotEmpty() },
+                        )
                         if (library.fictions.isEmpty()) {
                             EmptyCard("No fictions found")
                         } else {
@@ -494,20 +519,33 @@ private fun FictionScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                FictionHeader(fiction = fiction)
+                FictionDetailHeader(
+                    fiction = fiction,
+                    chapters = state.value,
+                    onPlay = { chapter ->
+                        scope.launch {
+                            playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
+                            onOpenPlayer()
+                        }
+                    },
+                )
                 error?.let {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = it, color = MaterialTheme.colorScheme.error)
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                MetaText(text = "Chapters")
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionHeader(kicker = "CH", title = "Chapters")
             }
             itemsIndexed(state.value, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
                 ChapterRow(
                     chapter = chapter,
                     fiction = fiction,
-                    playbackController = playbackController,
-                    onOpenPlayer = onOpenPlayer,
+                    onPlay = {
+                        scope.launch {
+                            playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
+                            onOpenPlayer()
+                        }
+                    },
                     onMarkPlayed = { played ->
                         scope.launch {
                             error = null
@@ -525,28 +563,40 @@ private fun FictionScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerScreen(
     padding: PaddingValues,
     playerState: PlayerUiState,
     playbackController: PlaybackController,
 ) {
+    var showChapters by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
+            .padding(horizontal = 24.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         MetaText(text = "// Now Playing", color = AarisColor.Accent)
-        Spacer(modifier = Modifier.height(20.dp))
-        CoverThumb(
-            imageUrl = playerState.coverImageUrl,
-            fallback = playerState.fictionTitle ?: playerState.title,
-            size = 220,
-        )
-        Spacer(modifier = Modifier.height(24.dp))
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .padding(vertical = 20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Largest portrait cover that fits both the width and the leftover height.
+            val coverWidth = minOf(maxWidth, maxHeight * 0.7f)
+            CoverFill(
+                imageUrl = playerState.coverImageUrl,
+                fallback = playerState.fictionTitle ?: playerState.title,
+                modifier = Modifier
+                    .width(coverWidth)
+                    .aspectRatio(0.7f),
+            )
+        }
         Text(
             text = playerState.title,
             style = MaterialTheme.typography.headlineSmall,
@@ -580,14 +630,18 @@ private fun PlayerScreen(
             color = AarisColor.Dim,
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(modifier = Modifier.height(28.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Spacer(modifier = Modifier.height(24.dp))
+        // Primary: previous chapter / play-pause / next chapter.
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             OutlinedButton(
-                onClick = { playbackController.skipBy(-30_000) },
+                onClick = { playbackController.skipToPreviousChapter() },
                 enabled = playerState.hasMedia,
                 shape = RectangleShape,
             ) {
-                Text("-30")
+                Text("PREV")
             }
             Button(
                 onClick = { playbackController.togglePlayPause() },
@@ -597,11 +651,102 @@ private fun PlayerScreen(
                 Text(if (playerState.isPlaying) "PAUSE" else "PLAY")
             }
             OutlinedButton(
+                onClick = { playbackController.skipToNextChapter() },
+                enabled = playerState.hasNext,
+                shape = RectangleShape,
+            ) {
+                Text("NEXT")
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        // Secondary: fine seek.
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            OutlinedButton(
+                onClick = { playbackController.skipBy(-30_000) },
+                enabled = playerState.hasMedia,
+                shape = RectangleShape,
+            ) {
+                Text("−30")
+            }
+            OutlinedButton(
                 onClick = { playbackController.skipBy(30_000) },
                 enabled = playerState.hasMedia,
                 shape = RectangleShape,
             ) {
                 Text("+30")
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        // Tertiary: playback speed and the chapter list.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = { playbackController.setSpeed(nextSpeed(playerState.speed)) },
+                enabled = playerState.hasMedia,
+            ) {
+                Text("SPEED ${formatSpeed(playerState.speed)}")
+            }
+            if (playerState.queue.size > 1) {
+                TextButton(onClick = { showChapters = true }) {
+                    Text("CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}")
+                }
+            }
+        }
+    }
+
+    if (showChapters) {
+        ModalBottomSheet(
+            onDismissRequest = { showChapters = false },
+            containerColor = AarisColor.BgRaise,
+        ) {
+            MetaText(
+                text = "// Chapters",
+                color = AarisColor.Accent,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+            )
+            LazyColumn(modifier = Modifier.heightIn(max = 440.dp)) {
+                itemsIndexed(
+                    playerState.queue,
+                    key = { index, item -> "${item.mediaId}-$index" },
+                ) { index, item ->
+                    val isCurrent = index == playerState.currentIndex
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                playbackController.skipToQueueIndex(index)
+                                showChapters = false
+                            }
+                            .background(if (isCurrent) AarisColor.BgHover else AarisColor.BgRaise)
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        MetaText(
+                            text = "%02d".format(index + 1),
+                            color = if (isCurrent) AarisColor.Accent else AarisColor.Dim,
+                        )
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Text(
+                            text = item.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (isCurrent) AarisColor.Accent else AarisColor.Ink,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (isCurrent) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            MetaText(
+                                text = if (playerState.isPlaying) "Playing" else "Paused",
+                                color = AarisColor.Accent,
+                            )
+                        }
+                    }
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                }
             }
         }
     }
@@ -799,11 +944,9 @@ private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
 private fun ChapterRow(
     chapter: ChapterSummary,
     fiction: FictionSummary?,
-    playbackController: PlaybackController,
-    onOpenPlayer: () -> Unit,
+    onPlay: () -> Unit,
     onMarkPlayed: ((Boolean) -> Unit)? = null,
 ) {
-    val scope = rememberCoroutineScope()
     AarisCard {
         Row(
             modifier = Modifier
@@ -849,12 +992,7 @@ private fun ChapterRow(
             }
             Spacer(modifier = Modifier.width(12.dp))
             Button(
-                onClick = {
-                    scope.launch {
-                        playbackController.play(chapter, fiction)
-                        onOpenPlayer()
-                    }
-                },
+                onClick = onPlay,
                 enabled = chapter.audio != null,
                 shape = RectangleShape,
             ) {
@@ -865,30 +1003,250 @@ private fun ChapterRow(
 }
 
 @Composable
-private fun FictionHeader(fiction: FictionSummary) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        CoverThumb(
-            imageUrl = fiction.coverImageUrl,
-            fallback = fiction.title,
-            size = 84,
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
+private fun FictionsScreen(
+    padding: PaddingValues,
+    repository: TtsRoadRepository,
+    onOpenFiction: (FictionSummary) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var state by remember { mutableStateOf<LoadState<List<FictionSummary>>>(LoadState.Loading) }
+    var query by remember { mutableStateOf("") }
+
+    fun refresh() {
+        scope.launch {
+            state = LoadState.Loading
+            state = runCatching { repository.library().fictions }
+                .fold(
+                    onSuccess = { LoadState.Loaded(it) },
+                    onFailure = { LoadState.Error(it.message ?: "Could not load fictions") },
+                )
+        }
+    }
+
+    LaunchedEffect(Unit) { refresh() }
+
+    when (val s = state) {
+        LoadState.Loading -> LoadingPane(padding)
+        is LoadState.Error -> ErrorPane(padding = padding, message = s.message, onRetry = ::refresh)
+        is LoadState.Loaded -> {
+            val fictions = s.value
+            val filtered = remember(fictions, query) {
+                val q = query.trim().lowercase()
+                if (q.isBlank()) {
+                    fictions
+                } else {
+                    fictions.filter { fiction ->
+                        fiction.title.lowercase().contains(q) ||
+                            fiction.author?.lowercase()?.contains(q) == true ||
+                            fiction.tags.any { it.lowercase().contains(q) }
+                    }
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                )
+                if (filtered.isEmpty()) {
+                    Box(modifier = Modifier.padding(16.dp)) {
+                        EmptyCard(
+                            if (query.isBlank()) "No fictions found" else "No matches for \"$query\"",
+                        )
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 158.dp),
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        items(filtered, key = { it.id }) { fiction ->
+                            FictionGridCard(fiction = fiction, onClick = { onOpenFiction(fiction) })
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FictionGridCard(fiction: FictionSummary, onClick: () -> Unit) {
+    AarisCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CoverFill(
+                imageUrl = fiction.coverImageUrl,
+                fallback = fiction.title,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.7f),
+            )
             Text(
                 text = fiction.title,
-                style = MaterialTheme.typography.headlineSmall,
-                maxLines = 3,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(modifier = Modifier.height(6.dp))
+            fiction.author?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            LinearProgressIndicator(
+                progress = { fiction.readyFraction },
+                color = AarisColor.Accent,
+                trackColor = AarisColor.Line,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            MetaText(text = "${fiction.doneChapters}/${fiction.totalChapters} ready")
+        }
+    }
+}
+
+@Composable
+private fun FictionDetailHeader(
+    fiction: FictionSummary,
+    chapters: List<ChapterSummary>,
+    onPlay: (ChapterSummary) -> Unit,
+) {
+    var descExpanded by remember(fiction.id) { mutableStateOf(false) }
+    var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
+    val target = remember(chapters) {
+        chapters.filter { it.audio != null && it.resolvedPositionSeconds > 0.0 }
+            .maxByOrNull { it.resolvedPositionSeconds }
+            ?: chapters.firstOrNull { it.audio != null }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(verticalAlignment = Alignment.Top) {
+            CoverThumb(
+                imageUrl = fiction.coverImageUrl,
+                fallback = fiction.title,
+                size = 120,
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = fiction.title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                fiction.author?.takeIf { it.isNotBlank() }?.let { MetaText(text = it) }
+                fiction.rating?.let { rating ->
+                    MetaText(
+                        text = buildString {
+                            append("★ ")
+                            append("%.2f".format(rating))
+                            fiction.ratingCount?.takeIf { it > 0 }?.let { append("  ·  $it ratings") }
+                        },
+                        color = AarisColor.Warning,
+                    )
+                }
+            }
+        }
+
+        target?.let { chapter ->
+            Button(
+                onClick = { onPlay(chapter) },
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+            }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            LinearProgressIndicator(
+                progress = { fiction.readyFraction },
+                color = AarisColor.Accent,
+                trackColor = AarisColor.Line,
+                modifier = Modifier.fillMaxWidth(),
+            )
             MetaText(
-                text = listOfNotNull(
-                    fiction.author,
-                    "${fiction.doneChapters}/${fiction.totalChapters} ready",
-                ).joinToString("  ·  "),
+                text = buildString {
+                    append("${fiction.doneChapters} / ${fiction.totalChapters} chapters ready")
+                    if (fiction.processingChapters > 0) append("  ·  ${fiction.processingChapters} processing")
+                    if (fiction.errorChapters > 0) append("  ·  ${fiction.errorChapters} failed")
+                },
+            )
+        }
+
+        if (fiction.tags.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                fiction.tags.forEach { tag -> AarisTag(text = tag) }
+            }
+        }
+
+        fiction.description?.takeIf { it.isNotBlank() }?.let { description ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                MetaText(text = "Synopsis", color = AarisColor.Accent)
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = AarisColor.Muted,
+                    maxLines = if (descExpanded) Int.MAX_VALUE else 5,
+                    overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (!descExpanded) descCanExpand = it.hasVisualOverflow },
+                    modifier = Modifier.clickable(enabled = descCanExpand) { descExpanded = !descExpanded },
+                )
+                if (descCanExpand) {
+                    Text(
+                        text = if (descExpanded) "SHOW LESS" else "SHOW MORE",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = AarisColor.Accent,
+                        modifier = Modifier.clickable { descExpanded = !descExpanded },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CoverFill(imageUrl: String?, fallback: String, modifier: Modifier) {
+    Box(
+        modifier = modifier
+            .background(AarisColor.BgInput)
+            .border(1.dp, AarisColor.Line),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!imageUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text(
+                text = fallback.trim().take(1).uppercase().ifBlank { "T" },
+                style = MaterialTheme.typography.displaySmall,
+                color = AarisColor.Accent,
             )
         }
     }
@@ -1019,4 +1377,16 @@ private fun formatDuration(ms: Long): String {
     } else {
         "%d:%02d".format(minutes, seconds)
     }
+}
+
+private val SpeedPresets = listOf(0.8f, 1.0f, 1.2f, 1.5f, 1.75f, 2.0f)
+
+private fun nextSpeed(current: Float): Float {
+    val index = SpeedPresets.indexOfFirst { kotlin.math.abs(it - current) < 0.01f }
+    return if (index < 0) 1.0f else SpeedPresets[(index + 1) % SpeedPresets.size]
+}
+
+private fun formatSpeed(speed: Float): String {
+    val text = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')
+    return "${text}×"
 }

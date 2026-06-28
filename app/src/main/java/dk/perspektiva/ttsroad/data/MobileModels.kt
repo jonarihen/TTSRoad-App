@@ -57,9 +57,20 @@ data class FictionSummary(
     val author: String? = null,
     val slug: String? = null,
     @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
+    val description: String? = null,
+    val tags: List<String> = emptyList(),
+    val rating: Double? = null,
+    @param:Json(name = "rating_count") val ratingCount: Int? = null,
     @param:Json(name = "total_chapters") val totalChapters: Int = 0,
     @param:Json(name = "done_chapters") val doneChapters: Int = 0,
-)
+    @param:Json(name = "pending_chapters") val pendingChapters: Int = 0,
+    @param:Json(name = "error_chapters") val errorChapters: Int = 0,
+    @param:Json(name = "processing_chapters") val processingChapters: Int = 0,
+) {
+    /** Fraction of chapters with audio ready, for progress indicators. */
+    val readyFraction: Float
+        get() = if (totalChapters > 0) (doneChapters.toFloat() / totalChapters).coerceIn(0f, 1f) else 0f
+}
 
 data class ChapterSummary(
     val id: Int = 0,
