@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,14 +23,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -50,7 +49,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -65,10 +64,14 @@ import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
+import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
+import dk.perspektiva.ttsroad.ui.AarisCard
+import dk.perspektiva.ttsroad.ui.AarisColor
+import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import kotlinx.coroutines.launch
 
@@ -90,7 +93,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             TtsRoadTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = AarisColor.Bg,
+                ) {
                     TtsRoadApp()
                 }
             }
@@ -136,6 +142,8 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var username by remember { mutableStateOf(session.username.orEmpty().ifBlank { "admin" }) }
     var password by remember { mutableStateOf("") }
     var deviceName by remember { mutableStateOf("${Build.MANUFACTURER} ${Build.MODEL}".trim()) }
+    var totpCode by remember { mutableStateOf("") }
+    var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -146,21 +154,19 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
     ) {
+        MetaText(text = "// Operator Console", color = AarisColor.Accent)
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "TTSRoad",
+            text = "TTSROAD",
             style = MaterialTheme.typography.displaySmall,
-            fontWeight = FontWeight.Bold,
         )
-        Text(
-            text = "Connect to your private server",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Spacer(modifier = Modifier.height(6.dp))
+        MetaText(text = "Connect to your private server")
         Spacer(modifier = Modifier.height(28.dp))
         OutlinedTextField(
             value = serverUrl,
             onValueChange = { serverUrl = it },
-            label = { Text("Server URL") },
+            label = { Text("SERVER URL") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -169,7 +175,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text("Username") },
+            label = { Text("USERNAME") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -177,7 +183,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("Password") },
+            label = { Text("PASSWORD") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -187,10 +193,21 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         OutlinedTextField(
             value = deviceName,
             onValueChange = { deviceName = it },
-            label = { Text("Device name") },
+            label = { Text("DEVICE NAME") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        if (twoFactorRequired) {
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = totpCode,
+                onValueChange = { totpCode = it },
+                label = { Text("2FA CODE") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = { MetaText(text = "From your authenticator app, or a recovery code") },
+            )
+        }
         error?.let {
             Spacer(modifier = Modifier.height(12.dp))
             Text(text = it, color = MaterialTheme.colorScheme.error)
@@ -201,23 +218,42 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
                 scope.launch {
                     isBusy = true
                     error = null
-                    runCatching {
-                        repository.login(
-                            baseUrl = serverUrl,
-                            username = username,
-                            password = password,
-                            deviceName = deviceName,
-                        )
-                    }.onFailure {
-                        error = it.message ?: "Login failed"
+                    val result = repository.login(
+                        baseUrl = serverUrl,
+                        username = username,
+                        password = password,
+                        deviceName = deviceName,
+                        totpCode = if (twoFactorRequired) totpCode else null,
+                    )
+                    when (result) {
+                        LoginResult.Success -> Unit // session change navigates away
+                        LoginResult.TotpRequired -> {
+                            error = if (twoFactorRequired && totpCode.isNotBlank()) {
+                                "Invalid authentication code"
+                            } else {
+                                null
+                            }
+                            twoFactorRequired = true
+                        }
+
+                        is LoginResult.Failure -> error = result.message
                     }
                     isBusy = false
                 }
             },
-            enabled = !isBusy && serverUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank(),
+            enabled = !isBusy && serverUrl.isNotBlank() && username.isNotBlank() &&
+                password.isNotBlank() && (!twoFactorRequired || totpCode.isNotBlank()),
+            shape = RectangleShape,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (isBusy) "Signing in" else "Sign in")
+            Text(
+                when {
+                    isBusy && twoFactorRequired -> "VERIFYING"
+                    isBusy -> "SIGNING IN"
+                    twoFactorRequired -> "VERIFY"
+                    else -> "SIGN IN"
+                },
+            )
         }
     }
 }
@@ -240,38 +276,46 @@ private fun MainScaffold(
     }
 
     Scaffold(
+        containerColor = AarisColor.Bg,
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                navigationIcon = {
-                    if (screen is AppScreen.Fiction || screen == AppScreen.Player || screen == AppScreen.Settings) {
-                        TextButton(onClick = { onScreenChange(AppScreen.Library) }) {
-                            Text("Back")
+            Column {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = title.uppercase(),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                    },
+                    navigationIcon = {
+                        if (screen is AppScreen.Fiction || screen == AppScreen.Player || screen == AppScreen.Settings) {
+                            TextButton(onClick = { onScreenChange(AppScreen.Library) }) {
+                                Text("BACK")
+                            }
                         }
-                    }
-                },
-                actions = {
-                    if (playerState.hasMedia && screen != AppScreen.Player) {
-                        TextButton(onClick = { onScreenChange(AppScreen.Player) }) {
-                            Text("Player")
+                    },
+                    actions = {
+                        if (playerState.hasMedia && screen != AppScreen.Player) {
+                            TextButton(onClick = { onScreenChange(AppScreen.Player) }) {
+                                Text("PLAYER")
+                            }
                         }
-                    }
-                    if (screen != AppScreen.Settings) {
-                        TextButton(onClick = { onScreenChange(AppScreen.Settings) }) {
-                            Text("Settings")
+                        if (screen != AppScreen.Settings) {
+                            TextButton(onClick = { onScreenChange(AppScreen.Settings) }) {
+                                Text("SETTINGS")
+                            }
                         }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = AarisColor.Bg,
+                        titleContentColor = AarisColor.Ink,
+                        navigationIconContentColor = AarisColor.Accent,
+                        actionIconContentColor = AarisColor.Muted,
+                    ),
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+            }
         },
     ) { padding ->
         when (screen) {
@@ -349,11 +393,12 @@ private fun LibraryScreen(
                     .fillMaxSize()
                     .padding(padding),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(22.dp),
+                verticalArrangement = Arrangement.spacedBy(28.dp),
             ) {
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         SectionHeader(
+                            kicker = "01",
                             title = "Continue listening",
                             actionLabel = "Refresh",
                             onAction = ::refresh,
@@ -373,8 +418,8 @@ private fun LibraryScreen(
                 }
 
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        SectionHeader(title = "Fictions")
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SectionHeader(kicker = "02", title = "Fictions")
                         if (library.fictions.isEmpty()) {
                             EmptyCard("No fictions found")
                         } else {
@@ -387,8 +432,8 @@ private fun LibraryScreen(
                 }
 
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        SectionHeader(title = "Recent")
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SectionHeader(kicker = "03", title = "Recent")
                         if (library.recentChapters.isEmpty()) {
                             EmptyCard("No recent chapters")
                         } else {
@@ -454,6 +499,8 @@ private fun FictionScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = it, color = MaterialTheme.colorScheme.error)
                 }
+                Spacer(modifier = Modifier.height(4.dp))
+                MetaText(text = "Chapters")
             }
             itemsIndexed(state.value, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
                 ChapterRow(
@@ -492,6 +539,8 @@ private fun PlayerScreen(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        MetaText(text = "// Now Playing", color = AarisColor.Accent)
+        Spacer(modifier = Modifier.height(20.dp))
         CoverThumb(
             imageUrl = playerState.coverImageUrl,
             fallback = playerState.fictionTitle ?: playerState.title,
@@ -501,21 +550,13 @@ private fun PlayerScreen(
         Text(
             text = playerState.title,
             style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
         )
         playerState.fictionTitle?.let {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = it,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-            )
+            Spacer(modifier = Modifier.height(10.dp))
+            MetaText(text = it, modifier = Modifier)
         }
         Spacer(modifier = Modifier.height(28.dp))
         Slider(
@@ -529,12 +570,14 @@ private fun PlayerScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(formatDuration(playerState.positionMs))
-            Text(formatDuration(playerState.durationMs))
+            MetaText(text = formatDuration(playerState.positionMs))
+            MetaText(text = formatDuration(playerState.durationMs))
         }
         Spacer(modifier = Modifier.height(12.dp))
         LinearProgressIndicator(
             progress = { playerState.bufferedPercentage / 100f },
+            trackColor = AarisColor.Line,
+            color = AarisColor.Dim,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(modifier = Modifier.height(28.dp))
@@ -542,18 +585,21 @@ private fun PlayerScreen(
             OutlinedButton(
                 onClick = { playbackController.skipBy(-30_000) },
                 enabled = playerState.hasMedia,
+                shape = RectangleShape,
             ) {
                 Text("-30")
             }
             Button(
                 onClick = { playbackController.togglePlayPause() },
                 enabled = playerState.hasMedia,
+                shape = RectangleShape,
             ) {
-                Text(if (playerState.isPlaying) "Pause" else "Play")
+                Text(if (playerState.isPlaying) "PAUSE" else "PLAY")
             }
             OutlinedButton(
                 onClick = { playbackController.skipBy(30_000) },
                 enabled = playerState.hasMedia,
+                shape = RectangleShape,
             ) {
                 Text("+30")
             }
@@ -578,9 +624,21 @@ private fun SettingsScreen(
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        SettingsItem(label = "Server", value = session.serverUrl)
-        SettingsItem(label = "User", value = session.username.orEmpty())
-        SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
+        MetaText(text = "// Session", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                SettingsItem(label = "Server", value = session.serverUrl)
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                SettingsItem(label = "User", value = session.username.orEmpty())
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
+            }
+        }
         Button(
             onClick = {
                 scope.launch {
@@ -590,9 +648,10 @@ private fun SettingsScreen(
                 }
             },
             enabled = !isBusy,
+            shape = RectangleShape,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (isBusy) "Signing out" else "Sign out")
+            Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
         }
     }
 }
@@ -646,12 +705,10 @@ private fun ChapterTile(
     onOpenPlayer: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    Card(
+    AarisCard(
         modifier = Modifier
             .width(232.dp)
             .height(330.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column(
             modifier = Modifier
@@ -691,9 +748,10 @@ private fun ChapterTile(
                     }
                 },
                 enabled = chapter.audio != null,
+                shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (chapter.resolvedPositionSeconds > 0.0) "Resume" else "Play")
+                Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
             }
         }
     }
@@ -701,13 +759,11 @@ private fun ChapterTile(
 
 @Composable
 private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
-    Card(
+    AarisCard(
         modifier = Modifier
             .width(172.dp)
-            .height(268.dp)
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            .height(268.dp),
+        onClick = onClick,
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -748,10 +804,7 @@ private fun ChapterRow(
     onMarkPlayed: ((Boolean) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-    ) {
+    AarisCard {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -785,11 +838,11 @@ private fun ChapterRow(
                 onMarkPlayed?.let { mark ->
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { mark(true) }) {
-                            Text("Played")
+                        OutlinedButton(onClick = { mark(true) }, shape = RectangleShape) {
+                            Text("PLAYED")
                         }
-                        OutlinedButton(onClick = { mark(false) }) {
-                            Text("Unplayed")
+                        OutlinedButton(onClick = { mark(false) }, shape = RectangleShape) {
+                            Text("UNPLAYED")
                         }
                     }
                 }
@@ -803,8 +856,9 @@ private fun ChapterRow(
                     }
                 },
                 enabled = chapter.audio != null,
+                shape = RectangleShape,
             ) {
-                Text("Play")
+                Text("PLAY")
             }
         }
     }
@@ -826,17 +880,15 @@ private fun FictionHeader(fiction: FictionSummary) {
             Text(
                 text = fiction.title,
                 style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
+            Spacer(modifier = Modifier.height(6.dp))
+            MetaText(
                 text = listOfNotNull(
                     fiction.author,
                     "${fiction.doneChapters}/${fiction.totalChapters} ready",
-                ).joinToString(" - "),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                ).joinToString("  ·  "),
             )
         }
     }
@@ -847,8 +899,8 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
     Box(
         modifier = Modifier
             .size(size.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .background(AarisColor.BgInput)
+            .border(1.dp, AarisColor.Line),
         contentAlignment = Alignment.Center,
     ) {
         if (!imageUrl.isNullOrBlank()) {
@@ -860,10 +912,9 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
             )
         } else {
             Text(
-                text = fallback.trim().take(1).ifBlank { "T" },
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
+                text = fallback.trim().take(1).uppercase().ifBlank { "T" },
+                style = MaterialTheme.typography.headlineSmall,
+                color = AarisColor.Accent,
             )
         }
     }
@@ -871,35 +922,39 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
 
 @Composable
 private fun SectionHeader(
+    kicker: String,
     title: String,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-        )
-        if (actionLabel != null && onAction != null) {
-            TextButton(onClick = onAction) {
-                Text(actionLabel)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(text = "§ $kicker", color = AarisColor.Accent)
+            if (actionLabel != null && onAction != null) {
+                TextButton(onClick = onAction) {
+                    Text(actionLabel.uppercase())
+                }
             }
         }
+        Text(
+            text = title.uppercase(),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
     }
 }
 
 @Composable
 private fun EmptyCard(message: String) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Text(
+    AarisCard {
+        MetaText(
             text = message,
             modifier = Modifier.padding(16.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -912,7 +967,7 @@ private fun LoadingPane(padding: PaddingValues) {
             .padding(padding),
         contentAlignment = Alignment.Center,
     ) {
-        CircularProgressIndicator()
+        CircularProgressIndicator(color = AarisColor.Accent)
     }
 }
 
@@ -934,22 +989,19 @@ private fun ErrorPane(
             text = message,
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = onRetry) {
-            Text("Retry")
+        Button(onClick = onRetry, shape = RectangleShape) {
+            Text("RETRY")
         }
     }
 }
 
 @Composable
 private fun SettingsItem(label: String, value: String) {
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        MetaText(text = label)
         Text(
             text = value.ifBlank { "-" },
             style = MaterialTheme.typography.titleMedium,
@@ -968,4 +1020,3 @@ private fun formatDuration(ms: Long): String {
         "%d:%02d".format(minutes, seconds)
     }
 }
-

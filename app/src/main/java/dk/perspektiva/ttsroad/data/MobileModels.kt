@@ -6,6 +6,7 @@ data class LoginRequest(
     val username: String,
     val password: String,
     @param:Json(name = "device_name") val deviceName: String,
+    @param:Json(name = "totp_code") val totpCode: String? = null,
 )
 
 data class LoginResponse(
