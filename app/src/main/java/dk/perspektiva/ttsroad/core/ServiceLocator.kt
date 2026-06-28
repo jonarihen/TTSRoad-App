@@ -5,6 +5,7 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
+import dk.perspektiva.ttsroad.update.UpdateManager
 
 object ServiceLocator {
     @Volatile
@@ -18,6 +19,9 @@ object ServiceLocator {
 
     @Volatile
     private var playbackHistory: PlaybackHistoryStore? = null
+
+    @Volatile
+    private var updateManager: UpdateManager? = null
 
     fun init(context: Context) {
         tokenStore(context)
@@ -47,6 +51,11 @@ object ServiceLocator {
     fun playbackHistory(context: Context): PlaybackHistoryStore =
         playbackHistory ?: synchronized(this) {
             playbackHistory ?: PlaybackHistoryStore(context.applicationContext).also { playbackHistory = it }
+        }
+
+    fun updateManager(): UpdateManager =
+        updateManager ?: synchronized(this) {
+            updateManager ?: UpdateManager().also { updateManager = it }
         }
 }
 

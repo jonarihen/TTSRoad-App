@@ -17,6 +17,8 @@ import kotlinx.coroutines.launch
 data class HistorySnapshot(
     val timestamp: Long,       // wall-clock epoch millis
     val mediaId: String,       // e.g. "chapter:123" — matches the playback queue item ids
+    val fictionId: Int = 0,    // lets us reload the fiction if the queue was cleared/stopped
+    val chapterId: Int = 0,
     val title: String,         // chapter title
     val fictionTitle: String?,
     val positionMs: Long,      // position within the chapter when the snapshot was taken
@@ -42,12 +44,14 @@ class PlaybackHistoryStore(context: Context) {
     fun record(
         timestamp: Long,
         mediaId: String,
+        fictionId: Int,
+        chapterId: Int,
         title: String,
         fictionTitle: String?,
         positionMs: Long,
     ) {
         if (mediaId.isBlank()) return
-        val snap = HistorySnapshot(timestamp, mediaId, title, fictionTitle, positionMs.coerceAtLeast(0L))
+        val snap = HistorySnapshot(timestamp, mediaId, fictionId, chapterId, title, fictionTitle, positionMs.coerceAtLeast(0L))
         val current = _snapshots.value
         val last = current.lastOrNull()
         // Collapse rapid repeats on the same chapter (e.g. pause right after a tick) into one point.

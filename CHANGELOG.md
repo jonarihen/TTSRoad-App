@@ -2,6 +2,23 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.4.0 — 2026-06-28
+
+### In-app self-updater
+
+- The app now checks **GitHub Releases** on launch (and on demand from Settings → App → Check
+  for updates). When a newer build is published it offers to **download the APK and install it**
+  in place — no more copying APKs by hand. Requires `REQUEST_INSTALL_PACKAGES` and a FileProvider;
+  new releases must be signed with the same (debug) key to update over the top.
+
+### Jump back — now works after playback has stopped
+
+- "Jump back" previously only seeked within the loaded queue. It now stores the fiction/chapter id
+  per history point and, if the queue was cleared (e.g. a sleep tracker auto-stopped playback hours
+  after you dozed off), **reloads the fiction and resumes at the exact historical position**.
+- The **Player is now reachable when nothing is playing** as long as there's history — so you can
+  open it the next morning, see when you drifted off, and roll back.
+
 ## 0.3.0 — 2026-06-28
 
 ### Jump back to where you fell asleep

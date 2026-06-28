@@ -127,6 +127,7 @@ class PlaybackController(
         chapters: List<ChapterSummary>,
         startChapterId: Int,
         fiction: FictionSummary? = null,
+        startPositionMsOverride: Long? = null,
     ) {
         val serverUrl = tokenStore.current().serverUrl
         val built = chapters
@@ -139,9 +140,11 @@ class PlaybackController(
 
         val startIndex = built.indexOfFirst { it.first.resolvedChapterId == startChapterId }
             .coerceAtLeast(0)
-        val startPositionMs = built[startIndex].first.resolvedPositionSeconds
-            .takeIf { it > 0.0 }
-            ?.let { (it * 1000).roundToLong() }
+        // A "jump back" passes the exact historical position; otherwise resume where the server says.
+        val startPositionMs = startPositionMsOverride
+            ?: built[startIndex].first.resolvedPositionSeconds
+                .takeIf { it > 0.0 }
+                ?.let { (it * 1000).roundToLong() }
             ?: 0L
 
         val controller = controllerOrNull() ?: return

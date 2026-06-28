@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -69,6 +70,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import java.util.Locale
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
@@ -84,6 +87,8 @@ import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
+import dk.perspektiva.ttsroad.update.ReleaseInfo
+import dk.perspektiva.ttsroad.update.UpdateState
 import kotlinx.coroutines.launch
 
 private sealed interface AppScreen {
@@ -119,9 +124,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun TtsRoadApp() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val tokenStore = remember { ServiceLocator.tokenStore(context) }
     val repository = remember { ServiceLocator.repository(context) }
     val playbackController = remember { ServiceLocator.playbackController(context) }
+    val updateManager = remember { ServiceLocator.updateManager() }
+    val updateState by updateManager.state.collectAsStateWithLifecycle()
     val session by tokenStore.session.collectAsStateWithLifecycle(initialValue = SessionState())
     var screen by remember { mutableStateOf<AppScreen>(AppScreen.Library) }
 
@@ -134,6 +142,9 @@ private fun TtsRoadApp() {
         }
     }
 
+    // Quietly check GitHub Releases for a newer build once per launch.
+    LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
+
     if (!session.isLoggedIn) {
         LoginScreen(repository = repository, session = session)
     } else {
@@ -144,6 +155,67 @@ private fun TtsRoadApp() {
             repository = repository,
             playbackController = playbackController,
         )
+    }
+
+    UpdateOverlay(
+        state = updateState,
+        onDownload = { release -> scope.launch { updateManager.downloadAndInstall(context, release) } },
+        onDismiss = { updateManager.dismiss() },
+    )
+}
+
+@Composable
+private fun UpdateOverlay(
+    state: UpdateState,
+    onDownload: (ReleaseInfo) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        is UpdateState.Available -> AlertDialog(
+            onDismissRequest = onDismiss,
+            containerColor = AarisColor.BgRaise,
+            title = { Text("UPDATE AVAILABLE", style = MaterialTheme.typography.titleLarge) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MetaText(text = "Version ${state.release.versionName}", color = AarisColor.Accent)
+                    if (state.release.notes.isNotBlank()) {
+                        Text(
+                            text = state.release.notes.take(400),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AarisColor.Muted,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { onDownload(state.release) }, shape = RectangleShape) {
+                    Text("DOWNLOAD & INSTALL")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("LATER") }
+            },
+        )
+
+        is UpdateState.Downloading -> AlertDialog(
+            onDismissRequest = {},
+            containerColor = AarisColor.BgRaise,
+            title = { Text("DOWNLOADING UPDATE", style = MaterialTheme.typography.titleLarge) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LinearProgressIndicator(
+                        progress = { state.percent / 100f },
+                        color = AarisColor.Accent,
+                        trackColor = AarisColor.Line,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    MetaText(text = "${state.percent}%")
+                }
+            },
+            confirmButton = {},
+        )
+
+        else -> Unit // Idle / Checking / UpToDate / Failed surface in Settings instead
     }
 }
 
@@ -279,7 +351,12 @@ private fun MainScaffold(
     repository: TtsRoadRepository,
     playbackController: PlaybackController,
 ) {
+    val context = LocalContext.current
     val playerState by playbackController.state.collectAsStateWithLifecycle()
+    val historyStore = remember { ServiceLocator.playbackHistory(context) }
+    val hasHistory by remember(historyStore) {
+        historyStore.snapshots.map { it.isNotEmpty() }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = false)
     val title = when (screen) {
         is AppScreen.Fiction -> screen.fiction.title
         AppScreen.Library -> session.serverName
@@ -309,7 +386,7 @@ private fun MainScaffold(
                         }
                     },
                     actions = {
-                        if (playerState.hasMedia && screen != AppScreen.Player) {
+                        if ((playerState.hasMedia || hasHistory) && screen != AppScreen.Player) {
                             TextButton(onClick = { onScreenChange(AppScreen.Player) }) {
                                 Text("PLAYER")
                             }
@@ -572,6 +649,8 @@ private fun PlayerScreen(
     playbackController: PlaybackController,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val repository = remember { ServiceLocator.repository(context) }
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val history by historyStore.snapshots.collectAsStateWithLifecycle()
     val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
@@ -791,11 +870,27 @@ private fun PlayerScreen(
                     key = { _, snap -> "${snap.timestamp}-${snap.mediaId}" },
                 ) { _, snap ->
                     val inQueue = playerState.queue.any { it.mediaId == snap.mediaId }
+                    val canJump = inQueue || (snap.fictionId > 0 && snap.chapterId > 0)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = inQueue) {
-                                playbackController.seekToMediaId(snap.mediaId, snap.positionMs)
+                            .clickable(enabled = canJump) {
+                                scope.launch {
+                                    // Fast path: seek within the loaded queue. Otherwise (queue was
+                                    // cleared — e.g. a sleep-tracker stopped playback overnight)
+                                    // reload the fiction and start at the exact historical position.
+                                    if (!playbackController.seekToMediaId(snap.mediaId, snap.positionMs)) {
+                                        runCatching {
+                                            val resp = repository.chapters(snap.fictionId, playableOnly = false)
+                                            playbackController.playQueue(
+                                                chapters = resp.chapters,
+                                                startChapterId = snap.chapterId,
+                                                fiction = resp.fiction,
+                                                startPositionMsOverride = snap.positionMs,
+                                            )
+                                        }
+                                    }
+                                }
                                 showJumpBack = false
                             }
                             .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -805,7 +900,7 @@ private fun PlayerScreen(
                             Text(
                                 text = relativeAgo(now - snap.timestamp),
                                 style = MaterialTheme.typography.titleMedium,
-                                color = if (inQueue) AarisColor.Ink else AarisColor.Dim,
+                                color = if (canJump) AarisColor.Ink else AarisColor.Dim,
                             )
                             MetaText(text = listOfNotNull(snap.fictionTitle, snap.title).joinToString("  ·  "))
                         }
@@ -825,7 +920,10 @@ private fun SettingsScreen(
     session: SessionState,
     repository: TtsRoadRepository,
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val updateManager = remember { ServiceLocator.updateManager() }
+    val updateState by updateManager.state.collectAsStateWithLifecycle()
     var isBusy by remember { mutableStateOf(false) }
 
     Column(
@@ -851,6 +949,29 @@ private fun SettingsScreen(
                 SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
             }
         }
+
+        MetaText(text = "// App", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
+                updateStatusText(updateState)?.let { (text, isError) ->
+                    MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
+                }
+                OutlinedButton(
+                    onClick = { scope.launch { updateManager.check(BuildConfig.VERSION_NAME, manual = true) } },
+                    enabled = updateState !is UpdateState.Checking && updateState !is UpdateState.Downloading,
+                    shape = RectangleShape,
+                ) {
+                    Text(if (updateState is UpdateState.Checking) "CHECKING…" else "CHECK FOR UPDATES")
+                }
+            }
+        }
+
         Button(
             onClick = {
                 scope.launch {
@@ -866,6 +987,14 @@ private fun SettingsScreen(
             Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
         }
     }
+}
+
+private fun updateStatusText(state: UpdateState): Pair<String, Boolean>? = when (state) {
+    UpdateState.UpToDate -> "You're on the latest version" to false
+    is UpdateState.Available -> "Version ${state.release.versionName} available" to false
+    is UpdateState.Downloading -> "Downloading ${state.percent}%" to false
+    is UpdateState.Failed -> state.message to true
+    else -> null
 }
 
 @Composable
