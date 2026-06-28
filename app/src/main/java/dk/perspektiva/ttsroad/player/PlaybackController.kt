@@ -26,6 +26,11 @@ import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+data class QueueItem(
+    val mediaId: String,
+    val title: String,
+)
+
 data class PlayerUiState(
     val title: String = "Nothing playing",
     val fictionTitle: String? = null,
@@ -35,6 +40,11 @@ data class PlayerUiState(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val bufferedPercentage: Int = 0,
+    val speed: Float = 1f,
+    val queue: List<QueueItem> = emptyList(),
+    val currentIndex: Int = 0,
+    val hasNext: Boolean = false,
+    val hasPrevious: Boolean = false,
 )
 
 /**
@@ -55,6 +65,11 @@ class PlaybackController(
     private var controller: MediaController? = null
     private var connecting: Deferred<MediaController?>? = null
     private var tickerJob: Job? = null
+
+    // The queue only changes when a new playlist is set, but publishState runs every second.
+    // Cache the mapped list and rebuild only when the timeline's shape actually changes.
+    private var cachedQueue: List<QueueItem> = emptyList()
+    private var cachedQueueKey: String? = null
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -103,6 +118,39 @@ class PlaybackController(
         publishState(controller)
     }
 
+    /**
+     * Play a whole fiction as a playlist, starting at [startChapterId]. Loading the full chapter
+     * list (rather than a single item) is what makes next/previous, auto-advance, and the
+     * jump-to-chapter list work — and they're shared with the OS controls and Android Auto.
+     */
+    suspend fun playQueue(
+        chapters: List<ChapterSummary>,
+        startChapterId: Int,
+        fiction: FictionSummary? = null,
+    ) {
+        val serverUrl = tokenStore.current().serverUrl
+        val built = chapters
+            .filter { it.audio != null }
+            .mapNotNull { chapter ->
+                TtsRoadMediaItems.chapter(chapter, fiction ?: chapter.fiction, serverUrl)
+                    ?.let { chapter to it }
+            }
+        if (built.isEmpty()) return
+
+        val startIndex = built.indexOfFirst { it.first.resolvedChapterId == startChapterId }
+            .coerceAtLeast(0)
+        val startPositionMs = built[startIndex].first.resolvedPositionSeconds
+            .takeIf { it > 0.0 }
+            ?.let { (it * 1000).roundToLong() }
+            ?: 0L
+
+        val controller = controllerOrNull() ?: return
+        controller.setMediaItems(built.map { it.second }, startIndex, startPositionMs)
+        controller.prepare()
+        controller.play()
+        publishState(controller)
+    }
+
     fun togglePlayPause() {
         val controller = controller ?: return
         if (controller.isPlaying) controller.pause() else controller.play()
@@ -125,6 +173,36 @@ class PlaybackController(
         val controller = controller ?: return
         val duration = controller.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: Long.MAX_VALUE
         controller.seekTo((controller.currentPosition + deltaMs).coerceIn(0L, duration))
+        publishState(controller)
+    }
+
+    fun skipToNextChapter() {
+        val controller = controller ?: return
+        if (controller.hasNextMediaItem()) {
+            controller.seekToNextMediaItem()
+            publishState(controller)
+        }
+    }
+
+    fun skipToPreviousChapter() {
+        val controller = controller ?: return
+        // Media3's seekToPrevious restarts the current chapter if we're more than a few seconds
+        // in, otherwise jumps to the previous one — the usual audiobook "previous" behaviour.
+        controller.seekToPrevious()
+        publishState(controller)
+    }
+
+    fun skipToQueueIndex(index: Int) {
+        val controller = controller ?: return
+        if (index in 0 until controller.mediaItemCount) {
+            controller.seekTo(index, 0L)
+            publishState(controller)
+        }
+    }
+
+    fun setSpeed(speed: Float) {
+        val controller = controller ?: return
+        controller.setPlaybackSpeed(speed)
         publishState(controller)
     }
 
@@ -158,6 +236,31 @@ class PlaybackController(
     private fun publishState(player: Player) {
         val metadata = player.currentMediaItem?.mediaMetadata
         val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+        val count = player.mediaItemCount
+        val queueKey = if (count > 0) {
+            "$count:${player.getMediaItemAt(0).mediaId}:${player.getMediaItemAt(count - 1).mediaId}"
+        } else {
+            "0"
+        }
+        val queue = if (queueKey == cachedQueueKey) {
+            cachedQueue
+        } else {
+            val built = if (count > 0) {
+                (0 until count).map { i ->
+                    val item = player.getMediaItemAt(i)
+                    QueueItem(
+                        mediaId = item.mediaId,
+                        title = item.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() }
+                            ?: "Chapter ${i + 1}",
+                    )
+                }
+            } else {
+                emptyList()
+            }
+            cachedQueueKey = queueKey
+            cachedQueue = built
+            built
+        }
         _state.value = PlayerUiState(
             title = metadata?.title?.toString()?.takeIf { it.isNotBlank() } ?: "Nothing playing",
             fictionTitle = metadata?.albumTitle?.toString(),
@@ -167,6 +270,11 @@ class PlaybackController(
             positionMs = player.currentPosition.coerceAtLeast(0L),
             durationMs = duration,
             bufferedPercentage = player.bufferedPercentage,
+            speed = player.playbackParameters.speed,
+            queue = queue,
+            currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
+            hasNext = player.hasNextMediaItem(),
+            hasPrevious = player.hasPreviousMediaItem(),
         )
     }
 }
