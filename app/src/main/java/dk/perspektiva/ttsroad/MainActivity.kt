@@ -76,6 +76,7 @@ import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
 import dk.perspektiva.ttsroad.ui.AarisCard
@@ -570,7 +571,12 @@ private fun PlayerScreen(
     playerState: PlayerUiState,
     playbackController: PlaybackController,
 ) {
+    val context = LocalContext.current
+    val historyStore = remember { ServiceLocator.playbackHistory(context) }
+    val history by historyStore.snapshots.collectAsStateWithLifecycle()
+    val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
     var showChapters by remember { mutableStateOf(false) }
+    var showJumpBack by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -689,9 +695,16 @@ private fun PlayerScreen(
             ) {
                 Text("SPEED ${formatSpeed(playerState.speed)}")
             }
-            if (playerState.queue.size > 1) {
-                TextButton(onClick = { showChapters = true }) {
-                    Text("CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (jumpBackOptions.isNotEmpty()) {
+                    TextButton(onClick = { showJumpBack = true }) {
+                        Text("JUMP BACK")
+                    }
+                }
+                if (playerState.queue.size > 1) {
+                    TextButton(onClick = { showChapters = true }) {
+                        Text("CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}")
+                    }
                 }
             }
         }
@@ -744,6 +757,60 @@ private fun PlayerScreen(
                                 color = AarisColor.Accent,
                             )
                         }
+                    }
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                }
+            }
+        }
+    }
+
+    if (showJumpBack) {
+        val now = System.currentTimeMillis()
+        ModalBottomSheet(
+            onDismissRequest = { showJumpBack = false },
+            containerColor = AarisColor.BgRaise,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MetaText(text = "// Jump back to where you were", color = AarisColor.Accent)
+                TextButton(onClick = {
+                    historyStore.clear()
+                    showJumpBack = false
+                }) {
+                    Text("CLEAR")
+                }
+            }
+            LazyColumn(modifier = Modifier.heightIn(max = 460.dp)) {
+                itemsIndexed(
+                    jumpBackOptions,
+                    key = { _, snap -> "${snap.timestamp}-${snap.mediaId}" },
+                ) { _, snap ->
+                    val inQueue = playerState.queue.any { it.mediaId == snap.mediaId }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = inQueue) {
+                                playbackController.seekToMediaId(snap.mediaId, snap.positionMs)
+                                showJumpBack = false
+                            }
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = relativeAgo(now - snap.timestamp),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (inQueue) AarisColor.Ink else AarisColor.Dim,
+                            )
+                            MetaText(text = listOfNotNull(snap.fictionTitle, snap.title).joinToString("  ·  "))
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        MetaText(text = formatDuration(snap.positionMs))
                     }
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 }
@@ -1389,4 +1456,30 @@ private fun nextSpeed(current: Float): Float {
 private fun formatSpeed(speed: Float): String {
     val text = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')
     return "${text}×"
+}
+
+/**
+ * Thin the recorded position history into a short, evenly-spaced list of "jump back" targets
+ * (newest first, at least 5 minutes apart, skipping the last minute) for the player sheet.
+ */
+private fun jumpBackOptions(history: List<HistorySnapshot>, now: Long): List<HistorySnapshot> {
+    val out = mutableListOf<HistorySnapshot>()
+    var lastTs = Long.MAX_VALUE
+    for (snap in history.asReversed()) {
+        if (now - snap.timestamp < 60_000L) continue
+        if (lastTs - snap.timestamp < 5 * 60_000L) continue
+        out.add(snap)
+        lastTs = snap.timestamp
+        if (out.size >= 24) break
+    }
+    return out
+}
+
+private fun relativeAgo(deltaMs: Long): String {
+    val minutes = (deltaMs / 60_000L).toInt().coerceAtLeast(0)
+    return when {
+        minutes >= 60 -> "${minutes / 60}h ${minutes % 60}m ago"
+        minutes >= 1 -> "${minutes}m ago"
+        else -> "just now"
+    }
 }

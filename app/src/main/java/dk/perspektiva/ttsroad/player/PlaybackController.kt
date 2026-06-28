@@ -200,6 +200,24 @@ class PlaybackController(
         }
     }
 
+    /**
+     * Seek to a specific chapter (by media id) and position — used by "jump back" to land on
+     * wherever the listener was at a chosen moment. Returns true if the chapter is in the current
+     * queue; if it isn't (a different fiction is loaded), playback is left untouched.
+     */
+    fun seekToMediaId(mediaId: String, positionMs: Long): Boolean {
+        val controller = controller ?: return false
+        for (index in 0 until controller.mediaItemCount) {
+            if (controller.getMediaItemAt(index).mediaId == mediaId) {
+                controller.seekTo(index, positionMs.coerceAtLeast(0L))
+                controller.play()
+                publishState(controller)
+                return true
+            }
+        }
+        return false
+    }
+
     fun setSpeed(speed: Float) {
         val controller = controller ?: return
         controller.setPlaybackSpeed(speed)

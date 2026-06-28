@@ -2,6 +2,18 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.3.0 — 2026-06-28
+
+### Jump back to where you fell asleep
+
+- The media service now records a rolling, persisted **playback-position history** (wall-clock →
+  chapter + position) while playing, capped at ~8 hours. Because it lives in the foreground
+  service it keeps logging with the app backgrounded.
+- New **Jump back** sheet on the player: pick a moment from the timeline (e.g. "1h 47m ago —
+  Chapter 5 · 1:12:34") and it seeks the queue right there, even across chapter boundaries — so if
+  playback rolled on while you slept, you can rewind to where you actually dozed off. Inspired by
+  Audiobookshelf's listening-history rewind.
+
 ## 0.2.0 — 2026-06-28
 
 ### Performance & correctness

@@ -117,11 +117,22 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     private suspend fun saveCurrentProgress(forcePlayed: Boolean) {
         val mediaItem = player.currentMediaItem ?: return
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }
+
+        // Record a wall-clock → position snapshot so the user can jump back to where they fell
+        // asleep. Done here because this runs on the 15s tick, on pause, and at chapter end.
+        ServiceLocator.playbackHistory(this).record(
+            timestamp = System.currentTimeMillis(),
+            mediaId = mediaItem.mediaId,
+            title = mediaItem.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: "Chapter",
+            fictionTitle = mediaItem.mediaMetadata.albumTitle?.toString(),
+            positionMs = position,
+        )
+
         val extras = mediaItem.mediaMetadata.extras ?: return
         val fictionId = extras.getInt("fiction_id").takeIf { it > 0 } ?: return
         val chapterId = extras.getInt("chapter_id").takeIf { it > 0 } ?: return
-        val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }
-        val position = player.currentPosition.coerceAtLeast(0L)
         val nearComplete = duration?.let { total ->
             position >= total - 20_000L || position.toDouble() / total.toDouble() >= 0.96
         } ?: false
