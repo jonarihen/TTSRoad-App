@@ -153,6 +153,45 @@ class TtsRoadMediaService : MediaLibraryService() {
         return response.fiction to response.chapters
     }
 
+    /**
+     * Expand a single chapter selection (e.g. tapping a chapter in the Android Auto browse tree)
+     * into its whole fiction, so the car gets the same next/previous and auto-advance behaviour as
+     * the in-app player. Returns null if the fiction can't be loaded, so the caller can fall back
+     * to playing just the selected item.
+     */
+    private suspend fun buildFictionQueue(
+        fictionId: Int,
+        startChapterId: Int,
+    ): MediaSession.MediaItemsWithStartPosition? {
+        val (fiction, chapters) = fictionChapters(fictionId) ?: return null
+        val serverUrl = serverUrl()
+        val built = chapters.mapNotNull { chapter ->
+            TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)?.let { chapter to it }
+        }
+        if (built.isEmpty()) return null
+
+        val startIndex = built.indexOfFirst { it.first.resolvedChapterId == startChapterId }
+            .coerceAtLeast(0)
+        val startPositionMs = built[startIndex].first.resolvedPositionSeconds
+            .takeIf { it > 0.0 }
+            ?.let { (it * 1000).toLong() }
+            ?: 0L
+
+        return MediaSession.MediaItemsWithStartPosition(
+            built.map { it.second },
+            startIndex,
+            startPositionMs,
+        )
+    }
+
+    /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
+    private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
+        val library = library() ?: return null
+        val chapter = library.continueListening.firstOrNull() ?: return null
+        val fictionId = chapter.resolvedFictionId.takeIf { it > 0 } ?: return null
+        return buildFictionQueue(fictionId, chapter.resolvedChapterId)
+    }
+
     private class BrowserCallback(
         private val service: TtsRoadMediaService,
     ) : MediaLibrarySession.Callback {
@@ -167,17 +206,54 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         // Controllers (the app UI and Android Auto) send media items back across the binder without
         // their playback URI. Restore it from the request metadata we stashed when building them.
+        private fun restoreItem(item: MediaItem): MediaItem {
+            val uri = item.requestMetadata.mediaUri
+            return if (uri != null) item.buildUpon().setUri(uri).build() else item
+        }
+
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
-        ): ListenableFuture<MutableList<MediaItem>> {
-            val resolved = mediaItems.map { item ->
-                val uri = item.requestMetadata.mediaUri
-                if (uri != null) item.buildUpon().setUri(uri).build() else item
-            }.toMutableList()
-            return Futures.immediateFuture(resolved)
-        }
+        ): ListenableFuture<MutableList<MediaItem>> =
+            Futures.immediateFuture(mediaItems.map(::restoreItem).toMutableList())
+
+        // Invoked when a controller sets what to play. When a single chapter is selected — e.g. from
+        // the Android Auto browse tree — expand it into its whole fiction so next/previous and
+        // auto-advance work in the car. A multi-item set (the in-app player already sending a queue)
+        // passes straight through.
+        override fun onSetMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: MutableList<MediaItem>,
+            startIndex: Int,
+            startPositionMs: Long,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+            service.serviceScope.future {
+                val single = mediaItems.singleOrNull()
+                val extras = single?.mediaMetadata?.extras
+                val fictionId = extras?.getInt("fiction_id", 0)?.takeIf { it > 0 }
+                val chapterId = extras?.getInt("chapter_id", 0)?.takeIf { it > 0 }
+                if (fictionId != null && chapterId != null) {
+                    service.buildFictionQueue(fictionId, chapterId)?.let { return@future it }
+                }
+                MediaSession.MediaItemsWithStartPosition(
+                    mediaItems.map(::restoreItem),
+                    startIndex,
+                    startPositionMs,
+                )
+            }
+
+        // Pressing play in the car with nothing loaded resumes the most recent "continue listening"
+        // chapter within its fiction queue. A failed future tells the system there's nothing to resume.
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            isForPlayback: Boolean,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+            service.serviceScope.future {
+                service.resumeQueue() ?: throw UnsupportedOperationException("Nothing to resume")
+            }
 
         override fun onGetChildren(
             session: MediaLibrarySession,

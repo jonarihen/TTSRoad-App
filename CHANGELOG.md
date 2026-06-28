@@ -11,6 +11,14 @@ Notable changes to the TTSRoad Android client.
 - Fleshed out the **fiction detail page**: cover, rating, conversion-progress bar, tag
   chips, and an expandable synopsis, plus a Resume/Play action.
 
+### Android Auto
+
+- Tapping a chapter in the car now expands the whole fiction into the playback queue
+  (`onSetMediaItems`), so **next/previous chapter, auto-advance, and resume-at-position** work
+  in the car — matching the in-app player — and the now-playing queue shows the chapter list.
+- Pressing play in the car with nothing loaded **resumes the most recent "Continue listening"
+  chapter** at its saved position (`onPlaybackResumption`).
+
 ### Player
 
 - **Chapter-queue playback.** Starting a chapter from a fiction loads the whole fiction as
