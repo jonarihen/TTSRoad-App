@@ -2,6 +2,21 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.5.0 — 2026-07-01
+
+### Jump back to an exact clock time
+
+- The "Jump back" sheet now has a **"Fell asleep at"** field: type the time from your health
+  app's sleep log (e.g. `23:49`) and it finds the closest recorded position in your playback
+  history and seeks there directly — no more scrolling through a relative "2h 15m ago" list to
+  guess which entry matches.
+- Each entry in the pick-a-moment list now shows the **actual clock time** it was recorded at
+  (not just "ago"), so it's easy to match against another app's timestamps.
+
+### App icon
+
+- Replaced the launcher icon, which rendered as a stray "P", with a simple play-triangle mark.
+
 ## 0.4.0 — 2026-06-28
 
 ### In-app self-updater

@@ -69,6 +69,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import java.time.Instant
+import java.time.ZoneId
+import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -845,6 +848,8 @@ private fun PlayerScreen(
 
     if (showJumpBack) {
         val now = System.currentTimeMillis()
+        var sleepTimeInput by remember { mutableStateOf("") }
+        var sleepTimeError by remember { mutableStateOf<String?>(null) }
         ModalBottomSheet(
             onDismissRequest = { showJumpBack = false },
             containerColor = AarisColor.BgRaise,
@@ -864,7 +869,55 @@ private fun PlayerScreen(
                     Text("CLEAR")
                 }
             }
-            LazyColumn(modifier = Modifier.heightIn(max = 460.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                MetaText(text = "// Fell asleep at (check your health app)", color = AarisColor.Muted)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = sleepTimeInput,
+                        onValueChange = {
+                            sleepTimeInput = it
+                            sleepTimeError = null
+                        },
+                        placeholder = { Text("23:49") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = {
+                            val parsed = parseClockTime(sleepTimeInput)
+                            val target = parsed?.let { (h, m) -> resolveSleepTimestamp(h, m, now) }
+                            val nearest = target?.let { t -> history.minByOrNull { kotlin.math.abs(it.timestamp - t) } }
+                            when {
+                                parsed == null -> sleepTimeError = "Use 24h HH:MM, e.g. 23:49"
+                                nearest == null -> sleepTimeError = "No playback history to match"
+                                else -> {
+                                    scope.launch {
+                                        jumpToSnapshot(nearest, playbackController, repository)
+                                    }
+                                    showJumpBack = false
+                                }
+                            }
+                        },
+                        shape = RectangleShape,
+                    ) {
+                        Text("JUMP")
+                    }
+                }
+                sleepTimeError?.let {
+                    MetaText(text = it, color = AarisColor.Danger, modifier = Modifier.padding(top = 4.dp))
+                }
+                MetaText(
+                    text = "// Or pick a moment",
+                    color = AarisColor.Muted,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                )
+            }
+            LazyColumn(modifier = Modifier.heightIn(max = 380.dp)) {
                 itemsIndexed(
                     jumpBackOptions,
                     key = { _, snap -> "${snap.timestamp}-${snap.mediaId}" },
@@ -876,20 +929,7 @@ private fun PlayerScreen(
                             .fillMaxWidth()
                             .clickable(enabled = canJump) {
                                 scope.launch {
-                                    // Fast path: seek within the loaded queue. Otherwise (queue was
-                                    // cleared — e.g. a sleep-tracker stopped playback overnight)
-                                    // reload the fiction and start at the exact historical position.
-                                    if (!playbackController.seekToMediaId(snap.mediaId, snap.positionMs)) {
-                                        runCatching {
-                                            val resp = repository.chapters(snap.fictionId, playableOnly = false)
-                                            playbackController.playQueue(
-                                                chapters = resp.chapters,
-                                                startChapterId = snap.chapterId,
-                                                fiction = resp.fiction,
-                                                startPositionMsOverride = snap.positionMs,
-                                            )
-                                        }
-                                    }
+                                    jumpToSnapshot(snap, playbackController, repository)
                                 }
                                 showJumpBack = false
                             }
@@ -898,11 +938,14 @@ private fun PlayerScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = relativeAgo(now - snap.timestamp),
+                                text = formatClockTime(context, snap.timestamp),
                                 style = MaterialTheme.typography.titleMedium,
                                 color = if (canJump) AarisColor.Ink else AarisColor.Dim,
                             )
-                            MetaText(text = listOfNotNull(snap.fictionTitle, snap.title).joinToString("  ·  "))
+                            MetaText(
+                                text = "${relativeAgo(now - snap.timestamp)}  ·  " +
+                                    listOfNotNull(snap.fictionTitle, snap.title).joinToString("  ·  "),
+                            )
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         MetaText(text = formatDuration(snap.positionMs))
@@ -910,6 +953,29 @@ private fun PlayerScreen(
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Fast path: seek within the loaded queue. Otherwise (queue was cleared — e.g. a
+ * sleep-tracker stopped playback overnight) reload the fiction and start at the exact
+ * historical position.
+ */
+private suspend fun jumpToSnapshot(
+    snap: HistorySnapshot,
+    playbackController: PlaybackController,
+    repository: TtsRoadRepository,
+) {
+    if (!playbackController.seekToMediaId(snap.mediaId, snap.positionMs)) {
+        runCatching {
+            val resp = repository.chapters(snap.fictionId, playableOnly = false)
+            playbackController.playQueue(
+                chapters = resp.chapters,
+                startChapterId = snap.chapterId,
+                fiction = resp.fiction,
+                startPositionMsOverride = snap.positionMs,
+            )
         }
     }
 }
@@ -1611,4 +1677,29 @@ private fun relativeAgo(deltaMs: Long): String {
         minutes >= 1 -> "${minutes}m ago"
         else -> "just now"
     }
+}
+
+private fun formatClockTime(context: android.content.Context, epochMillis: Long): String =
+    android.text.format.DateFormat.getTimeFormat(context).format(Date(epochMillis))
+
+/** Parses a "HH:MM" (24h) clock time typed by the user, e.g. from a health app's sleep log. */
+private fun parseClockTime(input: String): Pair<Int, Int>? {
+    val match = Regex("""^\s*(\d{1,2}):(\d{2})\s*$""").matchEntire(input) ?: return null
+    val hour = match.groupValues[1].toIntOrNull() ?: return null
+    val minute = match.groupValues[2].toIntOrNull() ?: return null
+    if (hour !in 0..23 || minute !in 0..59) return null
+    return hour to minute
+}
+
+/**
+ * Resolves a typed clock time to the most recent wall-clock instant it could refer to: today at
+ * that time, or yesterday if today-at-that-time hasn't happened yet (the usual case — you check
+ * your health app's sleep time after waking, so e.g. "23:49" means last night).
+ */
+private fun resolveSleepTimestamp(hour: Int, minute: Int, now: Long): Long {
+    val zone = ZoneId.systemDefault()
+    val nowInstant = Instant.ofEpochMilli(now)
+    val candidate = nowInstant.atZone(zone).toLocalDate().atTime(hour, minute).atZone(zone)
+    val resolved = if (!candidate.toInstant().isBefore(nowInstant)) candidate.minusDays(1) else candidate
+    return resolved.toInstant().toEpochMilli()
 }
