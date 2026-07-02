@@ -16,10 +16,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,6 +34,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Forward30
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay30
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -58,7 +69,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -89,6 +102,7 @@ import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
+import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdateState
@@ -389,7 +403,9 @@ private fun MainScaffold(
                         }
                     },
                     actions = {
-                        if ((playerState.hasMedia || hasHistory) && screen != AppScreen.Player) {
+                        // With media loaded the mini player bar is the way in; this action only
+                        // covers reaching "jump back" history when nothing is playing.
+                        if (!playerState.hasMedia && hasHistory && screen != AppScreen.Player) {
                             TextButton(onClick = { onScreenChange(AppScreen.Player) }) {
                                 Text("PLAYER")
                             }
@@ -408,6 +424,15 @@ private fun MainScaffold(
                     ),
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+            }
+        },
+        bottomBar = {
+            if (playerState.hasMedia && screen != AppScreen.Player) {
+                MiniPlayerBar(
+                    state = playerState,
+                    playbackController = playbackController,
+                    onExpand = { onScreenChange(AppScreen.Player) },
+                )
             }
         },
     ) { padding ->
@@ -507,13 +532,26 @@ private fun LibraryScreen(
                         if (library.continueListening.isEmpty()) {
                             EmptyCard("No active chapters")
                         } else {
-                            HorizontalChapterRail(
-                                chapters = library.continueListening,
-                                fictionForChapter = fictionForChapter,
-                                keyPrefix = "continue",
-                                playbackController = playbackController,
-                                onOpenPlayer = onOpenPlayer,
+                            val hero = library.continueListening.first()
+                            ContinueHero(
+                                chapter = hero,
+                                fiction = fictionForChapter(hero),
+                                onResume = {
+                                    scope.launch {
+                                        playbackController.play(hero, fictionForChapter(hero))
+                                        onOpenPlayer()
+                                    }
+                                },
                             )
+                            if (library.continueListening.size > 1) {
+                                HorizontalChapterRail(
+                                    chapters = library.continueListening.drop(1),
+                                    fictionForChapter = fictionForChapter,
+                                    keyPrefix = "continue",
+                                    playbackController = playbackController,
+                                    onOpenPlayer = onOpenPlayer,
+                                )
+                            }
                         }
                     }
                 }
@@ -597,7 +635,6 @@ private fun FictionScreen(
                 .fillMaxSize()
                 .padding(padding),
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
                 FictionDetailHeader(
@@ -659,6 +696,8 @@ private fun PlayerScreen(
     val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
+    // Track the drag locally and only seek on release, so scrubbing doesn't spam the player.
+    var dragMs by remember { mutableStateOf<Float?>(null) }
 
     Column(
         modifier = Modifier
@@ -698,8 +737,12 @@ private fun PlayerScreen(
         }
         Spacer(modifier = Modifier.height(28.dp))
         Slider(
-            value = playerState.positionMs.coerceAtMost(playerState.durationMs).toFloat(),
-            onValueChange = { playbackController.seekTo(it.toLong()) },
+            value = dragMs ?: playerState.positionMs.coerceAtMost(playerState.durationMs).toFloat(),
+            onValueChange = { dragMs = it },
+            onValueChangeFinished = {
+                dragMs?.let { playbackController.seekTo(it.toLong()) }
+                dragMs = null
+            },
             valueRange = 0f..playerState.durationMs.coerceAtLeast(1L).toFloat(),
             enabled = playerState.durationMs > 0L,
             modifier = Modifier.fillMaxWidth(),
@@ -708,7 +751,7 @@ private fun PlayerScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            MetaText(text = formatDuration(playerState.positionMs))
+            MetaText(text = formatDuration(dragMs?.toLong() ?: playerState.positionMs))
             MetaText(text = formatDuration(playerState.durationMs))
         }
         Spacer(modifier = Modifier.height(12.dp))
@@ -719,50 +762,42 @@ private fun PlayerScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(modifier = Modifier.height(24.dp))
-        // Primary: previous chapter / play-pause / next chapter.
+        // Single transport row: chapter skips outside, fine seek inside, primary in the middle.
         Row(
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedButton(
-                onClick = { playbackController.skipToPreviousChapter() },
+            TransportIconButton(
+                icon = Icons.Default.SkipPrevious,
+                contentDescription = "Previous chapter",
                 enabled = playerState.hasMedia,
-                shape = RectangleShape,
-            ) {
-                Text("PREV")
-            }
-            Button(
-                onClick = { playbackController.togglePlayPause() },
+                size = 46.dp,
+            ) { playbackController.skipToPreviousChapter() }
+            TransportIconButton(
+                icon = Icons.Default.Replay30,
+                contentDescription = "Back 30 seconds",
                 enabled = playerState.hasMedia,
-                shape = RectangleShape,
-            ) {
-                Text(if (playerState.isPlaying) "PAUSE" else "PLAY")
-            }
-            OutlinedButton(
-                onClick = { playbackController.skipToNextChapter() },
+                size = 46.dp,
+            ) { playbackController.skipBy(-30_000) }
+            TransportIconButton(
+                icon = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (playerState.isPlaying) "Pause" else "Play",
+                enabled = playerState.hasMedia,
+                size = 68.dp,
+                filled = true,
+            ) { playbackController.togglePlayPause() }
+            TransportIconButton(
+                icon = Icons.Default.Forward30,
+                contentDescription = "Forward 30 seconds",
+                enabled = playerState.hasMedia,
+                size = 46.dp,
+            ) { playbackController.skipBy(30_000) }
+            TransportIconButton(
+                icon = Icons.Default.SkipNext,
+                contentDescription = "Next chapter",
                 enabled = playerState.hasNext,
-                shape = RectangleShape,
-            ) {
-                Text("NEXT")
-            }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        // Secondary: fine seek.
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            OutlinedButton(
-                onClick = { playbackController.skipBy(-30_000) },
-                enabled = playerState.hasMedia,
-                shape = RectangleShape,
-            ) {
-                Text("−30")
-            }
-            OutlinedButton(
-                onClick = { playbackController.skipBy(30_000) },
-                enabled = playerState.hasMedia,
-                shape = RectangleShape,
-            ) {
-                Text("+30")
-            }
+                size = 46.dp,
+            ) { playbackController.skipToNextChapter() }
         }
         Spacer(modifier = Modifier.height(8.dp))
         // Tertiary: playback speed and the chapter list.
@@ -1063,6 +1098,185 @@ private fun updateStatusText(state: UpdateState): Pair<String, Boolean>? = when 
     else -> null
 }
 
+/**
+ * Persistent bottom bar (Audible-style): playback keeps its place in the UI while the user
+ * browses. Tapping the track info expands to the full player.
+ */
+@Composable
+private fun MiniPlayerBar(
+    state: PlayerUiState,
+    playbackController: PlaybackController,
+    onExpand: () -> Unit,
+) {
+    val fraction = if (state.durationMs > 0) state.positionMs.toFloat() / state.durationMs else 0f
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AarisColor.BgRaise)
+            .navigationBarsPadding(),
+    ) {
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+        ThinProgress(fraction = fraction, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(onClick = onExpand),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CoverThumb(
+                    imageUrl = state.coverImageUrl,
+                    fallback = state.fictionTitle ?: state.title,
+                    size = 46,
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = state.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AarisColor.Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    state.fictionTitle?.let {
+                        MetaText(text = it, color = AarisColor.Dim)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            TransportIconButton(
+                icon = Icons.Default.Replay30,
+                contentDescription = "Back 30 seconds",
+                enabled = state.hasMedia,
+                size = 42.dp,
+            ) { playbackController.skipBy(-30_000) }
+            Spacer(modifier = Modifier.width(8.dp))
+            TransportIconButton(
+                icon = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (state.isPlaying) "Pause" else "Play",
+                enabled = state.hasMedia,
+                size = 42.dp,
+                filled = true,
+            ) { playbackController.togglePlayPause() }
+        }
+    }
+}
+
+/** Square AARIS transport control: outlined by default, accent-filled for the primary action. */
+@Composable
+private fun TransportIconButton(
+    icon: ImageVector,
+    contentDescription: String?,
+    enabled: Boolean,
+    size: androidx.compose.ui.unit.Dp,
+    filled: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(
+                when {
+                    filled && enabled -> AarisColor.Accent
+                    filled -> AarisColor.Line
+                    else -> AarisColor.BgRaise
+                },
+            )
+            .let { if (filled) it else it.border(1.dp, AarisColor.Line) }
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = when {
+                filled -> AarisColor.Bg
+                enabled -> AarisColor.Muted
+                else -> AarisColor.Dim
+            },
+            modifier = Modifier.size(size / 2),
+        )
+    }
+}
+
+/** Fraction of the chapter already listened to, for progress-on-artwork. */
+private fun listenedFraction(chapter: ChapterSummary): Float {
+    val duration = chapter.audioDuration ?: return 0f
+    if (duration <= 0.0) return 0f
+    return (chapter.resolvedPositionSeconds / duration).toFloat().coerceIn(0f, 1f)
+}
+
+/**
+ * Netflix-style billboard for the most recent in-progress chapter: large cover, gradient panel,
+ * one prominent resume action.
+ */
+@Composable
+private fun ContinueHero(
+    chapter: ChapterSummary,
+    fiction: FictionSummary?,
+    onResume: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(196.dp)
+            .border(1.dp, AarisColor.Line)
+            .background(Brush.horizontalGradient(listOf(AarisColor.BgHover, AarisColor.Bg))),
+    ) {
+        CoverFill(
+            imageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
+            fallback = fiction?.title ?: chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
+            modifier = Modifier
+                .fillMaxHeight()
+                .aspectRatio(2f / 3f),
+            bordered = false,
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .padding(16.dp),
+        ) {
+            Text(
+                text = chapter.resolvedTitle,
+                style = MaterialTheme.typography.headlineSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            (fiction?.title ?: chapter.resolvedFictionTitle)?.let {
+                Spacer(modifier = Modifier.height(4.dp))
+                MetaText(text = it)
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            ThinProgress(fraction = listenedFraction(chapter), modifier = Modifier.fillMaxWidth())
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = onResume,
+                    enabled = chapter.audio != null,
+                    shape = RectangleShape,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                (chapter.playback?.remainingLabel?.let { "$it left" } ?: chapter.audioDurationLabel)
+                    ?.let { MetaText(text = it, color = AarisColor.Dim) }
+            }
+        }
+    }
+}
+
 @Composable
 private fun HorizontalChapterRail(
     chapters: List<ChapterSummary>,
@@ -1104,6 +1318,10 @@ private fun HorizontalFictionRail(
     }
 }
 
+/**
+ * Cover-forward rail tile (Netflix-style): the art carries the tile, listening progress is drawn
+ * directly on it, and the whole tile is the tap target — no inline PLAY button.
+ */
 @Composable
 private fun ChapterTile(
     chapter: ChapterSummary,
@@ -1112,96 +1330,103 @@ private fun ChapterTile(
     onOpenPlayer: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    AarisCard(
+    Column(
         modifier = Modifier
-            .width(232.dp)
-            .height(330.dp),
+            .width(148.dp)
+            .clickable(enabled = chapter.audio != null) {
+                scope.launch {
+                    playbackController.play(chapter, fiction)
+                    onOpenPlayer()
+                }
+            },
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .aspectRatio(2f / 3f)
+                .border(1.dp, AarisColor.Line),
         ) {
-            CoverThumb(
+            CoverFill(
                 imageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
                 fallback = fiction?.title ?: chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
-                size = 128,
+                modifier = Modifier.fillMaxSize(),
+                bordered = false,
             )
-            Text(
-                text = chapter.resolvedTitle,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+            ThinProgress(
+                fraction = listenedFraction(chapter),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter),
             )
-            Text(
-                text = listOfNotNull(
-                    fiction?.title ?: chapter.resolvedFictionTitle,
-                    chapter.audioDurationLabel,
-                    chapter.playback?.remainingLabel?.let { "$it left" } ?: chapter.resumeTimeLabel?.let { "$it in" },
-                ).joinToString(" - "),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(modifier = Modifier.weight(1f, fill = true))
-            Button(
-                onClick = {
-                    scope.launch {
-                        playbackController.play(chapter, fiction)
-                        onOpenPlayer()
-                    }
-                },
-                enabled = chapter.audio != null,
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
-            }
         }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = chapter.resolvedTitle,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        MetaText(
+            text = listOfNotNull(
+                fiction?.title ?: chapter.resolvedFictionTitle,
+                chapter.playback?.remainingLabel?.let { "$it left" },
+            ).joinToString("  ·  ").ifBlank { chapter.audioDurationLabel.orEmpty() },
+            color = AarisColor.Dim,
+        )
     }
 }
 
 @Composable
 private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
-    AarisCard(
+    Column(
         modifier = Modifier
-            .width(172.dp)
-            .height(268.dp),
-        onClick = onClick,
+            .width(140.dp)
+            .clickable(onClick = onClick),
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .border(1.dp, AarisColor.Line),
         ) {
-            CoverThumb(
+            CoverFill(
                 imageUrl = fiction.coverImageUrl,
                 fallback = fiction.title,
-                size = 132,
+                modifier = Modifier.fillMaxSize(),
+                bordered = false,
             )
-            Text(
-                text = fiction.title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = listOfNotNull(
-                    fiction.author,
-                    "${fiction.doneChapters}/${fiction.totalChapters} ready",
-                ).joinToString(" - "),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+            ThinProgress(
+                fraction = fiction.readyFraction,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter),
             )
         }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = fiction.title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        MetaText(
+            text = listOfNotNull(
+                fiction.author?.takeIf { it.isNotBlank() },
+                "${fiction.doneChapters}/${fiction.totalChapters}",
+            ).joinToString("  ·  "),
+            color = AarisColor.Dim,
+        )
     }
 }
 
+/**
+ * Flat chapter list row (Audible-style): the row itself is the play target, the trailing check
+ * toggles played state, and unplayable chapters surface their pipeline status as a tag.
+ */
 @Composable
 private fun ChapterRow(
     chapter: ChapterSummary,
@@ -1209,59 +1434,69 @@ private fun ChapterRow(
     onPlay: () -> Unit,
     onMarkPlayed: ((Boolean) -> Unit)? = null,
 ) {
-    AarisCard {
+    val playable = chapter.audio != null
+    val isPlayed = chapter.playback?.isPlayed == true
+    Column {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .clickable(enabled = playable, onClick = onPlay)
+                .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CoverThumb(
-                imageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
-                fallback = fiction?.title ?: chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
+            MetaText(
+                text = chapterNumberLabel(chapter),
+                color = AarisColor.Dim,
+                modifier = Modifier.width(44.dp),
             )
-            Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = chapter.resolvedTitle,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
+                    color = if (playable) AarisColor.Ink else AarisColor.Dim,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = listOfNotNull(
-                        fiction?.title ?: chapter.resolvedFictionTitle,
-                        chapter.audioDurationLabel,
-                        chapter.playback?.remainingLabel?.let { "$it left" } ?: chapter.resumeTimeLabel?.let { "$it in" },
-                    ).joinToString(" - "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                onMarkPlayed?.let { mark ->
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { mark(true) }, shape = RectangleShape) {
-                            Text("PLAYED")
-                        }
-                        OutlinedButton(onClick = { mark(false) }, shape = RectangleShape) {
-                            Text("UNPLAYED")
-                        }
-                    }
+                val meta = listOfNotNull(
+                    chapter.audioDurationLabel,
+                    chapter.playback?.remainingLabel?.let { "$it left" }
+                        ?: chapter.resumeTimeLabel?.let { "$it in" },
+                ).joinToString("  ·  ")
+                if (meta.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    MetaText(text = meta, color = AarisColor.Dim)
                 }
             }
-            Spacer(modifier = Modifier.width(12.dp))
-            Button(
-                onClick = onPlay,
-                enabled = chapter.audio != null,
-                shape = RectangleShape,
-            ) {
-                Text("PLAY")
+            Spacer(modifier = Modifier.width(8.dp))
+            if (!playable) {
+                AarisTag(text = chapter.status ?: "pending")
+            } else {
+                onMarkPlayed?.let { mark ->
+                    TransportIconButton(
+                        icon = Icons.Default.Check,
+                        contentDescription = if (isPlayed) "Mark unplayed" else "Mark played",
+                        enabled = true,
+                        size = 36.dp,
+                        filled = isPlayed,
+                    ) { mark(!isPlayed) }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                TransportIconButton(
+                    icon = Icons.Default.PlayArrow,
+                    contentDescription = "Play",
+                    enabled = true,
+                    size = 36.dp,
+                ) { onPlay() }
             }
         }
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.LineSoft)
     }
+}
+
+private fun chapterNumberLabel(chapter: ChapterSummary): String {
+    val n = chapter.displayNumber ?: return "—"
+    return if (n % 1.0 == 0.0) n.toLong().toString() else n.toString()
 }
 
 @Composable
@@ -1342,43 +1577,48 @@ private fun FictionsScreen(
     }
 }
 
+/** Cover-forward grid card: art bleeds to the card edge, TTS-ready progress sits on the art. */
 @Composable
 private fun FictionGridCard(fiction: FictionSummary, onClick: () -> Unit) {
     AarisCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            CoverFill(
-                imageUrl = fiction.coverImageUrl,
-                fallback = fiction.title,
+        Column {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(0.7f),
-            )
-            Text(
-                text = fiction.title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            fiction.author?.takeIf { it.isNotBlank() }?.let {
+                    .aspectRatio(2f / 3f),
+            ) {
+                CoverFill(
+                    imageUrl = fiction.coverImageUrl,
+                    fallback = fiction.title,
+                    modifier = Modifier.fillMaxSize(),
+                    bordered = false,
+                )
+                ThinProgress(
+                    fraction = fiction.readyFraction,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter),
+                )
+            }
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = fiction.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                MetaText(
+                    text = listOfNotNull(
+                        fiction.author?.takeIf { it.isNotBlank() },
+                        "${fiction.doneChapters}/${fiction.totalChapters} ready",
+                    ).joinToString("  ·  "),
+                    color = AarisColor.Dim,
+                )
             }
-            LinearProgressIndicator(
-                progress = { fiction.readyFraction },
-                color = AarisColor.Accent,
-                trackColor = AarisColor.Line,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            MetaText(text = "${fiction.doneChapters}/${fiction.totalChapters} ready")
         }
     }
 }
@@ -1490,11 +1730,11 @@ private fun FictionDetailHeader(
 }
 
 @Composable
-private fun CoverFill(imageUrl: String?, fallback: String, modifier: Modifier) {
+private fun CoverFill(imageUrl: String?, fallback: String, modifier: Modifier, bordered: Boolean = true) {
     Box(
         modifier = modifier
             .background(AarisColor.BgInput)
-            .border(1.dp, AarisColor.Line),
+            .let { if (bordered) it.border(1.dp, AarisColor.Line) else it },
         contentAlignment = Alignment.Center,
     ) {
         if (!imageUrl.isNullOrBlank()) {

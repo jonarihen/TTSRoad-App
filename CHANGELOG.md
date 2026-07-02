@@ -2,6 +2,21 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.6.0 — 2026-07-02
+
+### Media-app UI overhaul (Netflix/Audible-style)
+
+- **Persistent mini player bar**: playback now stays visible at the bottom of every screen —
+  cover, title, −30s and play/pause, with a hairline progress strip. Tap it to open the full
+  player. No more hunting for the PLAYER button in the top bar.
+- **Library**: the most recent in-progress chapter is a **hero billboard** with one big RESUME
+  action; the rest of "Continue listening", Fictions, and Recent are **cover-forward rail tiles**
+  — the artwork is the tap target and your listening progress is drawn directly on it.
+- **Fiction page**: the chapter list is a flat, scannable list (number · title · time left);
+  the row plays, a single check toggles played/unplayed, and unready chapters show a status tag.
+- **Player**: one icon transport row (prev / −30 / play / +30 / next) replaces three rows of
+  text buttons, and the seek bar only seeks when released, so scrubbing no longer stutters.
+
 ## 0.5.0 — 2026-07-01
 
 ### Jump back to an exact clock time

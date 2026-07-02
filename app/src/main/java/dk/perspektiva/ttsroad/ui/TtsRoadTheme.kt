@@ -1,7 +1,12 @@
 package dk.perspektiva.ttsroad.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
@@ -175,6 +180,26 @@ fun AarisTag(text: String, modifier: Modifier = Modifier) {
             letterSpacing = 1.2.sp,
         ),
     )
+}
+
+/**
+ * Hairline progress bar drawn AARIS-style (square, accent-on-line) — used on cover art and the
+ * mini player, where Material's LinearProgressIndicator (rounded caps, stop gap) looks wrong.
+ */
+@Composable
+fun ThinProgress(
+    fraction: Float,
+    modifier: Modifier = Modifier,
+    height: androidx.compose.ui.unit.Dp = 3.dp,
+) {
+    Box(modifier.height(height).background(AarisColor.Line)) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .background(AarisColor.Accent),
+        )
+    }
 }
 
 /** Flat, thin-bordered panel — the AARIS `.panel`. Replaces elevated Material cards. */
