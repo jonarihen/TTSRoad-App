@@ -60,6 +60,10 @@ import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+// Media3 marks much of its session and data-source surface @UnstableApi. The whole class works
+// against it, so opt in once here rather than annotating each member and still missing the
+// constructor and property references lint reports separately.
+@OptIn(UnstableApi::class)
 class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var tokenStore: TokenStore
@@ -512,6 +516,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         return buildFictionQueue(fictionId, chapter.resolvedChapterId)
     }
 
+    @OptIn(UnstableApi::class)
     private class BrowserCallback(
         private val service: TtsRoadMediaService,
     ) : MediaLibrarySession.Callback {
