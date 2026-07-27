@@ -11,8 +11,8 @@ android {
         applicationId = "dk.perspektiva.ttsroad"
         minSdk = 26
         targetSdk = 37
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 6
+        versionName = "0.6.0"
     }
 
     buildTypes {

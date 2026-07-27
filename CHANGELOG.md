@@ -2,7 +2,7 @@
 
 Notable changes to the TTSRoad Android client.
 
-## 0.7.0 — 2026-07-27
+## Unreleased
 
 ### Chapter list controls
 
