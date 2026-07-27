@@ -1,9 +1,12 @@
 package dk.perspektiva.ttsroad.media
 
+import android.os.Bundle
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
@@ -14,6 +17,9 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
+import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -23,6 +29,8 @@ import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.player.SkipIntervalMs
+import dk.perspektiva.ttsroad.player.skipTargetMs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,6 +52,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     @Volatile
     private var authHeader: String? = null
 
+    @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
         tokenStore = ServiceLocator.tokenStore(this)
@@ -68,7 +77,9 @@ class TtsRoadMediaService : MediaLibraryService() {
             },
         )
         startProgressTicker()
-        session = MediaLibrarySession.Builder(this, player, BrowserCallback(this)).build()
+        session = MediaLibrarySession.Builder(this, player, BrowserCallback(this))
+            .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
@@ -210,6 +221,43 @@ class TtsRoadMediaService : MediaLibraryService() {
     private class BrowserCallback(
         private val service: TtsRoadMediaService,
     ) : MediaLibrarySession.Callback {
+        // The 30-second skips are custom commands, so every controller — the notification, the
+        // lockscreen, Android Auto — has to be granted them explicitly or their buttons arrive
+        // disabled.
+        @OptIn(UnstableApi::class)
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult =
+            MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+                        .buildUpon()
+                        .add(TtsRoadSessionCommands.skipBackCommand)
+                        .add(TtsRoadSessionCommands.skipForwardCommand)
+                        .build(),
+                )
+                .build()
+
+        @OptIn(UnstableApi::class)
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            val delta = when (customCommand.customAction) {
+                TtsRoadSessionCommands.SkipBack -> -SkipIntervalMs
+                TtsRoadSessionCommands.SkipForward -> SkipIntervalMs
+                else -> return Futures.immediateFuture(
+                    SessionResult(SessionError.ERROR_NOT_SUPPORTED),
+                )
+            }
+            val player = session.player
+            player.seekTo(skipTargetMs(player.currentPosition, player.duration, delta))
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,

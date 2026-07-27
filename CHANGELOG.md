@@ -2,6 +2,17 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### −30s / +30s outside the app
+
+- The **notification, lockscreen, and Android Auto transport row** now carry −30s and +30s
+  buttons either side of play/pause, so catching a missed sentence while driving — or rewinding
+  after waking up mid-chapter — no longer means unlocking the phone. Previous/next chapter move
+  to the secondary slots.
+- Both seek **within the current chapter**: near the end, forward stops at the end rather than
+  rolling into the next chapter; near the start, back stops at zero.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
