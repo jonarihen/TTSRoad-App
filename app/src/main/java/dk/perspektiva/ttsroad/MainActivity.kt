@@ -10,9 +10,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -60,6 +62,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -78,6 +81,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -114,6 +118,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LoginResult
@@ -125,6 +130,10 @@ import dk.perspektiva.ttsroad.data.SpeedPresets
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.formatSkipInterval
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.data.allChapterIds
+import dk.perspektiva.ttsroad.data.chapterIdsBefore
+import dk.perspektiva.ttsroad.data.chapterView
+import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.nav.AppScreen
 import dk.perspektiva.ttsroad.nav.navigateTo
 import dk.perspektiva.ttsroad.nav.popScreen
@@ -762,10 +771,30 @@ private fun FictionScreen(
     val chapterState by remember(fiction.id) { cache.chapters(fiction.id) }
         .collectAsStateWithLifecycle()
     var error by remember { mutableStateOf<String?>(null) }
+    var filter by remember(fiction.id) { mutableStateOf(ChapterFilter.All) }
+    var ascending by remember(fiction.id) { mutableStateOf(true) }
+    var bulkTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
+    var didAutoScroll by remember(fiction.id) { mutableStateOf(false) }
     // Held here so an in-place row update cannot scroll a 500-row list back to the top.
     val listState = rememberLazyListState()
+    val playerState by playbackController.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(fiction.id) { cache.ensureChapters(fiction.id) }
+
+    /**
+     * Mark [ids] played/unplayed in one request and patch the loaded rows in place — bulk marking a
+     * few hundred chapters should not cost a reload of the whole list. The patch goes through the
+     * shared cache, so the rows stay updated after navigating away and back.
+     */
+    fun mark(ids: List<Int>, played: Boolean) {
+        if (ids.isEmpty()) return
+        scope.launch {
+            error = null
+            runCatching { repository.markPlayed(ids, played) }
+                .onSuccess { cache.applyPlayed(fiction.id, ids, played) }
+                .onFailure { error = it.message ?: "Could not update chapter" }
+        }
+    }
 
     val chapters = chapterState.value
     when {
@@ -776,66 +805,201 @@ private fun FictionScreen(
             onRetry = { cache.refreshChapters(fiction.id) },
         )
 
-        else -> RefreshablePane(
-            padding = padding,
-            isRefreshing = chapterState.isRefreshing,
-            error = chapterState.error,
-            onRefresh = { cache.refreshChapters(fiction.id) },
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-            ) {
-                item {
-                    FictionDetailHeader(
-                        fiction = fiction,
-                        chapters = chapters,
-                        onPlay = { chapter ->
-                            scope.launch {
-                                playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
-                                onOpenPlayer()
-                            }
-                        },
-                    )
-                    error?.let {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(text = it, color = MaterialTheme.colorScheme.error)
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    SectionHeader(kicker = "CH", title = "Chapters")
-                }
-                itemsIndexed(chapters, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
-                    ChapterRow(
-                        chapter = chapter,
-                        fiction = fiction,
-                        onPlay = {
-                            scope.launch {
-                                playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
-                                onOpenPlayer()
-                            }
-                        },
-                        onMarkPlayed = { played ->
-                            scope.launch {
-                                error = null
-                                runCatching {
-                                    repository.markPlayed(listOf(chapter.resolvedChapterId), played)
-                                    // Patch the one row instead of refetching: reloading tore down the
-                                    // whole list and dropped the user back at the top, for a checkmark.
-                                    cache.applyPlayed(
-                                        fictionId = fiction.id,
-                                        chapterIds = listOf(chapter.resolvedChapterId),
-                                        played = played,
-                                    )
-                                }.onFailure {
-                                    error = it.message ?: "Could not update chapter"
-                                }
-                            }
-                        },
-                    )
+        else -> {
+            // Filtering and sorting are client-side: the full list is already loaded, and a 500+
+            // chapter fiction is still cheap to re-derive whenever the view options change.
+            val visible = remember(chapters, filter, ascending) {
+                chapters.chapterView(filter, ascending)
+            }
+            val currentChapterId = playerState.queue.getOrNull(playerState.currentIndex)
+                ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
+            // Row index inside [visible]; the header occupies list index 0, so rows are offset by 1.
+            val currentRow = remember(visible, currentChapterId) {
+                if (currentChapterId == null) -1 else visible.indexOfFirst { it.resolvedChapterId == currentChapterId }
+            }
+            val currentOffScreen by remember(currentRow) {
+                derivedStateOf {
+                    currentRow >= 0 && listState.layoutInfo.visibleItemsInfo.none { it.index == currentRow + 1 }
                 }
             }
+
+            // Land on the chapter that is playing when the fiction is opened, then leave the list
+            // alone — re-scrolling on every chapter change would fight the user.
+            LaunchedEffect(currentRow) {
+                if (!didAutoScroll && currentRow >= 0) {
+                    didAutoScroll = true
+                    listState.scrollToItem(currentRow + 1)
+                }
+            }
+
+            RefreshablePane(
+                padding = padding,
+                isRefreshing = chapterState.isRefreshing,
+                error = chapterState.error,
+                onRefresh = { cache.refreshChapters(fiction.id) },
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                ) {
+                    item {
+                        FictionDetailHeader(
+                            fiction = fiction,
+                            chapters = chapters,
+                            onPlay = { chapter ->
+                                scope.launch {
+                                    playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
+                                    onOpenPlayer()
+                                }
+                            },
+                        )
+                        error?.let {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(text = it, color = MaterialTheme.colorScheme.error)
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        SectionHeader(kicker = "CH", title = "Chapters")
+                        ChapterListControls(
+                            filter = filter,
+                            ascending = ascending,
+                            showJumpToCurrent = currentOffScreen,
+                            onFilter = { filter = it },
+                            onToggleSort = { ascending = !ascending },
+                            onJumpToCurrent = {
+                                scope.launch { listState.animateScrollToItem(currentRow + 1) }
+                            },
+                        )
+                    }
+                    itemsIndexed(visible, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
+                        ChapterRow(
+                            chapter = chapter,
+                            fiction = fiction,
+                            isCurrent = chapter.resolvedChapterId == currentChapterId,
+                            onPlay = {
+                                scope.launch {
+                                    // Queue the fiction in reading order, not the filtered/sorted view.
+                                    playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
+                                    onOpenPlayer()
+                                }
+                            },
+                            onMarkPlayed = { played -> mark(listOf(chapter.resolvedChapterId), played) },
+                            onLongPress = { bulkTarget = chapter },
+                        )
+                    }
+                }
+            }
+
+            bulkTarget?.let { target ->
+                ChapterBulkSheet(
+                    chapter = target,
+                    previousIds = remember(chapters, target) {
+                        chapters.chapterIdsBefore(target.resolvedChapterId)
+                    },
+                    allIds = remember(chapters) { chapters.allChapterIds() },
+                    onDismiss = { bulkTarget = null },
+                    onMark = { ids ->
+                        bulkTarget = null
+                        mark(ids, played = true)
+                    },
+                )
+            }
         }
+    }
+}
+
+/** Filter chips, sort direction and the "jump to current" affordance above the chapter list. */
+@Composable
+private fun ChapterListControls(
+    filter: ChapterFilter,
+    ascending: Boolean,
+    showJumpToCurrent: Boolean,
+    onFilter: (ChapterFilter) -> Unit,
+    onToggleSort: () -> Unit,
+    onJumpToCurrent: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ChapterFilter.entries.forEach { option ->
+            FilterChip(
+                selected = option == filter,
+                onClick = { onFilter(option) },
+                label = { Text(option.label) },
+                shape = RectangleShape,
+            )
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        TextButton(onClick = onToggleSort) {
+            Text(if (ascending) "OLDEST" else "NEWEST")
+        }
+    }
+    if (showJumpToCurrent) {
+        TextButton(onClick = onJumpToCurrent) { Text("JUMP TO CURRENT") }
+    }
+}
+
+/** Long-press actions for catching up on chapters read elsewhere. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChapterBulkSheet(
+    chapter: ChapterSummary,
+    previousIds: List<Int>,
+    allIds: List<Int>,
+    onDismiss: () -> Unit,
+    onMark: (List<Int>) -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        MetaText(
+            text = "// ${chapter.resolvedTitle}",
+            color = AarisColor.Accent,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+        )
+        BulkAction(
+            title = "Mark all previous as played",
+            subtitle = if (previousIds.isEmpty()) {
+                "Nothing before this chapter"
+            } else {
+                "${previousIds.size} chapters"
+            },
+            enabled = previousIds.isNotEmpty(),
+            onClick = { onMark(previousIds) },
+        )
+        BulkAction(
+            title = "Mark all as played",
+            subtitle = "${allIds.size} chapters",
+            enabled = allIds.isNotEmpty(),
+            onClick = { onMark(allIds) },
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun BulkAction(
+    title: String,
+    subtitle: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Column {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = enabled, onClick = onClick)
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (enabled) AarisColor.Ink else AarisColor.Dim,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            MetaText(text = subtitle, color = AarisColor.Dim)
+        }
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
     }
 }
 
@@ -1062,7 +1226,17 @@ private fun PlayerScreen(
                 color = AarisColor.Accent,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
             )
-            LazyColumn(modifier = Modifier.heightIn(max = 440.dp)) {
+            // The sheet is composed fresh each time it opens, so this lands on the playing chapter
+            // instead of the top of a several-hundred-entry queue.
+            val chapterListState = rememberLazyListState()
+            LaunchedEffect(playerState.currentIndex, playerState.queue.size) {
+                if (playerState.queue.isNotEmpty()) {
+                    chapterListState.scrollToItem(
+                        playerState.currentIndex.coerceIn(0, playerState.queue.lastIndex),
+                    )
+                }
+            }
+            LazyColumn(state = chapterListState, modifier = Modifier.heightIn(max = 440.dp)) {
                 itemsIndexed(
                     playerState.queue,
                     key = { index, item -> "${item.mediaId}-$index" },
@@ -1893,14 +2067,18 @@ private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
 
 /**
  * Flat chapter list row (Audible-style): the row itself is the play target, the trailing check
- * toggles played state, and unplayable chapters surface their pipeline status as a tag.
+ * toggles played state, and unplayable chapters surface their pipeline status as a tag. A long
+ * press opens the bulk mark-played actions where [onLongPress] is supplied.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChapterRow(
     chapter: ChapterSummary,
     fiction: FictionSummary?,
     onPlay: () -> Unit,
     onMarkPlayed: ((Boolean) -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
+    isCurrent: Boolean = false,
 ) {
     val playable = chapter.audio != null
     val isPlayed = chapter.playback?.isPlayed == true
@@ -1908,13 +2086,18 @@ private fun ChapterRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(enabled = playable, onClick = onPlay)
+                .background(if (isCurrent) AarisColor.BgHover else Color.Transparent)
+                .combinedClickable(
+                    enabled = playable || onLongPress != null,
+                    onClick = { if (playable) onPlay() },
+                    onLongClick = onLongPress,
+                )
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             MetaText(
                 text = chapterNumberLabel(chapter),
-                color = AarisColor.Dim,
+                color = if (isCurrent) AarisColor.Accent else AarisColor.Dim,
                 modifier = Modifier.width(44.dp),
             )
             Column(modifier = Modifier.weight(1f)) {
