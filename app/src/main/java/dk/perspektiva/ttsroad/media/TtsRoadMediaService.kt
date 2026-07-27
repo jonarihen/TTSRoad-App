@@ -1,9 +1,14 @@
 package dk.perspektiva.ttsroad.media
 
+import android.content.Context
+import android.media.AudioManager
+import android.media.audiofx.LoudnessEnhancer
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
@@ -21,14 +26,18 @@ import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
+import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.data.VolumeBoost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -37,7 +46,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var tokenStore: TokenStore
     private lateinit var repository: TtsRoadRepository
+    private lateinit var preferences: PlaybackPreferences
     private lateinit var player: ExoPlayer
+    private var loudnessEnhancer: LoudnessEnhancer? = null
     private lateinit var session: MediaLibrarySession
     private var lastLibrary: LibraryResponse? = null
 
@@ -48,10 +59,12 @@ class TtsRoadMediaService : MediaLibraryService() {
         super.onCreate()
         tokenStore = ServiceLocator.tokenStore(this)
         repository = ServiceLocator.repository(this)
+        preferences = ServiceLocator.playbackPreferences(this)
         serviceScope.launch {
             tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
         }
         player = createPlayer()
+        startAudioTuning()
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -74,6 +87,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
+        // Release the effect before the player: it is attached to the player's audio session, and
+        // leaking an AudioEffect holds a global slot other apps then cannot use.
+        runCatching { loudnessEnhancer?.release() }
+        loudnessEnhancer = null
         session.release()
         player.release()
         serviceScope.cancel()
@@ -104,6 +121,54 @@ class TtsRoadMediaService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+    }
+
+    /**
+     * Apply the two TTS-specific audio settings, and keep applying them as they change.
+     *
+     * The player is recreated on a swipe-away, a process kill and a reboot, so this has to live in
+     * the service rather than the UI — the car can start playback with no UI running at all.
+     *
+     * The audio session id is generated here and set on the player rather than read back from it.
+     * That way the id is fixed for the life of the service, so [LoudnessEnhancer] is attached once
+     * and never has to be torn down and rebuilt when the player switches output.
+     *
+     * Opted in because setSkipSilenceEnabled and setAudioSessionId are still marked unstable in
+     * media3 1.10.0.
+     */
+    @OptIn(UnstableApi::class)
+    private fun startAudioTuning() {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val sessionId = audioManager?.generateAudioSessionId()
+            ?.takeIf { it != AudioManager.ERROR }
+        if (sessionId != null) {
+            player.audioSessionId = sessionId
+            // Effect creation is genuinely device-dependent — some devices have no spare effect
+            // slots, and some ROMs refuse outright. A missing enhancer must not stop playback.
+            loudnessEnhancer = runCatching { LoudnessEnhancer(sessionId) }.getOrNull()
+        }
+
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.skipSilence }
+                .distinctUntilChanged()
+                .collect { player.skipSilenceEnabled = it }
+        }
+
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.volumeBoost }
+                .distinctUntilChanged()
+                .collect(::applyVolumeBoost)
+        }
+    }
+
+    private fun applyVolumeBoost(boost: VolumeBoost) {
+        val enhancer = loudnessEnhancer ?: return
+        runCatching {
+            enhancer.setTargetGain(boost.gainMillibels)
+            enhancer.enabled = boost != VolumeBoost.Off
+        }
     }
 
     private fun startProgressTicker() {

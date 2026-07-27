@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -56,6 +57,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -93,7 +95,9 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.LoginResult
+import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
@@ -1025,6 +1029,8 @@ private fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     var isBusy by remember { mutableStateOf(false) }
 
     Column(
@@ -1048,6 +1054,61 @@ private fun SettingsScreen(
                 SettingsItem(label = "User", value = session.username.orEmpty())
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
+            }
+        }
+
+        MetaText(text = "// Audio", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        MetaText(text = "Skip silence")
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(
+                            text = "Shortens the long pauses synthesised speech leaves around " +
+                                "headings and scene breaks. Turn off to keep dramatic pauses.",
+                            color = AarisColor.Dim,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = prefs.skipSilence,
+                        onCheckedChange = { scope.launch { preferences.setSkipSilence(it) } },
+                    )
+                }
+
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
+                MetaText(text = "Volume boost")
+                MetaText(
+                    text = "Lifts chapters converted at a lower level, so a quiet one does not " +
+                        "mean reaching for the volume.",
+                    color = AarisColor.Dim,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    VolumeBoost.entries.forEach { option ->
+                        val selected = option == prefs.volumeBoost
+                        OutlinedButton(
+                            onClick = { scope.launch { preferences.setVolumeBoost(option) } },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(option.label)
+                        }
+                    }
+                }
             }
         }
 
