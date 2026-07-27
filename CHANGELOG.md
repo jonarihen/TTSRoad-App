@@ -2,6 +2,19 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### "Last heard" resume on the library screen
+
+- Opening the app after a night now offers **LAST HEARD 23:49 — Ashes of Aether — Ch 7 — 1:12:34**
+  above Continue listening, with **RESUME THERE**. The app already recorded where playback was at
+  every wall-clock moment; this stops you having to open the jump-back sheet and hunt for the time.
+- Shown only when nothing is playing and the last snapshot is at least 30 minutes old, so it reads
+  as catching up after a night rather than a rewind offer mid-listen. **DISMISS** hides it for that
+  snapshot, not for a fixed period, so it does not come back all day.
+- Where playback stalled and kept logging the same position, the banner offers the moment the audio
+  actually stopped moving rather than the last identical repeat.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
