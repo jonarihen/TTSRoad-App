@@ -140,6 +140,7 @@ import dk.perspektiva.ttsroad.nav.popScreen
 import dk.perspektiva.ttsroad.nav.rootBackStack
 import dk.perspektiva.ttsroad.nav.saveKey
 import dk.perspektiva.ttsroad.player.HistorySnapshot
+import dk.perspektiva.ttsroad.player.lastHeardSnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
 import dk.perspektiva.ttsroad.player.SleepTimerController
@@ -610,6 +611,25 @@ private fun LibraryScreen(
     val context = LocalContext.current
     val cache = remember { ServiceLocator.libraryCache(context) }
     val state by cache.library.collectAsStateWithLifecycle()
+    // Only for the jump-back reload path: resuming a snapshot whose queue was cleared overnight
+    // has to refetch the fiction, which the cache does not cover.
+    val repository = remember { ServiceLocator.repository(context) }
+
+    // "You fell asleep at 23:49" — the app already knows when playback was last heard, so offer the
+    // jump instead of making the user open the jump-back sheet and hunt for the time.
+    val historyStore = remember { ServiceLocator.playbackHistory(context) }
+    val history by historyStore.snapshots.collectAsStateWithLifecycle()
+    val playerState by playbackController.state.collectAsStateWithLifecycle()
+    // Survives the screen swap, so leaving and returning does not resurrect a dismissed banner.
+    var dismissedLastHeard by rememberSaveable { mutableStateOf(0L) }
+    val lastHeard = remember(history, playerState.isPlaying, dismissedLastHeard) {
+        if (playerState.isPlaying) {
+            null
+        } else {
+            lastHeardSnapshot(history, System.currentTimeMillis())
+                ?.takeIf { it.timestamp != dismissedLastHeard }
+        }
+    }
 
     // Loads once; returning to this screen shows what was already there instead of a spinner.
     LaunchedEffect(Unit) { cache.ensureLibrary() }
@@ -640,6 +660,21 @@ private fun LibraryScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(28.dp),
                 ) {
+                    if (lastHeard != null) {
+                        item {
+                            LastHeardBanner(
+                                snapshot = lastHeard,
+                                onResume = {
+                                    scope.launch {
+                                        jumpToSnapshot(lastHeard, playbackController, repository)
+                                        onOpenPlayer()
+                                    }
+                                },
+                                onDismiss = { dismissedLastHeard = lastHeard.timestamp },
+                            )
+                        }
+                    }
+
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             SectionHeader(
@@ -1462,6 +1497,50 @@ private fun SleepTimerOption(label: String, onClick: () -> Unit) {
             .padding(horizontal = 20.dp, vertical = 14.dp),
     )
     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+}
+
+/**
+ * "Last heard 23:49 — Ashes of Aether — Ch 7 — 1:12:34", above the library's continue-listening
+ * section. Shown only when nothing is playing and the last snapshot is old enough to be a different
+ * sitting, so it reads as catching up after a night rather than a rewind offer mid-listen.
+ */
+@Composable
+private fun LastHeardBanner(
+    snapshot: HistorySnapshot,
+    onResume: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    AarisCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            MetaText(text = "// Last heard", color = AarisColor.Accent)
+            Text(
+                text = formatClockTime(context, snapshot.timestamp),
+                style = MaterialTheme.typography.titleLarge,
+            )
+            MetaText(
+                text = listOfNotNull(
+                    snapshot.fictionTitle,
+                    snapshot.title,
+                    formatDuration(snapshot.positionMs),
+                ).joinToString(" · "),
+                color = AarisColor.Muted,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onResume, shape = RectangleShape) {
+                    Text("RESUME THERE")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("DISMISS")
+                }
+            }
+        }
+    }
 }
 
 /**
