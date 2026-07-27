@@ -24,6 +24,17 @@ Notable changes to the TTSRoad Android client.
   covers sit behind auth, every cover rendered as the letter-fallback tile while audio played fine.
   Phone UI and Android Auto artwork both fixed.
 
+### Android Auto: voice search and a browse tree that shows progress
+
+- **"Hey Google, play Ashes of Aether on TTSRoad"** now works, and starts that fiction at its resume
+  position. Voice is the only safe way to start something new while driving, and it previously did
+  nothing at all.
+- **Searching in the car** returns matching fictions and chapters, matched on title, author and tags.
+- **The Fictions node renders as a grid** with artwork instead of plain rows, and **chapters show
+  completion progress** — a started chapter no longer looks identical to an untouched one.
+- A weak match deliberately does *not* start playing. Matching a shared tag or an author with more
+  than one book resolves to nothing rather than starting the wrong book at speed.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
