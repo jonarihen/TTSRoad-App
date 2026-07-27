@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -80,6 +82,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -122,6 +125,11 @@ import dk.perspektiva.ttsroad.data.SpeedPresets
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.formatSkipInterval
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.nav.AppScreen
+import dk.perspektiva.ttsroad.nav.navigateTo
+import dk.perspektiva.ttsroad.nav.popScreen
+import dk.perspektiva.ttsroad.nav.rootBackStack
+import dk.perspektiva.ttsroad.nav.saveKey
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
@@ -136,14 +144,6 @@ import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdateState
 import kotlinx.coroutines.launch
-
-private sealed interface AppScreen {
-    data object Library : AppScreen
-    data object Fictions : AppScreen
-    data class Fiction(val fiction: FictionSummary) : AppScreen
-    data object Player : AppScreen
-    data object Settings : AppScreen
-}
 
 /**
  * Server the user signed in to, so cover URLs built from the backend's BASE_URL can be pointed at
@@ -213,7 +213,7 @@ private fun TtsRoadApp(
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val session by tokenStore.session.collectAsStateWithLifecycle(initialValue = SessionState())
-    var screen by remember { mutableStateOf<AppScreen>(AppScreen.Library) }
+    var backStack by remember { mutableStateOf(rootBackStack) }
     var openPlayerPending by remember { mutableStateOf(startOnPlayer) }
 
     // Denial is not an error path: playback still works, and Settings explains what is missing.
@@ -229,7 +229,7 @@ private fun TtsRoadApp(
                 notificationPermissionLauncher.launch(PostNotificationsPermission)
             }
         } else {
-            screen = AppScreen.Library
+            backStack = rootBackStack
             playbackController.stop()
             // The cache outlives the composition, so signing out has to empty it explicitly —
             // otherwise the next account is shown the previous one's library.
@@ -245,7 +245,7 @@ private fun TtsRoadApp(
     // known. Holding the request until then keeps the reset above from swallowing it.
     LaunchedEffect(openPlayerPending, session.isLoggedIn) {
         if (openPlayerPending && session.isLoggedIn) {
-            screen = AppScreen.Player
+            backStack = backStack.navigateTo(AppScreen.Player)
             openPlayerPending = false
         }
     }
@@ -259,8 +259,10 @@ private fun TtsRoadApp(
         } else {
             MainScaffold(
                 session = session,
-                screen = screen,
-                onScreenChange = { screen = it },
+                screen = backStack.last(),
+                canGoBack = backStack.size > 1,
+                onScreenChange = { backStack = backStack.navigateTo(it) },
+                onBack = { backStack = backStack.popScreen() },
                 repository = repository,
                 playbackController = playbackController,
             )
@@ -460,11 +462,21 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
 private fun MainScaffold(
     session: SessionState,
     screen: AppScreen,
+    canGoBack: Boolean,
     onScreenChange: (AppScreen) -> Unit,
+    onBack: () -> Unit,
     repository: TtsRoadRepository,
     playbackController: PlaybackController,
 ) {
     val context = LocalContext.current
+    // Saved UI state (scroll offsets, search text) is kept per stack entry, so returning to a
+    // screen lands where it was left. Dropping an entry drops its state with it.
+    val stateHolder = rememberSaveableStateHolder()
+    val popBackStack = {
+        stateHolder.removeState(screen.saveKey)
+        onBack()
+    }
+    BackHandler(enabled = canGoBack, onBack = popBackStack)
     val playerState by playbackController.state.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val skipIntervalMs by remember(preferences) {
@@ -496,8 +508,8 @@ private fun MainScaffold(
                         )
                     },
                     navigationIcon = {
-                        if (screen != AppScreen.Library) {
-                            TextButton(onClick = { onScreenChange(AppScreen.Library) }) {
+                        if (canGoBack) {
+                            TextButton(onClick = popBackStack) {
                                 Text("BACK")
                             }
                         }
@@ -537,40 +549,42 @@ private fun MainScaffold(
             }
         },
     ) { padding ->
-        when (screen) {
-            AppScreen.Library -> LibraryScreen(
-                padding = padding,
-                playbackController = playbackController,
-                onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
-                onOpenPlayer = { onScreenChange(AppScreen.Player) },
-                onBrowseFictions = { onScreenChange(AppScreen.Fictions) },
-            )
+        stateHolder.SaveableStateProvider(screen.saveKey) {
+            when (screen) {
+                AppScreen.Library -> LibraryScreen(
+                    padding = padding,
+                    playbackController = playbackController,
+                    onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
+                    onOpenPlayer = { onScreenChange(AppScreen.Player) },
+                    onBrowseFictions = { onScreenChange(AppScreen.Fictions) },
+                )
 
-            AppScreen.Fictions -> FictionsScreen(
-                padding = padding,
-                onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
-            )
+                AppScreen.Fictions -> FictionsScreen(
+                    padding = padding,
+                    onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
+                )
 
-            is AppScreen.Fiction -> FictionScreen(
-                padding = padding,
-                fiction = screen.fiction,
-                repository = repository,
-                playbackController = playbackController,
-                onOpenPlayer = { onScreenChange(AppScreen.Player) },
-            )
+                is AppScreen.Fiction -> FictionScreen(
+                    padding = padding,
+                    fiction = screen.fiction,
+                    repository = repository,
+                    playbackController = playbackController,
+                    onOpenPlayer = { onScreenChange(AppScreen.Player) },
+                )
 
-            AppScreen.Player -> PlayerScreen(
-                padding = padding,
-                playerState = playerState,
-                playbackController = playbackController,
-                skipIntervalMs = skipIntervalMs,
-            )
+                AppScreen.Player -> PlayerScreen(
+                    padding = padding,
+                    playerState = playerState,
+                    playbackController = playbackController,
+                    skipIntervalMs = skipIntervalMs,
+                )
 
-            AppScreen.Settings -> SettingsScreen(
-                padding = padding,
-                session = session,
-                repository = repository,
-            )
+                AppScreen.Settings -> SettingsScreen(
+                    padding = padding,
+                    session = session,
+                    repository = repository,
+                )
+            }
         }
     }
 }
@@ -1963,6 +1977,9 @@ private fun FictionsScreen(
     val state by cache.library.collectAsStateWithLifecycle()
     // Saveable so the browse position and filter survive a trip into a fiction and back.
     var query by rememberSaveable { mutableStateOf("") }
+    // Hoisted so the browse position survives the round trip into a fiction, alongside the
+    // SaveableStateProvider keyed per back-stack entry.
+    val gridState = rememberLazyGridState()
 
     LaunchedEffect(Unit) { cache.ensureLibrary() }
 
@@ -2013,6 +2030,7 @@ private fun FictionsScreen(
                     } else {
                         LazyVerticalGrid(
                             columns = GridCells.Adaptive(minSize = 158.dp),
+                            state = gridState,
                             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),

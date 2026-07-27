@@ -100,6 +100,15 @@ Notable changes to the TTSRoad Android client.
 - If you decline, playback is unaffected and **Settings** explains what is missing, with a button
   that opens the app's notification settings.
 
+### BACK follows the path you took
+
+- Navigation now keeps a real back stack. BACK from a fiction you opened via **Browse all
+  fictions** returns to the **All fictions** list — with your search text and scroll position
+  intact — instead of jumping straight to the library front page. Same for the player and
+  settings opened from a nested screen.
+- The **hardware/gesture back button** now participates in in-app navigation: it steps back one
+  screen and only leaves the app from the library front page.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
