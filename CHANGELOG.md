@@ -4,6 +4,81 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+### No more full-screen spinner on every back-navigation
+
+- **Going back to the library shows it instantly.** Screen data now lives above the screens, so
+  leaving a screen no longer destroys it and returning no longer refetches from a blank spinner.
+  The refresh still happens - underneath the content, as a hairline progress strip.
+- **Marking a chapter played updates that row only.** It used to reload the whole list, tearing down
+  a 500-row chapter list and dropping you back at the top, for the sake of one checkmark.
+- **Pull-to-refresh** on the library, all-fictions and fiction screens.
+- A refresh that fails while content is already loaded now shows a one-line notice instead of
+  replacing a perfectly readable library with an error page.
+
+### Cover images load wherever audio does
+
+- Artwork was fetched with Coil's default loader and the raw URL from the API, so it missed both
+  things playback already did: the bearer token, and the host rewrite that points server-built URLs
+  at the address the phone actually connected to. On any setup where the backend's `BASE_URL`
+  differs from the connect address (LAN IP vs domain, VPN, `10.0.2.2` on the emulator), or where
+  covers sit behind auth, every cover rendered as the letter-fallback tile while audio played fine.
+  Phone UI and Android Auto artwork both fixed.
+
+### Android Auto: voice search and a browse tree that shows progress
+
+- **"Hey Google, play Ashes of Aether on TTSRoad"** now works, and starts that fiction at its resume
+  position. Voice is the only safe way to start something new while driving, and it previously did
+  nothing at all.
+- **Searching in the car** returns matching fictions and chapters, matched on title, author and tags.
+- **The Fictions node renders as a grid** with artwork instead of plain rows, and **chapters show
+  completion progress** — a started chapter no longer looks identical to an untouched one.
+- A weak match deliberately does *not* start playing. Matching a shared tag or an author with more
+  than one book resolves to nothing rather than starting the wrong book at speed.
+
+### −30s / +30s outside the app
+
+- The **notification, lockscreen, and Android Auto transport row** now carry −30s and +30s
+  buttons either side of play/pause, so catching a missed sentence while driving — or rewinding
+  after waking up mid-chapter — no longer means unlocking the phone. Previous/next chapter move
+  to the secondary slots.
+- Both seek **within the current chapter**: near the end, forward stops at the end rather than
+  rolling into the next chapter; near the start, back stops at zero.
+
+### Playback failures are visible, and mostly fix themselves
+
+- A stream that dies — home server down, VPN dropped, Wi-Fi handover, a tunnel — used to leave the
+  app looking like it had quietly stopped. It now **retries on its own** after 2s, 5s and 15s, so a
+  brief outage heals with no user action at all.
+- If the retries do not get there, the player and the mini player bar show **what went wrong and a
+  RETRY button**, instead of just sitting in the paused state.
+- A **401 on the audio stream** is now treated as what it is: the token has been revoked, so the app
+  signs out and returns to the login screen rather than retrying forever against a server that will
+  keep refusing.
+- Errors clear by themselves the moment playback recovers.
+
+### Playback speed sticks, and the skip interval is yours to pick
+
+- **Speed now survives** a swipe-away, a force-stop and a reboot. It used to live only in the
+  ExoPlayer instance, so every service restart silently dropped you back to 1.0x.
+- **Speed is selectable directly** from a picker instead of a cycle-only button — getting from 2.0x
+  back to 1.5x was five taps.
+- **The 30s skip is configurable**: 10 / 15 / 30 / 45 / 60s in Settings, used by the player, the
+  mini player bar and the transport button labels. 30s suits a dozed-off rewind; 10-15s suits "what
+  did that sentence just say".
+- Preferences live in their own store, so signing out no longer forgets how you listen.
+
+### Audio tuned for synthesised speech
+
+- **Skip silence** (on by default, switchable in Settings). Synthesised chapters carry pauses around
+  headings, scene breaks and sentence boundaries that are far longer than a human narrator's — over
+  an eight-hour night that is a lot of dead air. Turn it off if it clips a dramatic pause.
+- **Volume boost** — Off / Low / Medium / High. Chapters converted at different times or with
+  different voices come out at different levels: in the car that means reaching for the volume knob,
+  and in bed it means a loud chapter after a quiet one wakes you up. Capped at 10 dB, because past
+  that a chapter already near full scale starts to clip.
+- Both are applied by the media service, so they survive a swipe-away, a process kill and a reboot,
+  and they apply to playback started from the car with no UI running.
+
 ### Sleep timer
 
 - The player has a **SLEEP** button: 5 / 15 / 30 / 45 / 60 minutes, or **end of the current
