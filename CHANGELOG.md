@@ -2,6 +2,19 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Playback speed sticks, and the skip interval is yours to pick
+
+- **Speed now survives** a swipe-away, a force-stop and a reboot. It used to live only in the
+  ExoPlayer instance, so every service restart silently dropped you back to 1.0x.
+- **Speed is selectable directly** from a picker instead of a cycle-only button — getting from 2.0x
+  back to 1.5x was five taps.
+- **The 30s skip is configurable**: 10 / 15 / 30 / 45 / 60s in Settings, used by the player, the
+  mini player bar and the transport button labels. 30s suits a dozed-off rewind; 10-15s suits "what
+  did that sentence just say".
+- Preferences live in their own store, so signing out no longer forgets how you listen.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)

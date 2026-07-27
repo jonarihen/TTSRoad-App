@@ -21,6 +21,7 @@ import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
+import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -37,6 +40,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var tokenStore: TokenStore
     private lateinit var repository: TtsRoadRepository
+    private lateinit var preferences: PlaybackPreferences
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
     private var lastLibrary: LibraryResponse? = null
@@ -48,10 +52,20 @@ class TtsRoadMediaService : MediaLibraryService() {
         super.onCreate()
         tokenStore = ServiceLocator.tokenStore(this)
         repository = ServiceLocator.repository(this)
+        preferences = ServiceLocator.playbackPreferences(this)
         serviceScope.launch {
             tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
         }
         player = createPlayer()
+        // Speed lives in the service, not the UI: the player is recreated on a swipe-away, a
+        // process kill, or a reboot, and the car can start playback with no UI running at all.
+        // Applying it here is what makes it survive all three.
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.speed }
+                .distinctUntilChanged()
+                .collect { player.setPlaybackSpeed(it) }
+        }
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {

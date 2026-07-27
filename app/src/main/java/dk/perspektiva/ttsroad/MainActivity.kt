@@ -36,15 +36,20 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Forward30
+import androidx.compose.material.icons.filled.Forward5
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Replay30
+import androidx.compose.material.icons.filled.Replay5
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -93,7 +98,12 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.LoginResult
+import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
+import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
+import dk.perspektiva.ttsroad.data.SpeedPresets
+import dk.perspektiva.ttsroad.data.formatSkipInterval
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
@@ -370,6 +380,10 @@ private fun MainScaffold(
 ) {
     val context = LocalContext.current
     val playerState by playbackController.state.collectAsStateWithLifecycle()
+    val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val skipIntervalMs by remember(preferences) {
+        preferences.prefs.map { it.skipIntervalMs }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = DefaultSkipIntervalMs)
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val hasHistory by remember(historyStore) {
         historyStore.snapshots.map { it.isNotEmpty() }.distinctUntilChanged()
@@ -431,6 +445,7 @@ private fun MainScaffold(
                 MiniPlayerBar(
                     state = playerState,
                     playbackController = playbackController,
+                    skipIntervalMs = skipIntervalMs,
                     onExpand = { onScreenChange(AppScreen.Player) },
                 )
             }
@@ -464,6 +479,7 @@ private fun MainScaffold(
                 padding = padding,
                 playerState = playerState,
                 playbackController = playbackController,
+                skipIntervalMs = skipIntervalMs,
             )
 
             AppScreen.Settings -> SettingsScreen(
@@ -687,6 +703,7 @@ private fun PlayerScreen(
     padding: PaddingValues,
     playerState: PlayerUiState,
     playbackController: PlaybackController,
+    skipIntervalMs: Long,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -696,6 +713,7 @@ private fun PlayerScreen(
     val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
+    var showSpeed by remember { mutableStateOf(false) }
     // Track the drag locally and only seek on release, so scrubbing doesn't spam the player.
     var dragMs by remember { mutableStateOf<Float?>(null) }
 
@@ -774,11 +792,11 @@ private fun PlayerScreen(
                 size = 46.dp,
             ) { playbackController.skipToPreviousChapter() }
             TransportIconButton(
-                icon = Icons.Default.Replay30,
-                contentDescription = "Back 30 seconds",
+                icon = skipBackIcon(skipIntervalMs),
+                contentDescription = "Back ${formatSkipInterval(skipIntervalMs)}",
                 enabled = playerState.hasMedia,
                 size = 46.dp,
-            ) { playbackController.skipBy(-30_000) }
+            ) { playbackController.skipBy(-skipIntervalMs) }
             TransportIconButton(
                 icon = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 contentDescription = if (playerState.isPlaying) "Pause" else "Play",
@@ -787,11 +805,11 @@ private fun PlayerScreen(
                 filled = true,
             ) { playbackController.togglePlayPause() }
             TransportIconButton(
-                icon = Icons.Default.Forward30,
-                contentDescription = "Forward 30 seconds",
+                icon = skipForwardIcon(skipIntervalMs),
+                contentDescription = "Forward ${formatSkipInterval(skipIntervalMs)}",
                 enabled = playerState.hasMedia,
                 size = 46.dp,
-            ) { playbackController.skipBy(30_000) }
+            ) { playbackController.skipBy(skipIntervalMs) }
             TransportIconButton(
                 icon = Icons.Default.SkipNext,
                 contentDescription = "Next chapter",
@@ -806,10 +824,9 @@ private fun PlayerScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
-                onClick = { playbackController.setSpeed(nextSpeed(playerState.speed)) },
-                enabled = playerState.hasMedia,
-            ) {
+            // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
+            // cycle-only button.
+            TextButton(onClick = { showSpeed = true }) {
                 Text("SPEED ${formatSpeed(playerState.speed)}")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -824,6 +841,50 @@ private fun PlayerScreen(
                     }
                 }
             }
+        }
+    }
+
+    if (showSpeed) {
+        ModalBottomSheet(
+            onDismissRequest = { showSpeed = false },
+            containerColor = AarisColor.BgRaise,
+        ) {
+            MetaText(
+                text = "// Playback speed",
+                color = AarisColor.Accent,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+            )
+            SpeedPresets.forEach { preset ->
+                val selected = kotlin.math.abs(preset - playerState.speed) < 0.01f
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                playbackController.setSpeed(preset)
+                                showSpeed = false
+                            }
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = formatSpeed(preset),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (selected) AarisColor.Accent else AarisColor.Ink,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (selected) {
+                            MetaText(text = "Current", color = AarisColor.Accent)
+                        }
+                    }
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                }
+            }
+            MetaText(
+                text = "// Kept across restarts and reboots",
+                color = AarisColor.Dim,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            )
         }
     }
 
@@ -1025,6 +1086,8 @@ private fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     var isBusy by remember { mutableStateOf(false) }
 
     Column(
@@ -1048,6 +1111,43 @@ private fun SettingsScreen(
                 SettingsItem(label = "User", value = session.username.orEmpty())
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
+            }
+        }
+
+        MetaText(text = "// Playback", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MetaText(text = "Skip interval")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SkipIntervalOptionsMs.forEach { option ->
+                        val selected = option == prefs.skipIntervalMs
+                        OutlinedButton(
+                            onClick = { scope.launch { preferences.setSkipIntervalMs(option) } },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(formatSkipInterval(option))
+                        }
+                    }
+                }
+                MetaText(
+                    text = "Used by the player, the mini player, and the lockscreen buttons.",
+                    color = AarisColor.Dim,
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                SettingsItem(label = "Playback speed", value = formatSpeed(prefs.speed))
+                MetaText(
+                    text = "Change it from the player; it is kept across restarts and reboots.",
+                    color = AarisColor.Dim,
+                )
             }
         }
 
@@ -1106,6 +1206,7 @@ private fun updateStatusText(state: UpdateState): Pair<String, Boolean>? = when 
 private fun MiniPlayerBar(
     state: PlayerUiState,
     playbackController: PlaybackController,
+    skipIntervalMs: Long,
     onExpand: () -> Unit,
 ) {
     val fraction = if (state.durationMs > 0) state.positionMs.toFloat() / state.durationMs else 0f
@@ -1150,11 +1251,11 @@ private fun MiniPlayerBar(
             }
             Spacer(modifier = Modifier.width(12.dp))
             TransportIconButton(
-                icon = Icons.Default.Replay30,
-                contentDescription = "Back 30 seconds",
+                icon = skipBackIcon(skipIntervalMs),
+                contentDescription = "Back ${formatSkipInterval(skipIntervalMs)}",
                 enabled = state.hasMedia,
                 size = 42.dp,
-            ) { playbackController.skipBy(-30_000) }
+            ) { playbackController.skipBy(-skipIntervalMs) }
             Spacer(modifier = Modifier.width(8.dp))
             TransportIconButton(
                 icon = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -1881,11 +1982,21 @@ private fun formatDuration(ms: Long): String {
     }
 }
 
-private val SpeedPresets = listOf(0.8f, 1.0f, 1.2f, 1.5f, 1.75f, 2.0f)
+/**
+ * Material ships replay/forward glyphs for 5, 10 and 30 seconds only, so 15 / 45 / 60s have no exact
+ * icon. Use the nearest one and let the content description carry the real value — a screen reader
+ * gets the truth even where the glyph rounds.
+ */
+private fun skipBackIcon(skipIntervalMs: Long): ImageVector = when {
+    skipIntervalMs <= 7_500L -> Icons.Default.Replay5
+    skipIntervalMs <= 20_000L -> Icons.Default.Replay10
+    else -> Icons.Default.Replay30
+}
 
-private fun nextSpeed(current: Float): Float {
-    val index = SpeedPresets.indexOfFirst { kotlin.math.abs(it - current) < 0.01f }
-    return if (index < 0) 1.0f else SpeedPresets[(index + 1) % SpeedPresets.size]
+private fun skipForwardIcon(skipIntervalMs: Long): ImageVector = when {
+    skipIntervalMs <= 7_500L -> Icons.Default.Forward5
+    skipIntervalMs <= 20_000L -> Icons.Default.Forward10
+    else -> Icons.Default.Forward30
 }
 
 private fun formatSpeed(speed: Float): String {

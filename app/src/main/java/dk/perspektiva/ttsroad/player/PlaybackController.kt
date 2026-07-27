@@ -8,7 +8,9 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
+import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
+import dk.perspektiva.ttsroad.data.sanitizeSpeed
 import dk.perspektiva.ttsroad.media.TtsRoadMediaItems
 import dk.perspektiva.ttsroad.media.TtsRoadMediaService
 import kotlin.math.roundToLong
@@ -57,6 +59,7 @@ data class PlayerUiState(
 class PlaybackController(
     private val context: Context,
     private val tokenStore: TokenStore,
+    private val preferences: PlaybackPreferences,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
@@ -221,9 +224,16 @@ class PlaybackController(
         return false
     }
 
+    /**
+     * Set the speed and remember it. The service applies the stored value whenever it creates a
+     * player, so this also survives a swipe-away, a process kill and a reboot; setting it on the
+     * live controller as well just avoids waiting a tick for the label to catch up.
+     */
     fun setSpeed(speed: Float) {
+        val sanitized = sanitizeSpeed(speed)
+        scope.launch { preferences.setSpeed(sanitized) }
         val controller = controller ?: return
-        controller.setPlaybackSpeed(speed)
+        controller.setPlaybackSpeed(sanitized)
         publishState(controller)
     }
 
