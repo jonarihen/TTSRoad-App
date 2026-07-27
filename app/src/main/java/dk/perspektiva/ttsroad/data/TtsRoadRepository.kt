@@ -59,9 +59,11 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
         deviceName: String,
         totpCode: String? = null,
     ): LoginResult = withContext(Dispatchers.IO) {
-        val normalized = normalizeBaseUrl(baseUrl)
         authHeader = null
         try {
+            // Inside the try: normalizeBaseUrl throws on a missing http:// or https://
+            // scheme, and that is a user-correctable typo, not a crash.
+            val normalized = normalizeBaseUrl(baseUrl)
             val response = api(normalized).login(
                 LoginRequest(
                     username = username.trim(),
