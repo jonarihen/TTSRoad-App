@@ -1,11 +1,13 @@
 package dk.perspektiva.ttsroad.core
 
 import android.content.Context
+import dk.perspektiva.ttsroad.data.LibraryCache
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.update.UpdateManager
+import okhttp3.OkHttpClient
 
 object ServiceLocator {
     @Volatile
@@ -21,6 +23,9 @@ object ServiceLocator {
     private var playbackHistory: PlaybackHistoryStore? = null
 
     @Volatile
+    private var libraryCache: LibraryCache? = null
+
+    @Volatile
     private var updateManager: UpdateManager? = null
 
     fun init(context: Context) {
@@ -28,6 +33,7 @@ object ServiceLocator {
         repository(context)
         playbackController(context)
         playbackHistory(context)
+        libraryCache(context)
     }
 
     fun tokenStore(context: Context): TokenStore =
@@ -40,6 +46,9 @@ object ServiceLocator {
             repository ?: TtsRoadRepository(tokenStore(context)).also { repository = it }
         }
 
+    /** The repository's authenticated OkHttp client, shared with Coil for cover art. */
+    fun httpClient(context: Context): OkHttpClient = repository(context).httpClient
+
     fun playbackController(context: Context): PlaybackController =
         playbackController ?: synchronized(this) {
             playbackController ?: PlaybackController(
@@ -51,6 +60,11 @@ object ServiceLocator {
     fun playbackHistory(context: Context): PlaybackHistoryStore =
         playbackHistory ?: synchronized(this) {
             playbackHistory ?: PlaybackHistoryStore(context.applicationContext).also { playbackHistory = it }
+        }
+
+    fun libraryCache(context: Context): LibraryCache =
+        libraryCache ?: synchronized(this) {
+            libraryCache ?: LibraryCache(repository(context)).also { libraryCache = it }
         }
 
     fun updateManager(): UpdateManager =

@@ -7,6 +7,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaConstants
+import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 
@@ -101,7 +102,7 @@ object TtsRoadMediaItems {
             .build()
     }
 
-    fun fictionFolder(fiction: FictionSummary): MediaItem {
+    fun fictionFolder(fiction: FictionSummary, serverUrl: String? = null): MediaItem {
         val subtitle = listOfNotNull(
             fiction.author,
             "${fiction.doneChapters}/${fiction.totalChapters} ready",
@@ -115,7 +116,8 @@ object TtsRoadMediaItems {
             .setIsPlayable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS)
 
-        fiction.coverImageUrl?.let { metadataBuilder.setArtworkUri(it.toUri()) }
+        ServerUrls.rewriteHostOrNull(fiction.coverImageUrl, serverUrl)
+            ?.let { metadataBuilder.setArtworkUri(it.toUri()) }
 
         return MediaItem.Builder()
             .setMediaId(TtsRoadMediaIds.fiction(fiction.id))
@@ -129,7 +131,7 @@ object TtsRoadMediaItems {
         serverUrl: String? = null,
     ): MediaItem? {
         val rawUrl = chapter.audio?.url ?: return null
-        val audioUri = rewriteHost(rawUrl, serverUrl).toUri()
+        val audioUri = ServerUrls.rewriteHost(rawUrl, serverUrl).toUri()
         val extras = Bundle().apply {
             putInt("fiction_id", chapter.resolvedFictionId)
             putInt("chapter_id", chapter.resolvedChapterId)
@@ -154,7 +156,7 @@ object TtsRoadMediaItems {
             .setIsPlayable(true)
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
 
-        cover?.let { metadataBuilder.setArtworkUri(it.toUri()) }
+        ServerUrls.rewriteHostOrNull(cover, serverUrl)?.let { metadataBuilder.setArtworkUri(it.toUri()) }
         durationMs?.let { metadataBuilder.setDurationMs(it) }
 
         return MediaItem.Builder()
@@ -167,27 +169,6 @@ object TtsRoadMediaItems {
             )
             .setMediaMetadata(metadataBuilder.build())
             .build()
-    }
-
-    /**
-     * The server builds absolute audio URLs from its configured BASE_URL, which may not be the
-     * host the device actually used to log in (and may even be relative if BASE_URL is unset).
-     * Rewrite the scheme/host/port to the server the user is connected to so playback works
-     * regardless of how BASE_URL is configured.
-     */
-    private fun rewriteHost(url: String, serverUrl: String?): String {
-        if (serverUrl.isNullOrBlank()) return url
-        return try {
-            val base = serverUrl.toUri()
-            if (base.scheme.isNullOrBlank() || base.authority.isNullOrBlank()) return url
-            url.toUri().buildUpon()
-                .scheme(base.scheme)
-                .encodedAuthority(base.authority)
-                .build()
-                .toString()
-        } catch (_: Exception) {
-            url
-        }
     }
 }
 

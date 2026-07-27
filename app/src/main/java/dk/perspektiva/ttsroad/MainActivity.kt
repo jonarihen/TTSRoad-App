@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -53,6 +54,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -61,12 +63,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -88,10 +93,10 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
-import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
@@ -116,11 +121,11 @@ private sealed interface AppScreen {
     data object Settings : AppScreen
 }
 
-private sealed interface LoadState<out T> {
-    data object Loading : LoadState<Nothing>
-    data class Loaded<T>(val value: T) : LoadState<T>
-    data class Error(val message: String) : LoadState<Nothing>
-}
+/**
+ * Server the user signed in to, so cover URLs built from the backend's BASE_URL can be pointed at
+ * the address the phone can actually reach. See [ServerUrls.rewriteHost].
+ */
+private val LocalServerUrl = staticCompositionLocalOf { "" }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -156,22 +161,27 @@ private fun TtsRoadApp() {
         } else {
             screen = AppScreen.Library
             playbackController.stop()
+            // The cache outlives the composition, so signing out has to empty it explicitly —
+            // otherwise the next account is shown the previous one's library.
+            ServiceLocator.libraryCache(context).clear()
         }
     }
 
     // Quietly check GitHub Releases for a newer build once per launch.
     LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
 
-    if (!session.isLoggedIn) {
-        LoginScreen(repository = repository, session = session)
-    } else {
-        MainScaffold(
-            session = session,
-            screen = screen,
-            onScreenChange = { screen = it },
-            repository = repository,
-            playbackController = playbackController,
-        )
+    CompositionLocalProvider(LocalServerUrl provides session.serverUrl) {
+        if (!session.isLoggedIn) {
+            LoginScreen(repository = repository, session = session)
+        } else {
+            MainScaffold(
+                session = session,
+                screen = screen,
+                onScreenChange = { screen = it },
+                repository = repository,
+                playbackController = playbackController,
+            )
+        }
     }
 
     UpdateOverlay(
@@ -247,6 +257,9 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val sessionExpired by repository.sessionExpired.collectAsStateWithLifecycle()
+    // A failed attempt has more to say than "your old token went stale", so it wins.
+    val notice = error ?: "Session expired - sign in again".takeIf { sessionExpired }
 
     Column(
         modifier = Modifier
@@ -309,7 +322,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
                 supportingText = { MetaText(text = "From your authenticator app, or a recovery code") },
             )
         }
-        error?.let {
+        notice?.let {
             Spacer(modifier = Modifier.height(12.dp))
             Text(text = it, color = MaterialTheme.colorScheme.error)
         }
@@ -439,7 +452,6 @@ private fun MainScaffold(
         when (screen) {
             AppScreen.Library -> LibraryScreen(
                 padding = padding,
-                repository = repository,
                 playbackController = playbackController,
                 onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                 onOpenPlayer = { onScreenChange(AppScreen.Player) },
@@ -448,7 +460,6 @@ private fun MainScaffold(
 
             AppScreen.Fictions -> FictionsScreen(
                 padding = padding,
-                repository = repository,
                 onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
             )
 
@@ -478,76 +489,109 @@ private fun MainScaffold(
 @Composable
 private fun LibraryScreen(
     padding: PaddingValues,
-    repository: TtsRoadRepository,
     playbackController: PlaybackController,
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenPlayer: () -> Unit,
     onBrowseFictions: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var libraryState by remember { mutableStateOf<LoadState<LibraryResponse>>(LoadState.Loading) }
+    val context = LocalContext.current
+    val cache = remember { ServiceLocator.libraryCache(context) }
+    val state by cache.library.collectAsStateWithLifecycle()
 
-    fun refresh() {
-        scope.launch {
-            libraryState = LoadState.Loading
-            libraryState = runCatching { repository.library() }
-                .fold(
-                    onSuccess = { LoadState.Loaded(it) },
-                    onFailure = { LoadState.Error(it.message ?: "Could not load library") },
-                )
-        }
-    }
+    // Loads once; returning to this screen shows what was already there instead of a spinner.
+    LaunchedEffect(Unit) { cache.ensureLibrary() }
 
-    LaunchedEffect(Unit) { refresh() }
-
-    when (val state = libraryState) {
-        LoadState.Loading -> LoadingPane(padding)
-        is LoadState.Error -> ErrorPane(
+    val library = state.value
+    when {
+        library == null && state.isInitialLoad -> LoadingPane(padding)
+        library == null -> ErrorPane(
             padding = padding,
-            message = state.message,
-            onRetry = ::refresh,
+            message = state.error ?: "Could not load library",
+            onRetry = cache::refreshLibrary,
         )
 
-        is LoadState.Loaded -> {
-            val library = state.value
+        else -> {
             val fictionForChapter: (ChapterSummary) -> FictionSummary? = { chapter ->
                 chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
             }
 
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(28.dp),
+            RefreshablePane(
+                padding = padding,
+                isRefreshing = state.isRefreshing,
+                error = state.error,
+                onRefresh = cache::refreshLibrary,
             ) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(
-                            kicker = "01",
-                            title = "Continue listening",
-                            actionLabel = "Refresh",
-                            onAction = ::refresh,
-                        )
-                        if (library.continueListening.isEmpty()) {
-                            EmptyCard("No active chapters")
-                        } else {
-                            val hero = library.continueListening.first()
-                            ContinueHero(
-                                chapter = hero,
-                                fiction = fictionForChapter(hero),
-                                onResume = {
-                                    scope.launch {
-                                        playbackController.play(hero, fictionForChapter(hero))
-                                        onOpenPlayer()
-                                    }
-                                },
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(28.dp),
+                ) {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeader(
+                                kicker = "01",
+                                title = "Continue listening",
+                                actionLabel = "Refresh",
+                                onAction = cache::refreshLibrary,
                             )
-                            if (library.continueListening.size > 1) {
+                            if (library.continueListening.isEmpty()) {
+                                EmptyCard("No active chapters")
+                            } else {
+                                val hero = library.continueListening.first()
+                                ContinueHero(
+                                    chapter = hero,
+                                    fiction = fictionForChapter(hero),
+                                    onResume = {
+                                        scope.launch {
+                                            playbackController.play(hero, fictionForChapter(hero))
+                                            onOpenPlayer()
+                                        }
+                                    },
+                                )
+                                if (library.continueListening.size > 1) {
+                                    HorizontalChapterRail(
+                                        chapters = library.continueListening.drop(1),
+                                        fictionForChapter = fictionForChapter,
+                                        keyPrefix = "continue",
+                                        playbackController = playbackController,
+                                        onOpenPlayer = onOpenPlayer,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeader(
+                                kicker = "02",
+                                title = "Fictions",
+                                actionLabel = if (library.fictions.isEmpty()) null else "Browse all",
+                                onAction = onBrowseFictions.takeIf { library.fictions.isNotEmpty() },
+                            )
+                            if (library.fictions.isEmpty()) {
+                                EmptyCard("No fictions found")
+                            } else {
+                                HorizontalFictionRail(
+                                    fictions = library.fictions,
+                                    onOpenFiction = onOpenFiction,
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeader(kicker = "03", title = "Recent")
+                            if (library.recentChapters.isEmpty()) {
+                                EmptyCard("No recent chapters")
+                            } else {
                                 HorizontalChapterRail(
-                                    chapters = library.continueListening.drop(1),
+                                    chapters = library.recentChapters,
                                     fictionForChapter = fictionForChapter,
-                                    keyPrefix = "continue",
+                                    keyPrefix = "recent",
                                     playbackController = playbackController,
                                     onOpenPlayer = onOpenPlayer,
                                 )
@@ -555,43 +599,48 @@ private fun LibraryScreen(
                         }
                     }
                 }
-
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(
-                            kicker = "02",
-                            title = "Fictions",
-                            actionLabel = if (library.fictions.isEmpty()) null else "Browse all",
-                            onAction = onBrowseFictions.takeIf { library.fictions.isNotEmpty() },
-                        )
-                        if (library.fictions.isEmpty()) {
-                            EmptyCard("No fictions found")
-                        } else {
-                            HorizontalFictionRail(
-                                fictions = library.fictions,
-                                onOpenFiction = onOpenFiction,
-                            )
-                        }
-                    }
-                }
-
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(kicker = "03", title = "Recent")
-                        if (library.recentChapters.isEmpty()) {
-                            EmptyCard("No recent chapters")
-                        } else {
-                            HorizontalChapterRail(
-                                chapters = library.recentChapters,
-                                fictionForChapter = fictionForChapter,
-                                keyPrefix = "recent",
-                                playbackController = playbackController,
-                                onOpenPlayer = onOpenPlayer,
-                            )
-                        }
-                    }
-                }
             }
+        }
+    }
+}
+
+/**
+ * Wraps a screen's content with pull-to-refresh and an in-place refresh indicator.
+ *
+ * The point is that [content] stays on screen throughout. A refresh over data the user can already
+ * read must not blank the screen — that was the whole complaint — so a background reload shows a
+ * hairline progress strip, and a *failed* one shows a one-line notice above content that is still
+ * perfectly usable.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RefreshablePane(
+    padding: PaddingValues,
+    isRefreshing: Boolean,
+    error: String?,
+    onRefresh: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (isRefreshing) {
+                ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+            }
+            // A refresh that failed while content is already loaded is a notice, not a takeover.
+            error?.let {
+                MetaText(
+                    text = it,
+                    color = AarisColor.Danger,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+            content()
         }
     }
 }
@@ -605,77 +654,83 @@ private fun FictionScreen(
     onOpenPlayer: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var chapterState by remember(fiction.id) { mutableStateOf<LoadState<List<ChapterSummary>>>(LoadState.Loading) }
+    val context = LocalContext.current
+    val cache = remember { ServiceLocator.libraryCache(context) }
+    val chapterState by remember(fiction.id) { cache.chapters(fiction.id) }
+        .collectAsStateWithLifecycle()
     var error by remember { mutableStateOf<String?>(null) }
+    // Held here so an in-place row update cannot scroll a 500-row list back to the top.
+    val listState = rememberLazyListState()
 
-    fun refresh() {
-        scope.launch {
-            chapterState = LoadState.Loading
-            chapterState = runCatching {
-                repository.chapters(fiction.id, playableOnly = false).chapters
-            }.fold(
-                onSuccess = { LoadState.Loaded(it) },
-                onFailure = { LoadState.Error(it.message ?: "Could not load chapters") },
-            )
-        }
-    }
+    LaunchedEffect(fiction.id) { cache.ensureChapters(fiction.id) }
 
-    LaunchedEffect(fiction.id) { refresh() }
-
-    when (val state = chapterState) {
-        LoadState.Loading -> LoadingPane(padding)
-        is LoadState.Error -> ErrorPane(
+    val chapters = chapterState.value
+    when {
+        chapters == null && chapterState.isInitialLoad -> LoadingPane(padding)
+        chapters == null -> ErrorPane(
             padding = padding,
-            message = state.message,
-            onRetry = ::refresh,
+            message = chapterState.error ?: "Could not load chapters",
+            onRetry = { cache.refreshChapters(fiction.id) },
         )
 
-        is LoadState.Loaded -> LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(16.dp),
+        else -> RefreshablePane(
+            padding = padding,
+            isRefreshing = chapterState.isRefreshing,
+            error = chapterState.error,
+            onRefresh = { cache.refreshChapters(fiction.id) },
         ) {
-            item {
-                FictionDetailHeader(
-                    fiction = fiction,
-                    chapters = state.value,
-                    onPlay = { chapter ->
-                        scope.launch {
-                            playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
-                            onOpenPlayer()
-                        }
-                    },
-                )
-                error?.let {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = it, color = MaterialTheme.colorScheme.error)
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                SectionHeader(kicker = "CH", title = "Chapters")
-            }
-            itemsIndexed(state.value, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
-                ChapterRow(
-                    chapter = chapter,
-                    fiction = fiction,
-                    onPlay = {
-                        scope.launch {
-                            playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
-                            onOpenPlayer()
-                        }
-                    },
-                    onMarkPlayed = { played ->
-                        scope.launch {
-                            error = null
-                            runCatching {
-                                repository.markPlayed(listOf(chapter.resolvedChapterId), played)
-                                refresh()
-                            }.onFailure {
-                                error = it.message ?: "Could not update chapter"
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+            ) {
+                item {
+                    FictionDetailHeader(
+                        fiction = fiction,
+                        chapters = chapters,
+                        onPlay = { chapter ->
+                            scope.launch {
+                                playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
+                                onOpenPlayer()
                             }
-                        }
-                    },
-                )
+                        },
+                    )
+                    error?.let {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(text = it, color = MaterialTheme.colorScheme.error)
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    SectionHeader(kicker = "CH", title = "Chapters")
+                }
+                itemsIndexed(chapters, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
+                    ChapterRow(
+                        chapter = chapter,
+                        fiction = fiction,
+                        onPlay = {
+                            scope.launch {
+                                playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
+                                onOpenPlayer()
+                            }
+                        },
+                        onMarkPlayed = { played ->
+                            scope.launch {
+                                error = null
+                                runCatching {
+                                    repository.markPlayed(listOf(chapter.resolvedChapterId), played)
+                                    // Patch the one row instead of refetching: reloading tore down the
+                                    // whole list and dropped the user back at the top, for a checkmark.
+                                    cache.applyPlayed(
+                                        fictionId = fiction.id,
+                                        chapterIds = listOf(chapter.resolvedChapterId),
+                                        played = played,
+                                    )
+                                }.onFailure {
+                                    error = it.message ?: "Could not update chapter"
+                                }
+                            }
+                        },
+                    )
+                }
             }
         }
     }
@@ -1502,31 +1557,26 @@ private fun chapterNumberLabel(chapter: ChapterSummary): String {
 @Composable
 private fun FictionsScreen(
     padding: PaddingValues,
-    repository: TtsRoadRepository,
     onOpenFiction: (FictionSummary) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    var state by remember { mutableStateOf<LoadState<List<FictionSummary>>>(LoadState.Loading) }
-    var query by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val cache = remember { ServiceLocator.libraryCache(context) }
+    val state by cache.library.collectAsStateWithLifecycle()
+    // Saveable so the browse position and filter survive a trip into a fiction and back.
+    var query by rememberSaveable { mutableStateOf("") }
 
-    fun refresh() {
-        scope.launch {
-            state = LoadState.Loading
-            state = runCatching { repository.library().fictions }
-                .fold(
-                    onSuccess = { LoadState.Loaded(it) },
-                    onFailure = { LoadState.Error(it.message ?: "Could not load fictions") },
-                )
-        }
-    }
+    LaunchedEffect(Unit) { cache.ensureLibrary() }
 
-    LaunchedEffect(Unit) { refresh() }
+    val fictions = state.value?.fictions
+    when {
+        fictions == null && state.isInitialLoad -> LoadingPane(padding)
+        fictions == null -> ErrorPane(
+            padding = padding,
+            message = state.error ?: "Could not load fictions",
+            onRetry = cache::refreshLibrary,
+        )
 
-    when (val s = state) {
-        LoadState.Loading -> LoadingPane(padding)
-        is LoadState.Error -> ErrorPane(padding = padding, message = s.message, onRetry = ::refresh)
-        is LoadState.Loaded -> {
-            val fictions = s.value
+        else -> {
             val filtered = remember(fictions, query) {
                 val q = query.trim().lowercase()
                 if (q.isBlank()) {
@@ -1539,36 +1589,39 @@ private fun FictionsScreen(
                     }
                 }
             }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
+            RefreshablePane(
+                padding = padding,
+                isRefreshing = state.isRefreshing,
+                error = state.error,
+                onRefresh = cache::refreshLibrary,
             ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                )
-                if (filtered.isEmpty()) {
-                    Box(modifier = Modifier.padding(16.dp)) {
-                        EmptyCard(
-                            if (query.isBlank()) "No fictions found" else "No matches for \"$query\"",
-                        )
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 158.dp),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(filtered, key = { it.id }) { fiction ->
-                            FictionGridCard(fiction = fiction, onClick = { onOpenFiction(fiction) })
+                Column(modifier = Modifier.fillMaxSize()) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                    )
+                    if (filtered.isEmpty()) {
+                        Box(modifier = Modifier.padding(16.dp)) {
+                            EmptyCard(
+                                if (query.isBlank()) "No fictions found" else "No matches for \"$query\"",
+                            )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 158.dp),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            items(filtered, key = { it.id }) { fiction ->
+                                FictionGridCard(fiction = fiction, onClick = { onOpenFiction(fiction) })
+                            }
                         }
                     }
                 }
@@ -1737,9 +1790,10 @@ private fun CoverFill(imageUrl: String?, fallback: String, modifier: Modifier, b
             .let { if (bordered) it.border(1.dp, AarisColor.Line) else it },
         contentAlignment = Alignment.Center,
     ) {
-        if (!imageUrl.isNullOrBlank()) {
+        val model = ServerUrls.rewriteHostOrNull(imageUrl, LocalServerUrl.current)
+        if (model != null) {
             AsyncImage(
-                model = imageUrl,
+                model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -1763,9 +1817,10 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
             .border(1.dp, AarisColor.Line),
         contentAlignment = Alignment.Center,
     ) {
-        if (!imageUrl.isNullOrBlank()) {
+        val model = ServerUrls.rewriteHostOrNull(imageUrl, LocalServerUrl.current)
+        if (model != null) {
             AsyncImage(
-                model = imageUrl,
+                model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

@@ -233,7 +233,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             query,
         ).distinctBy { it.resolvedChapterId }
 
-        return fictions.map { TtsRoadMediaItems.fictionFolder(it) } +
+        return fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) } +
             chapters.mapNotNull { chapter ->
                 val fiction = chapter.fiction
                     ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
@@ -426,7 +426,8 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         private suspend fun fictionFolders(): List<MediaItem> {
             val library = service.library() ?: return emptyList()
-            return library.fictions.map(TtsRoadMediaItems::fictionFolder)
+            val serverUrl = service.serverUrl()
+            return library.fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) }
         }
 
         private suspend fun recentItems(): List<MediaItem> {
