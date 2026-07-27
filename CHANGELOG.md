@@ -2,6 +2,17 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.7.1 — 2026-07-27
+
+### Startup crash hotfix
+
+- Fixes the app closing immediately after launch in 0.7.0. That was the first minified release,
+  and R8 renamed a playback-history model that Moshi reads through reflection during application
+  startup.
+- Release shrinking is disabled until an on-device startup smoke test is automated, and the
+  reflected models now have explicit keep rules for when shrinking is re-enabled.
+- Signed with the same pinned key as 0.7.0, so this APK installs directly over it.
+
 ## 0.7.0 — 2026-07-27
 
 ### One-time reinstall for durable future updates

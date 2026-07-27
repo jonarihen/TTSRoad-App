@@ -16,7 +16,7 @@ server. `CHANGELOG.md` records what shipped in each version.
 
 ```bash
 ./gradlew assembleDebug                                   # debug APK
-./gradlew assembleRelease                                 # minified (R8) release APK
+./gradlew assembleRelease                                 # signed release APK
 ./gradlew lint                                            # Android Lint
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
@@ -27,6 +27,11 @@ Builds need a JDK and the Android SDK, normally provisioned by Android Studio; t
 toolchain is pinned to JDK 21 (`gradle/gradle-daemon-jvm.properties`) while compilation targets
 JVM 17. On a machine with no `java` on PATH, Gradle cannot run at all — verify changes by reading,
 not by building, and say so.
+
+Release shrinking is deliberately disabled. Version 0.7.0 was the first minified APK and crashed
+at startup because R8 renamed a Moshi-reflected model outside `data/`. Do not re-enable shrinking
+until there is an on-device startup smoke test; keep every reflectively serialized model explicit
+in `proguard-rules.pro`.
 
 Emulator hitting a backend on the same host: `http://10.0.2.2:8000`. Cleartext HTTP is enabled in
 the debug build only (`app/src/debug/`).

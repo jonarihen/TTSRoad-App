@@ -30,8 +30,8 @@ android {
         applicationId = "dk.perspektiva.ttsroad"
         minSdk = 26
         targetSdk = 37
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.7.1"
     }
 
     buildTypes {
@@ -39,7 +39,10 @@ android {
             signingConfig = signingConfigs.getByName("ttsroad")
         }
         release {
-            isMinifyEnabled = true
+            // Keep release builds unminified until an on-device startup smoke test is automated.
+            // 0.7.0 was the first minified release and R8 renamed a model Moshi reflects on while
+            // the Application is starting, causing an immediate release-only crash.
+            isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("ttsroad")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
