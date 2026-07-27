@@ -2,7 +2,17 @@
 
 Notable changes to the TTSRoad Android client.
 
-## Unreleased
+## 0.7.0 — 2026-07-27
+
+### One-time reinstall for durable future updates
+
+- **This release starts a new signing lineage.** Android cannot install it over versions 0.4.0
+  through 0.6.0, whose signing key was lost. Uninstall the existing app once, install 0.7.0, and
+  sign in again. Server-side playback progress is unaffected, but local jump-back history and app
+  preferences are cleared by the uninstall.
+- The replacement key is now pinned by checksum, used by both debug and release builds, and copied
+  to a protected backup on a separate encrypted volume. The build refuses to sign with a missing
+  or different key, so future in-app updates remain installable.
 
 ### No more full-screen spinner on every back-navigation
 

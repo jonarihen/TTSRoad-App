@@ -1,23 +1,46 @@
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
 
+val ttsRoadKeystore = rootProject.file("debug.keystore")
+val ttsRoadKeystoreSha256 = "0f545e04bab055b8fac2a5979be2445cbff54bba2e070fef65f12a187b4ec3d1"
+
 android {
     namespace = "dk.perspektiva.ttsroad"
     compileSdk = 37
+
+    signingConfigs {
+        create("ttsroad") {
+            // This ignored file also has a protected offline backup. Both debug and release builds
+            // use it so every installable APK stays on one signing lineage.
+            storeFile = ttsRoadKeystore
+            storePassword = providers.environmentVariable("TTSROAD_KEYSTORE_PASSWORD")
+                .getOrElse("android")
+            keyAlias = providers.environmentVariable("TTSROAD_KEY_ALIAS")
+                .getOrElse("androiddebugkey")
+            keyPassword = providers.environmentVariable("TTSROAD_KEY_PASSWORD")
+                .getOrElse("android")
+        }
+    }
 
     defaultConfig {
         applicationId = "dk.perspektiva.ttsroad"
         minSdk = 26
         targetSdk = 37
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 7
+        versionName = "0.7.0"
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("ttsroad")
+        }
         release {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("ttsroad")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -44,6 +67,42 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+val verifyTtsRoadSigningKey = tasks.register("verifyTtsRoadSigningKey") {
+    group = "verification"
+    description = "Fails APK builds unless the pinned TTSRoad signing keystore is present."
+
+    doLast {
+        if (!ttsRoadKeystore.isFile) {
+            throw GradleException(
+                "Missing debug.keystore in the repository root. " +
+                    "Restore it from the secure signing-key backup.",
+            )
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        val actual = ttsRoadKeystore.inputStream().use { input ->
+            val buffer = ByteArray(8 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+            digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+        }
+        if (actual != ttsRoadKeystoreSha256) {
+            throw GradleException(
+                "debug.keystore does not match the pinned TTSRoad release key " +
+                    "(expected $ttsRoadKeystoreSha256, got $actual).",
+            )
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "validateSigningDebug" || name == "validateSigningRelease") {
+        dependsOn(verifyTtsRoadSigningKey)
     }
 }
 
@@ -81,4 +140,3 @@ dependencies {
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.robolectric)
 }
-

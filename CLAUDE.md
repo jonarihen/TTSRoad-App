@@ -91,7 +91,12 @@ or the new UI will not match.
 **Self-updater.** `update/UpdateManager` polls GitHub Releases of `jonarihen/TTSRoad-App` once per
 launch, downloads the attached APK to `cacheDir`, and hands it to the package installer via the
 FileProvider. Updates only apply in place if the release APK is signed with the same key as the
-installed build (the debug key, for personal builds).
+installed build.
+
+**Signing is pinned.** Both build types use the ignored repository-root `debug.keystore`, whose
+file checksum is enforced in `app/build.gradle.kts` and recorded in `debug.keystore.sha256`.
+Never generate or substitute another key. Restore a lost local file from the protected offline
+backup and confirm it with `sha256sum --check debug.keystore.sha256` before building.
 
 ## Conventions
 
@@ -100,7 +105,8 @@ installed build (the debug key, for personal builds).
   (`proguard-rules.pro`) — new DTOs must live in that package or release builds will break.
 - Backend fields are inconsistent between endpoints, so `ChapterSummary` exposes `resolved*`
   properties (`resolvedChapterId`, `resolvedPositionSeconds`, …). Use those, not the raw fields.
-- Release flow, matching the existing history: bump `versionCode` + `versionName` in
-  `app/build.gradle.kts`, add a `CHANGELOG.md` section, commit with the version in the subject
-  (`Add clock-time jump back and fix launcher icon (0.5.0)`), tag `vX.Y.Z`, and publish a GitHub
-  release with the APK attached — the attached APK is what the in-app updater installs.
+- Release flow: bump `versionCode` + `versionName` in `app/build.gradle.kts`, turn the Unreleased
+  changelog section into `## X.Y.Z — YYYY-MM-DD`, run `./gradlew clean test lint assembleRelease`,
+  verify `app-release.apk` with `apksigner`, commit with the version in the subject, tag `vX.Y.Z`,
+  push the commit and tag, and publish a GitHub release with the signed APK attached. The attached
+  APK is what the in-app updater installs.

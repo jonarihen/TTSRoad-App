@@ -25,6 +25,10 @@ Build a personal debug APK with:
 .\gradlew.bat assembleDebug
 ```
 
+Installable APK builds require the ignored `debug.keystore` in the repository root. Its checksum
+is pinned by the build and a protected copy is kept outside the repository. Do not replace it with
+a newly generated key: Android only accepts updates signed by the same key.
+
 Install it with:
 
 ```bash
@@ -66,4 +70,3 @@ The first pass includes:
 - Media3/ExoPlayer streaming with bearer auth headers
 - Playback progress sync during playback, pause, and completion
 - Android Auto media browse service with root, continue listening, fictions, and recent nodes
-
