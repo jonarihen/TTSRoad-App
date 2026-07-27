@@ -7,6 +7,7 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
+import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.update.UpdateManager
 import okhttp3.OkHttpClient
 
@@ -24,6 +25,9 @@ object ServiceLocator {
     private var playbackHistory: PlaybackHistoryStore? = null
 
     @Volatile
+    private var sleepTimer: SleepTimerController? = null
+
+    @Volatile
     private var playbackPreferences: PlaybackPreferences? = null
 
     @Volatile
@@ -37,6 +41,7 @@ object ServiceLocator {
         repository(context)
         playbackController(context)
         playbackHistory(context)
+        sleepTimer()
         playbackPreferences(context)
         libraryCache(context)
     }
@@ -66,6 +71,11 @@ object ServiceLocator {
     fun playbackHistory(context: Context): PlaybackHistoryStore =
         playbackHistory ?: synchronized(this) {
             playbackHistory ?: PlaybackHistoryStore(context.applicationContext).also { playbackHistory = it }
+        }
+
+    fun sleepTimer(): SleepTimerController =
+        sleepTimer ?: synchronized(this) {
+            sleepTimer ?: SleepTimerController().also { sleepTimer = it }
         }
 
     fun playbackPreferences(context: Context): PlaybackPreferences =
