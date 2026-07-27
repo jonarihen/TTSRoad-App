@@ -6,10 +6,12 @@ import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -31,10 +33,14 @@ import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.player.PlaybackFailure
 import dk.perspektiva.ttsroad.player.SkipIntervalMs
+import dk.perspektiva.ttsroad.player.classifyPlaybackError
+import dk.perspektiva.ttsroad.player.retryDelayMs
 import dk.perspektiva.ttsroad.player.skipTargetMs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -50,6 +56,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
     private var lastLibrary: LibraryResponse? = null
+
+    // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
+    // outage later in the night gets a fresh set of attempts rather than giving up immediately.
+    private var retryJob: Job? = null
+    private var retryAttempt = 0
 
     @Volatile
     private var authHeader: String? = null
@@ -69,12 +80,22 @@ class TtsRoadMediaService : MediaLibraryService() {
                     if (playbackState == Player.STATE_ENDED) {
                         serviceScope.launch { saveCurrentProgress(forcePlayed = true) }
                     }
+                    // Playing again means whatever broke has healed, so the next failure starts
+                    // its backoff from the top rather than inheriting an exhausted counter.
+                    if (playbackState == Player.STATE_READY) {
+                        retryAttempt = 0
+                        retryJob?.cancel()
+                    }
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (!isPlaying) {
                         serviceScope.launch { saveCurrentProgress(forcePlayed = false) }
                     }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    handlePlayerError(error)
                 }
             },
         )
@@ -127,6 +148,56 @@ class TtsRoadMediaService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+    }
+
+    /**
+     * Decide what a playback failure means and act on it.
+     *
+     * This has to live in the service: a [PlaybackException] relayed to a controller across the
+     * binder keeps its `errorCode` but loses its cause, so the HTTP status — the thing that tells a
+     * revoked token apart from a server hiccup — is only readable here.
+     *
+     * Opted in because HttpDataSource is still marked unstable in media3 1.10.0.
+     */
+    @OptIn(UnstableApi::class)
+    private fun handlePlayerError(error: PlaybackException) {
+        val httpStatus = generateSequence(error.cause) { it.cause }
+            .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
+            .firstOrNull()
+            ?.responseCode
+
+        when (classifyPlaybackError(error.errorCode, httpStatus)) {
+            PlaybackFailure.Unauthorized -> {
+                // Same conclusion as a 401 on an API call: the stored token cannot be used again,
+                // so drop it and let the session observer fall back to the login screen. Retrying
+                // would just burn battery against a server that will keep saying no.
+                retryJob?.cancel()
+                retryAttempt = 0
+                serviceScope.launch { tokenStore.clearToken() }
+            }
+
+            is PlaybackFailure.Transient -> scheduleRetry()
+
+            is PlaybackFailure.Permanent -> {
+                retryJob?.cancel()
+                retryAttempt = 0
+            }
+        }
+    }
+
+    /**
+     * Re-prepare after a backoff so a tunnel or a Wi-Fi handover heals without the user touching
+     * anything. Deliberately does not call play(): prepare() resumes on its own when playWhenReady
+     * was set, so a stream that died while paused stays paused.
+     */
+    private fun scheduleRetry() {
+        val delayMs = retryDelayMs(retryAttempt + 1) ?: return
+        retryAttempt++
+        retryJob?.cancel()
+        retryJob = serviceScope.launch {
+            delay(delayMs)
+            player.prepare()
+        }
     }
 
     private fun startProgressTicker() {

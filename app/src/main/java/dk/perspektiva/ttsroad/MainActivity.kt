@@ -819,6 +819,10 @@ private fun PlayerScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         MetaText(text = "// Now Playing", color = AarisColor.Accent)
+        playerState.error?.let { message ->
+            Spacer(modifier = Modifier.height(12.dp))
+            PlaybackErrorBanner(message = message, onRetry = playbackController::retry)
+        }
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1229,6 +1233,24 @@ private fun MiniPlayerBar(
     ) {
         HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
         ThinProgress(fraction = fraction, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+        // The mini bar is the only player surface visible on the library and fiction screens, so a
+        // stream that died has to be visible from here too — otherwise playback just looks stopped.
+        state.error?.let { message ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(AarisColor.BgHover)
+                    .padding(start = 12.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MetaText(
+                    text = message,
+                    color = AarisColor.Danger,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = playbackController::retry) { Text("RETRY") }
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1275,6 +1297,30 @@ private fun MiniPlayerBar(
                 size = 42.dp,
                 filled = true,
             ) { playbackController.togglePlayPause() }
+        }
+    }
+}
+
+/**
+ * Shown when the player stopped on an error. The service retries transient failures on its own, so
+ * by the time this stays on screen the automatic attempts have already been spent — RETRY is the
+ * manual escalation, not the first line of defence.
+ */
+@Composable
+private fun PlaybackErrorBanner(message: String, onRetry: () -> Unit) {
+    AarisCard {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(
+                text = message,
+                color = AarisColor.Danger,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onRetry) { Text("RETRY") }
         }
     }
 }

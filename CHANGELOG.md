@@ -44,6 +44,18 @@ Notable changes to the TTSRoad Android client.
 - Both seek **within the current chapter**: near the end, forward stops at the end rather than
   rolling into the next chapter; near the start, back stops at zero.
 
+### Playback failures are visible, and mostly fix themselves
+
+- A stream that dies — home server down, VPN dropped, Wi-Fi handover, a tunnel — used to leave the
+  app looking like it had quietly stopped. It now **retries on its own** after 2s, 5s and 15s, so a
+  brief outage heals with no user action at all.
+- If the retries do not get there, the player and the mini player bar show **what went wrong and a
+  RETRY button**, instead of just sitting in the paused state.
+- A **401 on the audio stream** is now treated as what it is: the token has been revoked, so the app
+  signs out and returns to the login screen rather than retrying forever against a server that will
+  keep refusing.
+- Errors clear by themselves the moment playback recovers.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
