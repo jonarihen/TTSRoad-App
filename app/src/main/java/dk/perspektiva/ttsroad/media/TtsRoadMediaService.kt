@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.media
 
+import android.app.PendingIntent
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -17,6 +18,7 @@ import androidx.media3.session.MediaSession
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import dk.perspektiva.ttsroad.MainActivity
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
@@ -68,7 +70,9 @@ class TtsRoadMediaService : MediaLibraryService() {
             },
         )
         startProgressTicker()
-        session = MediaLibrarySession.Builder(this, player, BrowserCallback(this)).build()
+        session = MediaLibrarySession.Builder(this, player, BrowserCallback(this))
+            .setSessionActivity(playerActivityIntent())
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
@@ -79,6 +83,15 @@ class TtsRoadMediaService : MediaLibraryService() {
         serviceScope.cancel()
         super.onDestroy()
     }
+
+    // Content intent for the media notification and the car's "open app" affordance. Without it the
+    // notification body is not clickable at all.
+    private fun playerActivityIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        MainActivity.playerIntent(this),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     private fun createPlayer(): ExoPlayer {
         // The Authorization header is resolved per-request from the latest session token, so the
