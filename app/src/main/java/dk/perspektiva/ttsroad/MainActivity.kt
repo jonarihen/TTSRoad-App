@@ -109,6 +109,7 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
+import dk.perspektiva.ttsroad.player.SkipIntervalMs
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
@@ -889,7 +890,7 @@ private fun PlayerScreen(
                 contentDescription = "Back 30 seconds",
                 enabled = playerState.hasMedia,
                 size = 46.dp,
-            ) { playbackController.skipBy(-30_000) }
+            ) { playbackController.skipBy(-SkipIntervalMs) }
             TransportIconButton(
                 icon = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 contentDescription = if (playerState.isPlaying) "Pause" else "Play",
@@ -902,7 +903,7 @@ private fun PlayerScreen(
                 contentDescription = "Forward 30 seconds",
                 enabled = playerState.hasMedia,
                 size = 46.dp,
-            ) { playbackController.skipBy(30_000) }
+            ) { playbackController.skipBy(SkipIntervalMs) }
             TransportIconButton(
                 icon = Icons.Default.SkipNext,
                 contentDescription = "Next chapter",
@@ -1265,7 +1266,7 @@ private fun MiniPlayerBar(
                 contentDescription = "Back 30 seconds",
                 enabled = state.hasMedia,
                 size = 42.dp,
-            ) { playbackController.skipBy(-30_000) }
+            ) { playbackController.skipBy(-SkipIntervalMs) }
             Spacer(modifier = Modifier.width(8.dp))
             TransportIconButton(
                 icon = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
