@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.core
 
 import android.content.Context
 import dk.perspektiva.ttsroad.data.LibraryCache
+import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.player.PlaybackController
@@ -23,6 +24,9 @@ object ServiceLocator {
     private var playbackHistory: PlaybackHistoryStore? = null
 
     @Volatile
+    private var playbackPreferences: PlaybackPreferences? = null
+
+    @Volatile
     private var libraryCache: LibraryCache? = null
 
     @Volatile
@@ -33,6 +37,7 @@ object ServiceLocator {
         repository(context)
         playbackController(context)
         playbackHistory(context)
+        playbackPreferences(context)
         libraryCache(context)
     }
 
@@ -54,12 +59,19 @@ object ServiceLocator {
             playbackController ?: PlaybackController(
                 context = context.applicationContext,
                 tokenStore = tokenStore(context),
+                preferences = playbackPreferences(context),
             ).also { playbackController = it }
         }
 
     fun playbackHistory(context: Context): PlaybackHistoryStore =
         playbackHistory ?: synchronized(this) {
             playbackHistory ?: PlaybackHistoryStore(context.applicationContext).also { playbackHistory = it }
+        }
+
+    fun playbackPreferences(context: Context): PlaybackPreferences =
+        playbackPreferences ?: synchronized(this) {
+            playbackPreferences
+                ?: PlaybackPreferences(context.applicationContext).also { playbackPreferences = it }
         }
 
     fun libraryCache(context: Context): LibraryCache =

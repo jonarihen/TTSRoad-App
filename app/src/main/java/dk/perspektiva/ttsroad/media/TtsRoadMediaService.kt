@@ -31,10 +31,11 @@ import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
+import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
+import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.player.PlaybackFailure
-import dk.perspektiva.ttsroad.player.SkipIntervalMs
 import dk.perspektiva.ttsroad.player.classifyPlaybackError
 import dk.perspektiva.ttsroad.player.retryDelayMs
 import dk.perspektiva.ttsroad.player.skipTargetMs
@@ -45,6 +46,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -53,6 +56,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var tokenStore: TokenStore
     private lateinit var repository: TtsRoadRepository
+    private lateinit var preferences: PlaybackPreferences
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
     private var lastLibrary: LibraryResponse? = null
@@ -65,15 +69,36 @@ class TtsRoadMediaService : MediaLibraryService() {
     @Volatile
     private var authHeader: String? = null
 
+    // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
+    // and car transport read the preference from here rather than the DataStore.
+    @Volatile
+    private var skipIntervalMs: Long = DefaultSkipIntervalMs
+
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
         tokenStore = ServiceLocator.tokenStore(this)
         repository = ServiceLocator.repository(this)
+        preferences = ServiceLocator.playbackPreferences(this)
         serviceScope.launch {
             tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
         }
         player = createPlayer()
+        // Speed lives in the service, not the UI: the player is recreated on a swipe-away, a
+        // process kill, or a reboot, and the car can start playback with no UI running at all.
+        // Applying it here is what makes it survive all three.
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.speed }
+                .distinctUntilChanged()
+                .collect { player.setPlaybackSpeed(it) }
+        }
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.skipIntervalMs }
+                .distinctUntilChanged()
+                .collect { skipIntervalMs = it }
+        }
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -372,8 +397,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             args: Bundle,
         ): ListenableFuture<SessionResult> {
             val delta = when (customCommand.customAction) {
-                TtsRoadSessionCommands.SkipBack -> -SkipIntervalMs
-                TtsRoadSessionCommands.SkipForward -> SkipIntervalMs
+                TtsRoadSessionCommands.SkipBack -> -service.skipIntervalMs
+                TtsRoadSessionCommands.SkipForward -> service.skipIntervalMs
                 else -> return Futures.immediateFuture(
                     SessionResult(SessionError.ERROR_NOT_SUPPORTED),
                 )

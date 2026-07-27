@@ -1,12 +1,6 @@
 package dk.perspektiva.ttsroad.player
 
 /**
- * How far the -30s / +30s controls move. Shared by the in-app transport and the OS transport
- * (notification, lockscreen, Android Auto) so both stay in step.
- */
-const val SkipIntervalMs: Long = 30_000L
-
-/**
  * Resolve a relative skip to an absolute position inside the current chapter.
  *
  * Seeking past the end of a chapter would roll over into the next one, and these controls are

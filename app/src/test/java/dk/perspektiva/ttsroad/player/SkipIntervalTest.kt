@@ -7,6 +7,9 @@ import org.junit.Test
 class SkipIntervalTest {
     private val chapterMs = 10 * 60 * 1000L
 
+    /** The interval is a user preference now; these tests pin the clamping, not its value. */
+    private val SkipIntervalMs = 30_000L
+
     @Test
     fun `skips forward within the chapter`() {
         assertEquals(
