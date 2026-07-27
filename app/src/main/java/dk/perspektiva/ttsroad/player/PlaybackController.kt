@@ -8,7 +8,9 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
+import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
+import dk.perspektiva.ttsroad.data.sanitizeSpeed
 import dk.perspektiva.ttsroad.media.TtsRoadMediaItems
 import dk.perspektiva.ttsroad.media.TtsRoadMediaService
 import kotlin.math.roundToLong
@@ -45,6 +47,12 @@ data class PlayerUiState(
     val currentIndex: Int = 0,
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
+    /**
+     * Set while the player is stopped on an error. Clears on its own once playback recovers —
+     * including when the service's automatic retry succeeds, which is the common case for a tunnel
+     * or a Wi-Fi handover.
+     */
+    val error: String? = null,
 )
 
 /**
@@ -57,6 +65,7 @@ data class PlayerUiState(
 class PlaybackController(
     private val context: Context,
     private val tokenStore: TokenStore,
+    private val preferences: PlaybackPreferences,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
@@ -174,8 +183,7 @@ class PlaybackController(
 
     fun skipBy(deltaMs: Long) {
         val controller = controller ?: return
-        val duration = controller.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: Long.MAX_VALUE
-        controller.seekTo((controller.currentPosition + deltaMs).coerceIn(0L, duration))
+        controller.seekTo(skipTargetMs(controller.currentPosition, controller.duration, deltaMs))
         publishState(controller)
     }
 
@@ -221,9 +229,27 @@ class PlaybackController(
         return false
     }
 
-    fun setSpeed(speed: Float) {
+    /**
+     * Re-prepare after a failure the automatic retries gave up on. Does not call play(): prepare()
+     * resumes on its own when playWhenReady was set, so a stream that died while paused stays
+     * paused rather than starting up unasked.
+     */
+    fun retry() {
         val controller = controller ?: return
-        controller.setPlaybackSpeed(speed)
+        controller.prepare()
+        publishState(controller)
+    }
+
+    /**
+     * Set the speed and remember it. The service applies the stored value whenever it creates a
+     * player, so this also survives a swipe-away, a process kill and a reboot; setting it on the
+     * live controller as well just avoids waiting a tick for the label to catch up.
+     */
+    fun setSpeed(speed: Float) {
+        val sanitized = sanitizeSpeed(speed)
+        scope.launch { preferences.setSpeed(sanitized) }
+        val controller = controller ?: return
+        controller.setPlaybackSpeed(sanitized)
         publishState(controller)
     }
 
@@ -296,6 +322,9 @@ class PlaybackController(
             currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
             hasNext = player.hasNextMediaItem(),
             hasPrevious = player.hasPreviousMediaItem(),
+            // The cause does not survive the binder, so the HTTP status is unavailable here; the
+            // service reads it from the real exception and handles the 401 case there.
+            error = player.playerError?.let { classifyPlaybackError(it.errorCode).message },
         )
     }
 }

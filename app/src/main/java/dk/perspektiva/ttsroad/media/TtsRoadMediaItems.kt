@@ -1,9 +1,13 @@
 package dk.perspektiva.ttsroad.media
 
 import android.os.Bundle
+import androidx.annotation.OptIn
 import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.MediaConstants
+import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 
@@ -21,7 +25,62 @@ object TtsRoadMediaIds {
     fun chapterId(mediaId: String): Int? = mediaId.removePrefix(ChapterPrefix).toIntOrNull()
 }
 
+/**
+ * Tell the car how far through a chapter the listener is, so browse rows draw a progress bar and a
+ * started chapter stops looking identical to an untouched one.
+ *
+ * Media3 relays these through to the car's media browser as-is; there is no typed API for them.
+ */
+@OptIn(UnstableApi::class)
+private fun Bundle.putCompletion(chapter: ChapterSummary) {
+    val played = chapter.playback?.isPlayed == true
+    val positionSeconds = chapter.resolvedPositionSeconds
+    val durationSeconds = chapter.audioDuration?.takeIf { it > 0.0 }
+
+    val status = when {
+        played -> MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_FULLY_PLAYED
+        positionSeconds > 0.0 -> MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_PARTIALLY_PLAYED
+        else -> MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_NOT_PLAYED
+    }
+    putInt(MediaConstants.EXTRAS_KEY_COMPLETION_STATUS, status)
+
+    // Only meaningful while partially played: a finished chapter is 100% by definition, and an
+    // unstarted one has nothing to draw.
+    if (status == MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_PARTIALLY_PLAYED &&
+        durationSeconds != null
+    ) {
+        putDouble(
+            MediaConstants.EXTRAS_KEY_COMPLETION_PERCENTAGE,
+            (positionSeconds / durationSeconds).coerceIn(0.0, 1.0),
+        )
+    }
+}
+
 object TtsRoadMediaItems {
+    /**
+     * Browse-node styling hints. Fictions are cover-led, so they read far better as a grid; chapters
+     * are a long ordered list where the title is what matters, so they stay as rows.
+     */
+    @OptIn(UnstableApi::class)
+    fun contentStyle(browsableGrid: Boolean, playableGrid: Boolean = false): Bundle = Bundle().apply {
+        putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+            if (browsableGrid) {
+                MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+            } else {
+                MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+            },
+        )
+        putInt(
+            MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+            if (playableGrid) {
+                MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+            } else {
+                MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+            },
+        )
+    }
+
     fun root(): MediaItem = folder(
         mediaId = TtsRoadMediaIds.Root,
         title = "TTSRoad",
@@ -43,7 +102,7 @@ object TtsRoadMediaItems {
             .build()
     }
 
-    fun fictionFolder(fiction: FictionSummary): MediaItem {
+    fun fictionFolder(fiction: FictionSummary, serverUrl: String? = null): MediaItem {
         val subtitle = listOfNotNull(
             fiction.author,
             "${fiction.doneChapters}/${fiction.totalChapters} ready",
@@ -57,7 +116,8 @@ object TtsRoadMediaItems {
             .setIsPlayable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS)
 
-        fiction.coverImageUrl?.let { metadataBuilder.setArtworkUri(it.toUri()) }
+        ServerUrls.rewriteHostOrNull(fiction.coverImageUrl, serverUrl)
+            ?.let { metadataBuilder.setArtworkUri(it.toUri()) }
 
         return MediaItem.Builder()
             .setMediaId(TtsRoadMediaIds.fiction(fiction.id))
@@ -71,12 +131,13 @@ object TtsRoadMediaItems {
         serverUrl: String? = null,
     ): MediaItem? {
         val rawUrl = chapter.audio?.url ?: return null
-        val audioUri = rewriteHost(rawUrl, serverUrl).toUri()
+        val audioUri = ServerUrls.rewriteHost(rawUrl, serverUrl).toUri()
         val extras = Bundle().apply {
             putInt("fiction_id", chapter.resolvedFictionId)
             putInt("chapter_id", chapter.resolvedChapterId)
             chapter.displayNumber?.let { putDouble("display_number", it) }
             chapter.resolvedPositionSeconds.takeIf { it > 0.0 }?.let { putDouble("position_seconds", it) }
+            putCompletion(chapter)
         }
         val fictionTitle = fiction?.title ?: chapter.resolvedFictionTitle
         val author = fiction?.author ?: chapter.resolvedAuthor
@@ -95,7 +156,7 @@ object TtsRoadMediaItems {
             .setIsPlayable(true)
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
 
-        cover?.let { metadataBuilder.setArtworkUri(it.toUri()) }
+        ServerUrls.rewriteHostOrNull(cover, serverUrl)?.let { metadataBuilder.setArtworkUri(it.toUri()) }
         durationMs?.let { metadataBuilder.setDurationMs(it) }
 
         return MediaItem.Builder()
@@ -108,27 +169,6 @@ object TtsRoadMediaItems {
             )
             .setMediaMetadata(metadataBuilder.build())
             .build()
-    }
-
-    /**
-     * The server builds absolute audio URLs from its configured BASE_URL, which may not be the
-     * host the device actually used to log in (and may even be relative if BASE_URL is unset).
-     * Rewrite the scheme/host/port to the server the user is connected to so playback works
-     * regardless of how BASE_URL is configured.
-     */
-    private fun rewriteHost(url: String, serverUrl: String?): String {
-        if (serverUrl.isNullOrBlank()) return url
-        return try {
-            val base = serverUrl.toUri()
-            if (base.scheme.isNullOrBlank() || base.authority.isNullOrBlank()) return url
-            url.toUri().buildUpon()
-                .scheme(base.scheme)
-                .encodedAuthority(base.authority)
-                .build()
-                .toString()
-        } catch (_: Exception) {
-            url
-        }
     }
 }
 
