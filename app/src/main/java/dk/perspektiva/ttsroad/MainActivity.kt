@@ -1,11 +1,14 @@
 package dk.perspektiva.ttsroad
 
+import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,20 +36,26 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Forward30
+import androidx.compose.material.icons.filled.Forward5
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Replay30
+import androidx.compose.material.icons.filled.Replay5
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -55,23 +64,29 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -89,18 +104,29 @@ import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
+import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
-import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.LoginResult
+import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
+import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
+import dk.perspektiva.ttsroad.data.SpeedPresets
+import dk.perspektiva.ttsroad.data.VolumeBoost
+import dk.perspektiva.ttsroad.data.formatSkipInterval
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
+import dk.perspektiva.ttsroad.player.SleepTimerController
+import dk.perspektiva.ttsroad.player.SleepTimerMode
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
@@ -119,30 +145,66 @@ private sealed interface AppScreen {
     data object Settings : AppScreen
 }
 
-private sealed interface LoadState<out T> {
-    data object Loading : LoadState<Nothing>
-    data class Loaded<T>(val value: T) : LoadState<T>
-    data class Error(val message: String) : LoadState<Nothing>
-}
+/**
+ * Server the user signed in to, so cover URLs built from the backend's BASE_URL can be pointed at
+ * the address the phone can actually reach. See [ServerUrls.rewriteHost].
+ */
+private val LocalServerUrl = staticCompositionLocalOf { "" }
 
 class MainActivity : ComponentActivity() {
+    // Notification taps that arrive while the activity is already running come through
+    // onNewIntent, so they are relayed to the composition rather than read from the start intent.
+    private val openPlayerRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val startOnPlayer = consumeOpenPlayer(intent)
         setContent {
             TtsRoadTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = AarisColor.Bg,
                 ) {
-                    TtsRoadApp()
+                    TtsRoadApp(
+                        startOnPlayer = startOnPlayer,
+                        openPlayerRequests = openPlayerRequests,
+                    )
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (consumeOpenPlayer(intent)) openPlayerRequests.tryEmit(Unit)
+    }
+
+    companion object {
+        private const val EXTRA_OPEN_PLAYER = "dk.perspektiva.ttsroad.extra.OPEN_PLAYER"
+
+        /** Start intent used by the media session so a notification tap lands on the player. */
+        fun playerIntent(context: Context): Intent =
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(EXTRA_OPEN_PLAYER, true)
+
+        // Read once and clear, so an activity recreation (rotation, theme change) does not bounce
+        // the user back to the player after they have navigated away.
+        @VisibleForTesting
+        internal fun consumeOpenPlayer(intent: Intent?): Boolean {
+            if (intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) != true) return false
+            intent.removeExtra(EXTRA_OPEN_PLAYER)
+            return true
         }
     }
 }
 
 @Composable
-private fun TtsRoadApp() {
+private fun TtsRoadApp(
+    startOnPlayer: Boolean = false,
+    openPlayerRequests: Flow<Unit> = emptyFlow(),
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val tokenStore = remember { ServiceLocator.tokenStore(context) }
@@ -152,6 +214,7 @@ private fun TtsRoadApp() {
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val session by tokenStore.session.collectAsStateWithLifecycle(initialValue = SessionState())
     var screen by remember { mutableStateOf<AppScreen>(AppScreen.Library) }
+    var openPlayerPending by remember { mutableStateOf(startOnPlayer) }
 
     // Denial is not an error path: playback still works, and Settings explains what is missing.
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -168,22 +231,40 @@ private fun TtsRoadApp() {
         } else {
             screen = AppScreen.Library
             playbackController.stop()
+            // The cache outlives the composition, so signing out has to empty it explicitly —
+            // otherwise the next account is shown the previous one's library.
+            ServiceLocator.libraryCache(context).clear()
+        }
+    }
+
+    LaunchedEffect(openPlayerRequests) {
+        openPlayerRequests.collect { openPlayerPending = true }
+    }
+
+    // The stored session loads asynchronously, so a notification tap can land before isLoggedIn is
+    // known. Holding the request until then keeps the reset above from swallowing it.
+    LaunchedEffect(openPlayerPending, session.isLoggedIn) {
+        if (openPlayerPending && session.isLoggedIn) {
+            screen = AppScreen.Player
+            openPlayerPending = false
         }
     }
 
     // Quietly check GitHub Releases for a newer build once per launch.
     LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
 
-    if (!session.isLoggedIn) {
-        LoginScreen(repository = repository, session = session)
-    } else {
-        MainScaffold(
-            session = session,
-            screen = screen,
-            onScreenChange = { screen = it },
-            repository = repository,
-            playbackController = playbackController,
-        )
+    CompositionLocalProvider(LocalServerUrl provides session.serverUrl) {
+        if (!session.isLoggedIn) {
+            LoginScreen(repository = repository, session = session)
+        } else {
+            MainScaffold(
+                session = session,
+                screen = screen,
+                onScreenChange = { screen = it },
+                repository = repository,
+                playbackController = playbackController,
+            )
+        }
     }
 
     UpdateOverlay(
@@ -259,6 +340,9 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val sessionExpired by repository.sessionExpired.collectAsStateWithLifecycle()
+    // A failed attempt has more to say than "your old token went stale", so it wins.
+    val notice = error ?: "Session expired - sign in again".takeIf { sessionExpired }
 
     Column(
         modifier = Modifier
@@ -321,7 +405,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
                 supportingText = { MetaText(text = "From your authenticator app, or a recovery code") },
             )
         }
-        error?.let {
+        notice?.let {
             Spacer(modifier = Modifier.height(12.dp))
             Text(text = it, color = MaterialTheme.colorScheme.error)
         }
@@ -382,6 +466,10 @@ private fun MainScaffold(
 ) {
     val context = LocalContext.current
     val playerState by playbackController.state.collectAsStateWithLifecycle()
+    val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val skipIntervalMs by remember(preferences) {
+        preferences.prefs.map { it.skipIntervalMs }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = DefaultSkipIntervalMs)
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val hasHistory by remember(historyStore) {
         historyStore.snapshots.map { it.isNotEmpty() }.distinctUntilChanged()
@@ -443,6 +531,7 @@ private fun MainScaffold(
                 MiniPlayerBar(
                     state = playerState,
                     playbackController = playbackController,
+                    skipIntervalMs = skipIntervalMs,
                     onExpand = { onScreenChange(AppScreen.Player) },
                 )
             }
@@ -451,7 +540,6 @@ private fun MainScaffold(
         when (screen) {
             AppScreen.Library -> LibraryScreen(
                 padding = padding,
-                repository = repository,
                 playbackController = playbackController,
                 onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                 onOpenPlayer = { onScreenChange(AppScreen.Player) },
@@ -460,7 +548,6 @@ private fun MainScaffold(
 
             AppScreen.Fictions -> FictionsScreen(
                 padding = padding,
-                repository = repository,
                 onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
             )
 
@@ -476,6 +563,7 @@ private fun MainScaffold(
                 padding = padding,
                 playerState = playerState,
                 playbackController = playbackController,
+                skipIntervalMs = skipIntervalMs,
             )
 
             AppScreen.Settings -> SettingsScreen(
@@ -490,76 +578,109 @@ private fun MainScaffold(
 @Composable
 private fun LibraryScreen(
     padding: PaddingValues,
-    repository: TtsRoadRepository,
     playbackController: PlaybackController,
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenPlayer: () -> Unit,
     onBrowseFictions: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var libraryState by remember { mutableStateOf<LoadState<LibraryResponse>>(LoadState.Loading) }
+    val context = LocalContext.current
+    val cache = remember { ServiceLocator.libraryCache(context) }
+    val state by cache.library.collectAsStateWithLifecycle()
 
-    fun refresh() {
-        scope.launch {
-            libraryState = LoadState.Loading
-            libraryState = runCatching { repository.library() }
-                .fold(
-                    onSuccess = { LoadState.Loaded(it) },
-                    onFailure = { LoadState.Error(it.message ?: "Could not load library") },
-                )
-        }
-    }
+    // Loads once; returning to this screen shows what was already there instead of a spinner.
+    LaunchedEffect(Unit) { cache.ensureLibrary() }
 
-    LaunchedEffect(Unit) { refresh() }
-
-    when (val state = libraryState) {
-        LoadState.Loading -> LoadingPane(padding)
-        is LoadState.Error -> ErrorPane(
+    val library = state.value
+    when {
+        library == null && state.isInitialLoad -> LoadingPane(padding)
+        library == null -> ErrorPane(
             padding = padding,
-            message = state.message,
-            onRetry = ::refresh,
+            message = state.error ?: "Could not load library",
+            onRetry = cache::refreshLibrary,
         )
 
-        is LoadState.Loaded -> {
-            val library = state.value
+        else -> {
             val fictionForChapter: (ChapterSummary) -> FictionSummary? = { chapter ->
                 chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
             }
 
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(28.dp),
+            RefreshablePane(
+                padding = padding,
+                isRefreshing = state.isRefreshing,
+                error = state.error,
+                onRefresh = cache::refreshLibrary,
             ) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(
-                            kicker = "01",
-                            title = "Continue listening",
-                            actionLabel = "Refresh",
-                            onAction = ::refresh,
-                        )
-                        if (library.continueListening.isEmpty()) {
-                            EmptyCard("No active chapters")
-                        } else {
-                            val hero = library.continueListening.first()
-                            ContinueHero(
-                                chapter = hero,
-                                fiction = fictionForChapter(hero),
-                                onResume = {
-                                    scope.launch {
-                                        playbackController.play(hero, fictionForChapter(hero))
-                                        onOpenPlayer()
-                                    }
-                                },
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(28.dp),
+                ) {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeader(
+                                kicker = "01",
+                                title = "Continue listening",
+                                actionLabel = "Refresh",
+                                onAction = cache::refreshLibrary,
                             )
-                            if (library.continueListening.size > 1) {
+                            if (library.continueListening.isEmpty()) {
+                                EmptyCard("No active chapters")
+                            } else {
+                                val hero = library.continueListening.first()
+                                ContinueHero(
+                                    chapter = hero,
+                                    fiction = fictionForChapter(hero),
+                                    onResume = {
+                                        scope.launch {
+                                            playbackController.play(hero, fictionForChapter(hero))
+                                            onOpenPlayer()
+                                        }
+                                    },
+                                )
+                                if (library.continueListening.size > 1) {
+                                    HorizontalChapterRail(
+                                        chapters = library.continueListening.drop(1),
+                                        fictionForChapter = fictionForChapter,
+                                        keyPrefix = "continue",
+                                        playbackController = playbackController,
+                                        onOpenPlayer = onOpenPlayer,
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeader(
+                                kicker = "02",
+                                title = "Fictions",
+                                actionLabel = if (library.fictions.isEmpty()) null else "Browse all",
+                                onAction = onBrowseFictions.takeIf { library.fictions.isNotEmpty() },
+                            )
+                            if (library.fictions.isEmpty()) {
+                                EmptyCard("No fictions found")
+                            } else {
+                                HorizontalFictionRail(
+                                    fictions = library.fictions,
+                                    onOpenFiction = onOpenFiction,
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionHeader(kicker = "03", title = "Recent")
+                            if (library.recentChapters.isEmpty()) {
+                                EmptyCard("No recent chapters")
+                            } else {
                                 HorizontalChapterRail(
-                                    chapters = library.continueListening.drop(1),
+                                    chapters = library.recentChapters,
                                     fictionForChapter = fictionForChapter,
-                                    keyPrefix = "continue",
+                                    keyPrefix = "recent",
                                     playbackController = playbackController,
                                     onOpenPlayer = onOpenPlayer,
                                 )
@@ -567,43 +688,48 @@ private fun LibraryScreen(
                         }
                     }
                 }
-
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(
-                            kicker = "02",
-                            title = "Fictions",
-                            actionLabel = if (library.fictions.isEmpty()) null else "Browse all",
-                            onAction = onBrowseFictions.takeIf { library.fictions.isNotEmpty() },
-                        )
-                        if (library.fictions.isEmpty()) {
-                            EmptyCard("No fictions found")
-                        } else {
-                            HorizontalFictionRail(
-                                fictions = library.fictions,
-                                onOpenFiction = onOpenFiction,
-                            )
-                        }
-                    }
-                }
-
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(kicker = "03", title = "Recent")
-                        if (library.recentChapters.isEmpty()) {
-                            EmptyCard("No recent chapters")
-                        } else {
-                            HorizontalChapterRail(
-                                chapters = library.recentChapters,
-                                fictionForChapter = fictionForChapter,
-                                keyPrefix = "recent",
-                                playbackController = playbackController,
-                                onOpenPlayer = onOpenPlayer,
-                            )
-                        }
-                    }
-                }
             }
+        }
+    }
+}
+
+/**
+ * Wraps a screen's content with pull-to-refresh and an in-place refresh indicator.
+ *
+ * The point is that [content] stays on screen throughout. A refresh over data the user can already
+ * read must not blank the screen — that was the whole complaint — so a background reload shows a
+ * hairline progress strip, and a *failed* one shows a one-line notice above content that is still
+ * perfectly usable.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RefreshablePane(
+    padding: PaddingValues,
+    isRefreshing: Boolean,
+    error: String?,
+    onRefresh: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (isRefreshing) {
+                ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+            }
+            // A refresh that failed while content is already loaded is a notice, not a takeover.
+            error?.let {
+                MetaText(
+                    text = it,
+                    color = AarisColor.Danger,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+            content()
         }
     }
 }
@@ -617,77 +743,83 @@ private fun FictionScreen(
     onOpenPlayer: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var chapterState by remember(fiction.id) { mutableStateOf<LoadState<List<ChapterSummary>>>(LoadState.Loading) }
+    val context = LocalContext.current
+    val cache = remember { ServiceLocator.libraryCache(context) }
+    val chapterState by remember(fiction.id) { cache.chapters(fiction.id) }
+        .collectAsStateWithLifecycle()
     var error by remember { mutableStateOf<String?>(null) }
+    // Held here so an in-place row update cannot scroll a 500-row list back to the top.
+    val listState = rememberLazyListState()
 
-    fun refresh() {
-        scope.launch {
-            chapterState = LoadState.Loading
-            chapterState = runCatching {
-                repository.chapters(fiction.id, playableOnly = false).chapters
-            }.fold(
-                onSuccess = { LoadState.Loaded(it) },
-                onFailure = { LoadState.Error(it.message ?: "Could not load chapters") },
-            )
-        }
-    }
+    LaunchedEffect(fiction.id) { cache.ensureChapters(fiction.id) }
 
-    LaunchedEffect(fiction.id) { refresh() }
-
-    when (val state = chapterState) {
-        LoadState.Loading -> LoadingPane(padding)
-        is LoadState.Error -> ErrorPane(
+    val chapters = chapterState.value
+    when {
+        chapters == null && chapterState.isInitialLoad -> LoadingPane(padding)
+        chapters == null -> ErrorPane(
             padding = padding,
-            message = state.message,
-            onRetry = ::refresh,
+            message = chapterState.error ?: "Could not load chapters",
+            onRetry = { cache.refreshChapters(fiction.id) },
         )
 
-        is LoadState.Loaded -> LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(16.dp),
+        else -> RefreshablePane(
+            padding = padding,
+            isRefreshing = chapterState.isRefreshing,
+            error = chapterState.error,
+            onRefresh = { cache.refreshChapters(fiction.id) },
         ) {
-            item {
-                FictionDetailHeader(
-                    fiction = fiction,
-                    chapters = state.value,
-                    onPlay = { chapter ->
-                        scope.launch {
-                            playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
-                            onOpenPlayer()
-                        }
-                    },
-                )
-                error?.let {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = it, color = MaterialTheme.colorScheme.error)
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                SectionHeader(kicker = "CH", title = "Chapters")
-            }
-            itemsIndexed(state.value, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
-                ChapterRow(
-                    chapter = chapter,
-                    fiction = fiction,
-                    onPlay = {
-                        scope.launch {
-                            playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
-                            onOpenPlayer()
-                        }
-                    },
-                    onMarkPlayed = { played ->
-                        scope.launch {
-                            error = null
-                            runCatching {
-                                repository.markPlayed(listOf(chapter.resolvedChapterId), played)
-                                refresh()
-                            }.onFailure {
-                                error = it.message ?: "Could not update chapter"
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+            ) {
+                item {
+                    FictionDetailHeader(
+                        fiction = fiction,
+                        chapters = chapters,
+                        onPlay = { chapter ->
+                            scope.launch {
+                                playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
+                                onOpenPlayer()
                             }
-                        }
-                    },
-                )
+                        },
+                    )
+                    error?.let {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(text = it, color = MaterialTheme.colorScheme.error)
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    SectionHeader(kicker = "CH", title = "Chapters")
+                }
+                itemsIndexed(chapters, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
+                    ChapterRow(
+                        chapter = chapter,
+                        fiction = fiction,
+                        onPlay = {
+                            scope.launch {
+                                playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
+                                onOpenPlayer()
+                            }
+                        },
+                        onMarkPlayed = { played ->
+                            scope.launch {
+                                error = null
+                                runCatching {
+                                    repository.markPlayed(listOf(chapter.resolvedChapterId), played)
+                                    // Patch the one row instead of refetching: reloading tore down the
+                                    // whole list and dropped the user back at the top, for a checkmark.
+                                    cache.applyPlayed(
+                                        fictionId = fiction.id,
+                                        chapterIds = listOf(chapter.resolvedChapterId),
+                                        played = played,
+                                    )
+                                }.onFailure {
+                                    error = it.message ?: "Could not update chapter"
+                                }
+                            }
+                        },
+                    )
+                }
             }
         }
     }
@@ -699,6 +831,7 @@ private fun PlayerScreen(
     padding: PaddingValues,
     playerState: PlayerUiState,
     playbackController: PlaybackController,
+    skipIntervalMs: Long,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -706,8 +839,12 @@ private fun PlayerScreen(
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val history by historyStore.snapshots.collectAsStateWithLifecycle()
     val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
+    val sleepTimer = remember { ServiceLocator.sleepTimer() }
+    val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
+    var showSleepTimer by remember { mutableStateOf(false) }
+    var showSpeed by remember { mutableStateOf(false) }
     // Track the drag locally and only seek on release, so scrubbing doesn't spam the player.
     var dragMs by remember { mutableStateOf<Float?>(null) }
 
@@ -719,6 +856,10 @@ private fun PlayerScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         MetaText(text = "// Now Playing", color = AarisColor.Accent)
+        playerState.error?.let { message ->
+            Spacer(modifier = Modifier.height(12.dp))
+            PlaybackErrorBanner(message = message, onRetry = playbackController::retry)
+        }
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
@@ -786,11 +927,11 @@ private fun PlayerScreen(
                 size = 46.dp,
             ) { playbackController.skipToPreviousChapter() }
             TransportIconButton(
-                icon = Icons.Default.Replay30,
-                contentDescription = "Back 30 seconds",
+                icon = skipBackIcon(skipIntervalMs),
+                contentDescription = "Back ${formatSkipInterval(skipIntervalMs)}",
                 enabled = playerState.hasMedia,
                 size = 46.dp,
-            ) { playbackController.skipBy(-30_000) }
+            ) { playbackController.skipBy(-skipIntervalMs) }
             TransportIconButton(
                 icon = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 contentDescription = if (playerState.isPlaying) "Pause" else "Play",
@@ -799,11 +940,11 @@ private fun PlayerScreen(
                 filled = true,
             ) { playbackController.togglePlayPause() }
             TransportIconButton(
-                icon = Icons.Default.Forward30,
-                contentDescription = "Forward 30 seconds",
+                icon = skipForwardIcon(skipIntervalMs),
+                contentDescription = "Forward ${formatSkipInterval(skipIntervalMs)}",
                 enabled = playerState.hasMedia,
                 size = 46.dp,
-            ) { playbackController.skipBy(30_000) }
+            ) { playbackController.skipBy(skipIntervalMs) }
             TransportIconButton(
                 icon = Icons.Default.SkipNext,
                 contentDescription = "Next chapter",
@@ -818,11 +959,25 @@ private fun PlayerScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
-                onClick = { playbackController.setSpeed(nextSpeed(playerState.speed)) },
-                enabled = playerState.hasMedia,
-            ) {
-                Text("SPEED ${formatSpeed(playerState.speed)}")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
+                // cycle-only button.
+                TextButton(onClick = { showSpeed = true }) {
+                    Text("SPEED ${formatSpeed(playerState.speed)}")
+                }
+                TextButton(
+                    onClick = { showSleepTimer = true },
+                    enabled = playerState.hasMedia || sleepTimerState.isArmed,
+                ) {
+                    Text(
+                        text = if (sleepTimerState.isArmed) {
+                            "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
+                        } else {
+                            "SLEEP"
+                        },
+                        color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
+                    )
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (jumpBackOptions.isNotEmpty()) {
@@ -836,6 +991,50 @@ private fun PlayerScreen(
                     }
                 }
             }
+        }
+    }
+
+    if (showSpeed) {
+        ModalBottomSheet(
+            onDismissRequest = { showSpeed = false },
+            containerColor = AarisColor.BgRaise,
+        ) {
+            MetaText(
+                text = "// Playback speed",
+                color = AarisColor.Accent,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+            )
+            SpeedPresets.forEach { preset ->
+                val selected = kotlin.math.abs(preset - playerState.speed) < 0.01f
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                playbackController.setSpeed(preset)
+                                showSpeed = false
+                            }
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = formatSpeed(preset),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (selected) AarisColor.Accent else AarisColor.Ink,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (selected) {
+                            MetaText(text = "Current", color = AarisColor.Accent)
+                        }
+                    }
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                }
+            }
+            MetaText(
+                text = "// Kept across restarts and reboots",
+                color = AarisColor.Dim,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            )
         }
     }
 
@@ -890,6 +1089,64 @@ private fun PlayerScreen(
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 }
             }
+        }
+    }
+
+    if (showSleepTimer) {
+        ModalBottomSheet(
+            onDismissRequest = { showSleepTimer = false },
+            containerColor = AarisColor.BgRaise,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MetaText(text = "// Sleep timer", color = AarisColor.Accent)
+                if (sleepTimerState.isArmed) {
+                    TextButton(onClick = {
+                        sleepTimer.cancel()
+                        showSleepTimer = false
+                    }) {
+                        Text("CANCEL")
+                    }
+                }
+            }
+            if (sleepTimerState.isArmed) {
+                MetaText(
+                    text = when (sleepTimerState.mode) {
+                        SleepTimerMode.EndOfChapter ->
+                            "// Stopping at the end of this chapter · " +
+                                "${formatDuration(sleepTimerState.remainingMs)} left"
+                        else -> "// Stopping in ${formatDuration(sleepTimerState.remainingMs)}"
+                    },
+                    color = AarisColor.Muted,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+                )
+            }
+            // Only offered once the chapter's duration is known — without it there is no boundary
+            // to stop at, and the timer would fire the moment it was armed.
+            if (playerState.durationMs > 0L) {
+                SleepTimerOption(label = "End of current chapter") {
+                    sleepTimer.armEndOfChapter(
+                        (playerState.durationMs - playerState.positionMs).coerceAtLeast(0L),
+                    )
+                    showSleepTimer = false
+                }
+            }
+            SleepTimerController.DurationOptionsMinutes.forEach { minutes ->
+                SleepTimerOption(label = "$minutes minutes") {
+                    sleepTimer.armDuration(minutes * 60_000L)
+                    showSleepTimer = false
+                }
+            }
+            MetaText(
+                text = "// Fades out over the last 30s — shake to add 5 minutes",
+                color = AarisColor.Dim,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            )
         }
     }
 
@@ -1004,6 +1261,21 @@ private fun PlayerScreen(
     }
 }
 
+/** One row of the sleep-timer sheet, styled like the chapter rows above it. */
+@Composable
+private fun SleepTimerOption(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.titleMedium,
+        color = AarisColor.Ink,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+    )
+    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+}
+
 /**
  * Fast path: seek within the loaded queue. Otherwise (queue was cleared — e.g. a
  * sleep-tracker stopped playback overnight) reload the fiction and start at the exact
@@ -1037,6 +1309,8 @@ private fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     var isBusy by remember { mutableStateOf(false) }
 
     // Re-read on resume so returning from system settings reflects the new state.
@@ -1091,6 +1365,98 @@ private fun SettingsScreen(
                         shape = RectangleShape,
                     ) {
                         Text("OPEN NOTIFICATION SETTINGS")
+                    }
+                }
+            }
+        }
+
+        MetaText(text = "// Playback", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MetaText(text = "Skip interval")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SkipIntervalOptionsMs.forEach { option ->
+                        val selected = option == prefs.skipIntervalMs
+                        OutlinedButton(
+                            onClick = { scope.launch { preferences.setSkipIntervalMs(option) } },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(formatSkipInterval(option))
+                        }
+                    }
+                }
+                MetaText(
+                    text = "Used by the player, the mini player, and the lockscreen buttons.",
+                    color = AarisColor.Dim,
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                SettingsItem(label = "Playback speed", value = formatSpeed(prefs.speed))
+                MetaText(
+                    text = "Change it from the player; it is kept across restarts and reboots.",
+                    color = AarisColor.Dim,
+                )
+            }
+        }
+
+        MetaText(text = "// Audio", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        MetaText(text = "Skip silence")
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(
+                            text = "Shortens the long pauses synthesised speech leaves around " +
+                                "headings and scene breaks. Turn off to keep dramatic pauses.",
+                            color = AarisColor.Dim,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = prefs.skipSilence,
+                        onCheckedChange = { scope.launch { preferences.setSkipSilence(it) } },
+                    )
+                }
+
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
+                MetaText(text = "Volume boost")
+                MetaText(
+                    text = "Lifts chapters converted at a lower level, so a quiet one does not " +
+                        "mean reaching for the volume.",
+                    color = AarisColor.Dim,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    VolumeBoost.entries.forEach { option ->
+                        val selected = option == prefs.volumeBoost
+                        OutlinedButton(
+                            onClick = { scope.launch { preferences.setVolumeBoost(option) } },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(option.label)
+                        }
                     }
                 }
             }
@@ -1151,6 +1517,7 @@ private fun updateStatusText(state: UpdateState): Pair<String, Boolean>? = when 
 private fun MiniPlayerBar(
     state: PlayerUiState,
     playbackController: PlaybackController,
+    skipIntervalMs: Long,
     onExpand: () -> Unit,
 ) {
     val fraction = if (state.durationMs > 0) state.positionMs.toFloat() / state.durationMs else 0f
@@ -1162,6 +1529,24 @@ private fun MiniPlayerBar(
     ) {
         HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
         ThinProgress(fraction = fraction, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+        // The mini bar is the only player surface visible on the library and fiction screens, so a
+        // stream that died has to be visible from here too — otherwise playback just looks stopped.
+        state.error?.let { message ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(AarisColor.BgHover)
+                    .padding(start = 12.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MetaText(
+                    text = message,
+                    color = AarisColor.Danger,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = playbackController::retry) { Text("RETRY") }
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1195,11 +1580,11 @@ private fun MiniPlayerBar(
             }
             Spacer(modifier = Modifier.width(12.dp))
             TransportIconButton(
-                icon = Icons.Default.Replay30,
-                contentDescription = "Back 30 seconds",
+                icon = skipBackIcon(skipIntervalMs),
+                contentDescription = "Back ${formatSkipInterval(skipIntervalMs)}",
                 enabled = state.hasMedia,
                 size = 42.dp,
-            ) { playbackController.skipBy(-30_000) }
+            ) { playbackController.skipBy(-skipIntervalMs) }
             Spacer(modifier = Modifier.width(8.dp))
             TransportIconButton(
                 icon = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -1208,6 +1593,30 @@ private fun MiniPlayerBar(
                 size = 42.dp,
                 filled = true,
             ) { playbackController.togglePlayPause() }
+        }
+    }
+}
+
+/**
+ * Shown when the player stopped on an error. The service retries transient failures on its own, so
+ * by the time this stays on screen the automatic attempts have already been spent — RETRY is the
+ * manual escalation, not the first line of defence.
+ */
+@Composable
+private fun PlaybackErrorBanner(message: String, onRetry: () -> Unit) {
+    AarisCard {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(
+                text = message,
+                color = AarisColor.Danger,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onRetry) { Text("RETRY") }
         }
     }
 }
@@ -1547,31 +1956,26 @@ private fun chapterNumberLabel(chapter: ChapterSummary): String {
 @Composable
 private fun FictionsScreen(
     padding: PaddingValues,
-    repository: TtsRoadRepository,
     onOpenFiction: (FictionSummary) -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
-    var state by remember { mutableStateOf<LoadState<List<FictionSummary>>>(LoadState.Loading) }
-    var query by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val cache = remember { ServiceLocator.libraryCache(context) }
+    val state by cache.library.collectAsStateWithLifecycle()
+    // Saveable so the browse position and filter survive a trip into a fiction and back.
+    var query by rememberSaveable { mutableStateOf("") }
 
-    fun refresh() {
-        scope.launch {
-            state = LoadState.Loading
-            state = runCatching { repository.library().fictions }
-                .fold(
-                    onSuccess = { LoadState.Loaded(it) },
-                    onFailure = { LoadState.Error(it.message ?: "Could not load fictions") },
-                )
-        }
-    }
+    LaunchedEffect(Unit) { cache.ensureLibrary() }
 
-    LaunchedEffect(Unit) { refresh() }
+    val fictions = state.value?.fictions
+    when {
+        fictions == null && state.isInitialLoad -> LoadingPane(padding)
+        fictions == null -> ErrorPane(
+            padding = padding,
+            message = state.error ?: "Could not load fictions",
+            onRetry = cache::refreshLibrary,
+        )
 
-    when (val s = state) {
-        LoadState.Loading -> LoadingPane(padding)
-        is LoadState.Error -> ErrorPane(padding = padding, message = s.message, onRetry = ::refresh)
-        is LoadState.Loaded -> {
-            val fictions = s.value
+        else -> {
             val filtered = remember(fictions, query) {
                 val q = query.trim().lowercase()
                 if (q.isBlank()) {
@@ -1584,36 +1988,39 @@ private fun FictionsScreen(
                     }
                 }
             }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
+            RefreshablePane(
+                padding = padding,
+                isRefreshing = state.isRefreshing,
+                error = state.error,
+                onRefresh = cache::refreshLibrary,
             ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                )
-                if (filtered.isEmpty()) {
-                    Box(modifier = Modifier.padding(16.dp)) {
-                        EmptyCard(
-                            if (query.isBlank()) "No fictions found" else "No matches for \"$query\"",
-                        )
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 158.dp),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(filtered, key = { it.id }) { fiction ->
-                            FictionGridCard(fiction = fiction, onClick = { onOpenFiction(fiction) })
+                Column(modifier = Modifier.fillMaxSize()) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                    )
+                    if (filtered.isEmpty()) {
+                        Box(modifier = Modifier.padding(16.dp)) {
+                            EmptyCard(
+                                if (query.isBlank()) "No fictions found" else "No matches for \"$query\"",
+                            )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 158.dp),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            items(filtered, key = { it.id }) { fiction ->
+                                FictionGridCard(fiction = fiction, onClick = { onOpenFiction(fiction) })
+                            }
                         }
                     }
                 }
@@ -1782,9 +2189,10 @@ private fun CoverFill(imageUrl: String?, fallback: String, modifier: Modifier, b
             .let { if (bordered) it.border(1.dp, AarisColor.Line) else it },
         contentAlignment = Alignment.Center,
     ) {
-        if (!imageUrl.isNullOrBlank()) {
+        val model = ServerUrls.rewriteHostOrNull(imageUrl, LocalServerUrl.current)
+        if (model != null) {
             AsyncImage(
-                model = imageUrl,
+                model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -1808,9 +2216,10 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
             .border(1.dp, AarisColor.Line),
         contentAlignment = Alignment.Center,
     ) {
-        if (!imageUrl.isNullOrBlank()) {
+        val model = ServerUrls.rewriteHostOrNull(imageUrl, LocalServerUrl.current)
+        if (model != null) {
             AsyncImage(
-                model = imageUrl,
+                model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -1926,11 +2335,21 @@ private fun formatDuration(ms: Long): String {
     }
 }
 
-private val SpeedPresets = listOf(0.8f, 1.0f, 1.2f, 1.5f, 1.75f, 2.0f)
+/**
+ * Material ships replay/forward glyphs for 5, 10 and 30 seconds only, so 15 / 45 / 60s have no exact
+ * icon. Use the nearest one and let the content description carry the real value — a screen reader
+ * gets the truth even where the glyph rounds.
+ */
+private fun skipBackIcon(skipIntervalMs: Long): ImageVector = when {
+    skipIntervalMs <= 7_500L -> Icons.Default.Replay5
+    skipIntervalMs <= 20_000L -> Icons.Default.Replay10
+    else -> Icons.Default.Replay30
+}
 
-private fun nextSpeed(current: Float): Float {
-    val index = SpeedPresets.indexOfFirst { kotlin.math.abs(it - current) < 0.01f }
-    return if (index < 0) 1.0f else SpeedPresets[(index + 1) % SpeedPresets.size]
+private fun skipForwardIcon(skipIntervalMs: Long): ImageVector = when {
+    skipIntervalMs <= 7_500L -> Icons.Default.Forward5
+    skipIntervalMs <= 20_000L -> Icons.Default.Forward10
+    else -> Icons.Default.Forward30
 }
 
 private fun formatSpeed(speed: Float): String {
