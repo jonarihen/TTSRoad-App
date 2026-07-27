@@ -116,7 +116,7 @@ object TtsRoadMediaItems {
             .setIsPlayable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS)
 
-        ServerUrls.rewriteHostOrNull(fiction.coverImageUrl, serverUrl)
+        ServerUrls.resolveCoverOrNull(fiction.coverImageUrl, serverUrl)
             ?.let { metadataBuilder.setArtworkUri(it.toUri()) }
 
         return MediaItem.Builder()
@@ -156,7 +156,7 @@ object TtsRoadMediaItems {
             .setIsPlayable(true)
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
 
-        ServerUrls.rewriteHostOrNull(cover, serverUrl)?.let { metadataBuilder.setArtworkUri(it.toUri()) }
+        ServerUrls.resolveCoverOrNull(cover, serverUrl)?.let { metadataBuilder.setArtworkUri(it.toUri()) }
         durationMs?.let { metadataBuilder.setDurationMs(it) }
 
         return MediaItem.Builder()
@@ -171,4 +171,3 @@ object TtsRoadMediaItems {
             .build()
     }
 }
-

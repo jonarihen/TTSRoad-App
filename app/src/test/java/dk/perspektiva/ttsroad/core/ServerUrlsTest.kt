@@ -76,4 +76,40 @@ class ServerUrlsTest {
             ServerUrls.rewriteHostOrNull("https://base.example/cover.jpg", "https://host.example/"),
         )
     }
+
+    @Test
+    fun `external cover keeps its original host`() {
+        assertEquals(
+            "https://www.royalroadcdn.com/public/covers-full/example.jpg",
+            ServerUrls.resolveCoverOrNull(
+                "https://www.royalroadcdn.com/public/covers-full/example.jpg",
+                "https://ttsroad.example.com/",
+            ),
+        )
+    }
+
+    @Test
+    fun `server-owned absolute cover follows the connected host`() {
+        assertEquals(
+            "https://ttsroad.example.com/cover/book.jpg",
+            ServerUrls.resolveCoverOrNull(
+                "https://configured.example.com/cover/book.jpg",
+                "https://ttsroad.example.com/",
+            ),
+        )
+    }
+
+    @Test
+    fun `relative cover resolves against the connected host`() {
+        assertEquals(
+            "https://ttsroad.example.com/cover/book.jpg",
+            ServerUrls.resolveCoverOrNull("/cover/book.jpg", "https://ttsroad.example.com/"),
+        )
+    }
+
+    @Test
+    fun `resolveCoverOrNull rejects missing cover values`() {
+        assertNull(ServerUrls.resolveCoverOrNull(null, "https://ttsroad.example.com/"))
+        assertNull(ServerUrls.resolveCoverOrNull("   ", "https://ttsroad.example.com/"))
+    }
 }

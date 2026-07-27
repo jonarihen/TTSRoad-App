@@ -50,12 +50,16 @@ is what lets them share one repository and one token store.
 instantiate a player in the UI layer. Consequence: OS media controls, the notification, audio focus,
 and Android Auto all act on the same session and queue.
 
-**Auth has two paths.**
+**Auth has three paths.**
 - API calls: `TtsRoadRepository` keeps *one* `OkHttpClient` with an interceptor reading a volatile
   `authHeader`, plus a per-base-URL Retrofit cache. Building a client per call was a real bug
   (fresh TLS handshake on every 15s progress save) — keep the sharing.
 - Audio streaming: `ResolvingDataSource` in the service injects `Authorization` per request from the
   latest session token, so login/logout does not require recreating the player.
+- Cover images: Coil uses a dedicated client that injects `Authorization` only when the request
+  origin exactly matches the signed-in TTSRoad server. Royal Road/CDN URLs must remain on their
+  original host and must never receive the bearer token. Use `ServerUrls.resolveCoverOrNull` for
+  artwork; `rewriteHost` is only for known server-owned media such as audio.
 
 **MediaItem contract** (`media/TtsRoadMediaItems`) — the glue between screens, the car, and the service:
 - media id `chapter:<chapter_id>` / `fiction:<fiction_id>`; browse roots `root`, `continue`,

@@ -2469,19 +2469,18 @@ private fun CoverFill(imageUrl: String?, fallback: String, modifier: Modifier, b
             .let { if (bordered) it.border(1.dp, AarisColor.Line) else it },
         contentAlignment = Alignment.Center,
     ) {
-        val model = ServerUrls.rewriteHostOrNull(imageUrl, LocalServerUrl.current)
+        val model = ServerUrls.resolveCoverOrNull(imageUrl, LocalServerUrl.current)
+        Text(
+            text = fallback.trim().take(1).uppercase().ifBlank { "T" },
+            style = MaterialTheme.typography.displaySmall,
+            color = AarisColor.Accent,
+        )
         if (model != null) {
             AsyncImage(
                 model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Text(
-                text = fallback.trim().take(1).uppercase().ifBlank { "T" },
-                style = MaterialTheme.typography.displaySmall,
-                color = AarisColor.Accent,
             )
         }
     }
@@ -2496,19 +2495,18 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
             .border(1.dp, AarisColor.Line),
         contentAlignment = Alignment.Center,
     ) {
-        val model = ServerUrls.rewriteHostOrNull(imageUrl, LocalServerUrl.current)
+        val model = ServerUrls.resolveCoverOrNull(imageUrl, LocalServerUrl.current)
+        Text(
+            text = fallback.trim().take(1).uppercase().ifBlank { "T" },
+            style = MaterialTheme.typography.headlineSmall,
+            color = AarisColor.Accent,
+        )
         if (model != null) {
             AsyncImage(
                 model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Text(
-                text = fallback.trim().take(1).uppercase().ifBlank { "T" },
-                style = MaterialTheme.typography.headlineSmall,
-                color = AarisColor.Accent,
             )
         }
     }

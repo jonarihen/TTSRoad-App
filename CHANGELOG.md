@@ -2,6 +2,18 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.7.2 — 2026-07-27
+
+### Cover artwork hotfix
+
+- Fixes every Royal Road cover rendering as a black tile. Absolute third-party cover URLs were
+  incorrectly rewritten onto the TTSRoad server, where they returned 404.
+- The image client now sends the bearer token only to the exact TTSRoad server origin; external
+  artwork hosts never receive it.
+- A failed or unavailable image now leaves the fiction's letter tile visible instead of an empty
+  black rectangle.
+- Signed with the same pinned key as 0.7.0 and 0.7.1, so it installs directly over either release.
+
 ## 0.7.1 — 2026-07-27
 
 ### Startup crash hotfix
