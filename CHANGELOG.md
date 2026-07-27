@@ -2,6 +2,19 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### No more full-screen spinner on every back-navigation
+
+- **Going back to the library shows it instantly.** Screen data now lives above the screens, so
+  leaving a screen no longer destroys it and returning no longer refetches from a blank spinner.
+  The refresh still happens - underneath the content, as a hairline progress strip.
+- **Marking a chapter played updates that row only.** It used to reload the whole list, tearing down
+  a 500-row chapter list and dropping you back at the top, for the sake of one checkmark.
+- **Pull-to-refresh** on the library, all-fictions and fiction screens.
+- A refresh that fails while content is already loaded now shows a one-line notice instead of
+  replacing a perfectly readable library with an error page.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
