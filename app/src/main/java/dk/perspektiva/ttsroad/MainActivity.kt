@@ -5,7 +5,9 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -95,6 +97,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import java.time.Instant
@@ -213,9 +216,18 @@ private fun TtsRoadApp(
     var screen by remember { mutableStateOf<AppScreen>(AppScreen.Library) }
     var openPlayerPending by remember { mutableStateOf(startOnPlayer) }
 
+    // Denial is not an error path: playback still works, and Settings explains what is missing.
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+
     LaunchedEffect(session.isLoggedIn) {
         if (session.isLoggedIn) {
             playbackController.connect()
+            // Ask once playback becomes possible, so the rationale for the prompt is obvious.
+            if (needsNotificationPermission(context)) {
+                notificationPermissionLauncher.launch(PostNotificationsPermission)
+            }
         } else {
             screen = AppScreen.Library
             playbackController.stop()
@@ -1301,6 +1313,13 @@ private fun SettingsScreen(
     val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     var isBusy by remember { mutableStateOf(false) }
 
+    // Re-read on resume so returning from system settings reflects the new state.
+    var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
+    LifecycleResumeEffect(Unit) {
+        notificationsOn = notificationsEnabled(context)
+        onPauseOrDispose { }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1322,6 +1341,32 @@ private fun SettingsScreen(
                 SettingsItem(label = "User", value = session.username.orEmpty())
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
+            }
+        }
+
+        if (!notificationsOn) {
+            MetaText(text = "// Notifications", color = AarisColor.Accent)
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MetaText(
+                        text = "Notifications are off — lockscreen and shade controls " +
+                            "will not appear during playback.",
+                        color = AarisColor.Danger,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            context.startActivity(appNotificationSettingsIntent(context.packageName))
+                        },
+                        shape = RectangleShape,
+                    ) {
+                        Text("OPEN NOTIFICATION SETTINGS")
+                    }
+                }
             }
         }
 

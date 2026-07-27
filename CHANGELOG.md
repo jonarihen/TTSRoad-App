@@ -92,6 +92,14 @@ Notable changes to the TTSRoad Android client.
   screen off. Pausing by hand freezes the countdown rather than spending it; pressing play
   resumes where it left off.
 
+### Lockscreen and notification controls on Android 13+
+
+- The app now **asks for notification access** after you sign in. Android 13 and newer default it
+  to denied, which silently suppressed the media notification — so playback had no controls in the
+  notification shade or on the lockscreen, and no way to pause without opening the app.
+- If you decline, playback is unaffected and **Settings** explains what is missing, with a button
+  that opens the app's notification settings.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
