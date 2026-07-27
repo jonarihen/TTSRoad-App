@@ -1,16 +1,20 @@
 package dk.perspektiva.ttsroad.media
 
+import android.app.PendingIntent
 import android.content.Context
 import android.media.AudioManager
 import android.media.audiofx.LoudnessEnhancer
+import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -19,19 +23,29 @@ import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
+import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import dk.perspektiva.ttsroad.MainActivity
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
+import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
+import dk.perspektiva.ttsroad.player.PlaybackFailure
+import dk.perspektiva.ttsroad.player.classifyPlaybackError
+import dk.perspektiva.ttsroad.player.retryDelayMs
+import dk.perspektiva.ttsroad.player.skipTargetMs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -52,9 +66,20 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var session: MediaLibrarySession
     private var lastLibrary: LibraryResponse? = null
 
+    // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
+    // outage later in the night gets a fresh set of attempts rather than giving up immediately.
+    private var retryJob: Job? = null
+    private var retryAttempt = 0
+
     @Volatile
     private var authHeader: String? = null
 
+    // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
+    // and car transport read the preference from here rather than the DataStore.
+    @Volatile
+    private var skipIntervalMs: Long = DefaultSkipIntervalMs
+
+    @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
         tokenStore = ServiceLocator.tokenStore(this)
@@ -65,11 +90,32 @@ class TtsRoadMediaService : MediaLibraryService() {
         }
         player = createPlayer()
         startAudioTuning()
+        // Speed lives in the service, not the UI: the player is recreated on a swipe-away, a
+        // process kill, or a reboot, and the car can start playback with no UI running at all.
+        // Applying it here is what makes it survive all three.
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.speed }
+                .distinctUntilChanged()
+                .collect { player.setPlaybackSpeed(it) }
+        }
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.skipIntervalMs }
+                .distinctUntilChanged()
+                .collect { skipIntervalMs = it }
+        }
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
                         serviceScope.launch { saveCurrentProgress(forcePlayed = true) }
+                    }
+                    // Playing again means whatever broke has healed, so the next failure starts
+                    // its backoff from the top rather than inheriting an exhausted counter.
+                    if (playbackState == Player.STATE_READY) {
+                        retryAttempt = 0
+                        retryJob?.cancel()
                     }
                 }
 
@@ -78,10 +124,17 @@ class TtsRoadMediaService : MediaLibraryService() {
                         serviceScope.launch { saveCurrentProgress(forcePlayed = false) }
                     }
                 }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    handlePlayerError(error)
+                }
             },
         )
         startProgressTicker()
-        session = MediaLibrarySession.Builder(this, player, BrowserCallback(this)).build()
+        session = MediaLibrarySession.Builder(this, player, BrowserCallback(this))
+            .setSessionActivity(playerActivityIntent())
+            .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
@@ -96,6 +149,15 @@ class TtsRoadMediaService : MediaLibraryService() {
         serviceScope.cancel()
         super.onDestroy()
     }
+
+    // Content intent for the media notification and the car's "open app" affordance. Without it the
+    // notification body is not clickable at all.
+    private fun playerActivityIntent(): PendingIntent = PendingIntent.getActivity(
+        this,
+        0,
+        MainActivity.playerIntent(this),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     private fun createPlayer(): ExoPlayer {
         // The Authorization header is resolved per-request from the latest session token, so the
@@ -168,6 +230,56 @@ class TtsRoadMediaService : MediaLibraryService() {
         runCatching {
             enhancer.setTargetGain(boost.gainMillibels)
             enhancer.enabled = boost != VolumeBoost.Off
+        }
+    }
+
+    /**
+     * Decide what a playback failure means and act on it.
+     *
+     * This has to live in the service: a [PlaybackException] relayed to a controller across the
+     * binder keeps its `errorCode` but loses its cause, so the HTTP status — the thing that tells a
+     * revoked token apart from a server hiccup — is only readable here.
+     *
+     * Opted in because HttpDataSource is still marked unstable in media3 1.10.0.
+     */
+    @OptIn(UnstableApi::class)
+    private fun handlePlayerError(error: PlaybackException) {
+        val httpStatus = generateSequence(error.cause) { it.cause }
+            .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
+            .firstOrNull()
+            ?.responseCode
+
+        when (classifyPlaybackError(error.errorCode, httpStatus)) {
+            PlaybackFailure.Unauthorized -> {
+                // Same conclusion as a 401 on an API call: the stored token cannot be used again,
+                // so drop it and let the session observer fall back to the login screen. Retrying
+                // would just burn battery against a server that will keep saying no.
+                retryJob?.cancel()
+                retryAttempt = 0
+                serviceScope.launch { tokenStore.clearToken() }
+            }
+
+            is PlaybackFailure.Transient -> scheduleRetry()
+
+            is PlaybackFailure.Permanent -> {
+                retryJob?.cancel()
+                retryAttempt = 0
+            }
+        }
+    }
+
+    /**
+     * Re-prepare after a backoff so a tunnel or a Wi-Fi handover heals without the user touching
+     * anything. Deliberately does not call play(): prepare() resumes on its own when playWhenReady
+     * was set, so a stream that died while paused stays paused.
+     */
+    private fun scheduleRetry() {
+        val delayMs = retryDelayMs(retryAttempt + 1) ?: return
+        retryAttempt++
+        retryJob?.cancel()
+        retryJob = serviceScope.launch {
+            delay(delayMs)
+            player.prepare()
         }
     }
 
@@ -264,6 +376,48 @@ class TtsRoadMediaService : MediaLibraryService() {
         )
     }
 
+    /**
+     * Resolve a spoken query to a fiction and return its queue positioned at the resume point.
+     *
+     * Deliberately refuses a weak match: starting an unrelated book because a misheard query
+     * happened to share a tag is worse, while driving, than the request simply not working.
+     */
+    private suspend fun queueForSpokenQuery(
+        query: String,
+    ): MediaSession.MediaItemsWithStartPosition? {
+        val library = library() ?: return null
+        val fiction = resolveSpokenFiction(library.fictions, query) ?: return null
+        return buildFictionQueue(fiction.id, resumeChapterId(library, fiction.id))
+    }
+
+    /**
+     * Where to start a fiction the user asked for by name: wherever they left off, or the first
+     * chapter. 0 is a safe fallback — [buildFictionQueue] coerces an unmatched id to the start.
+     */
+    private fun resumeChapterId(library: LibraryResponse, fictionId: Int): Int =
+        library.continueListening
+            .firstOrNull { it.resolvedFictionId == fictionId }
+            ?.resolvedChapterId
+            ?: 0
+
+    /** Fictions and chapters matching a car search, as browse items. */
+    private suspend fun searchItems(query: String): List<MediaItem> {
+        val library = library() ?: return emptyList()
+        val serverUrl = serverUrl()
+        val fictions = searchFictions(library.fictions, query)
+        val chapters = searchChapters(
+            library.continueListening + library.recentChapters,
+            query,
+        ).distinctBy { it.resolvedChapterId }
+
+        return fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) } +
+            chapters.mapNotNull { chapter ->
+                val fiction = chapter.fiction
+                    ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
+                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
+            }
+    }
+
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
         val library = library() ?: return null
@@ -275,6 +429,43 @@ class TtsRoadMediaService : MediaLibraryService() {
     private class BrowserCallback(
         private val service: TtsRoadMediaService,
     ) : MediaLibrarySession.Callback {
+        // The 30-second skips are custom commands, so every controller — the notification, the
+        // lockscreen, Android Auto — has to be granted them explicitly or their buttons arrive
+        // disabled.
+        @OptIn(UnstableApi::class)
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult =
+            MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+                        .buildUpon()
+                        .add(TtsRoadSessionCommands.skipBackCommand)
+                        .add(TtsRoadSessionCommands.skipForwardCommand)
+                        .build(),
+                )
+                .build()
+
+        @OptIn(UnstableApi::class)
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            val delta = when (customCommand.customAction) {
+                TtsRoadSessionCommands.SkipBack -> -service.skipIntervalMs
+                TtsRoadSessionCommands.SkipForward -> service.skipIntervalMs
+                else -> return Futures.immediateFuture(
+                    SessionResult(SessionError.ERROR_NOT_SUPPORTED),
+                )
+            }
+            val player = session.player
+            player.seekTo(skipTargetMs(player.currentPosition, player.duration, delta))
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
@@ -311,6 +502,16 @@ class TtsRoadMediaService : MediaLibraryService() {
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
             service.serviceScope.future {
                 val single = mediaItems.singleOrNull()
+
+                // "Hey Google, play Ashes of Aether on TTSRoad" arrives as a single item carrying
+                // only the spoken query — no media id, no extras. Resolve it to a fiction and start
+                // it at its resume point, which is the only safe way to start something new while
+                // driving.
+                val spoken = single?.requestMetadata?.searchQuery
+                if (!spoken.isNullOrBlank()) {
+                    service.queueForSpokenQuery(spoken)?.let { return@future it }
+                }
+
                 val extras = single?.mediaMetadata?.extras
                 val fictionId = extras?.getInt("fiction_id", 0)?.takeIf { it > 0 }
                 val chapterId = extras?.getInt("chapter_id", 0)?.takeIf { it > 0 }
@@ -335,6 +536,44 @@ class TtsRoadMediaService : MediaLibraryService() {
                 service.resumeQueue() ?: throw UnsupportedOperationException("Nothing to resume")
             }
 
+        // Media3 splits searching in two: onSearch does the work and reports how many results
+        // exist, then the browser asks for the page it wants. The result is cached between the two
+        // so the library is not fetched and matched twice per spoken search.
+        private var cachedQuery: String? = null
+        private var cachedResults: List<MediaItem> = emptyList()
+
+        private suspend fun results(query: String): List<MediaItem> {
+            if (query == cachedQuery) return cachedResults
+            val found = service.searchItems(query)
+            cachedQuery = query
+            cachedResults = found
+            return found
+        }
+
+        override fun onSearch(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<Void>> =
+            service.serviceScope.future {
+                val found = results(query)
+                session.notifySearchResultChanged(browser, query, found.size, params)
+                LibraryResult.ofVoid()
+            }
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
+            service.serviceScope.future {
+                LibraryResult.ofItemList(page(results(query), page, pageSize), params)
+            }
+
         override fun onGetChildren(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
@@ -352,8 +591,25 @@ class TtsRoadMediaService : MediaLibraryService() {
                     parentId.startsWith(TtsRoadMediaIds.FictionPrefix) -> fictionChildren(parentId)
                     else -> emptyList()
                 }
-                LibraryResult.ofItemList(page(items, page, pageSize), params)
+                LibraryResult.ofItemList(page(items, page, pageSize), styleFor(parentId, params))
             }
+
+        /**
+         * How the car should draw this node's children. Fictions are cover-led and read far better
+         * as a grid; everything else is an ordered list where the title carries the meaning.
+         *
+         * The hints ride on the returned [LibraryParams], which is where a media browser looks for
+         * per-node styling.
+         */
+        private fun styleFor(parentId: String, params: LibraryParams?): LibraryParams {
+            val grid = parentId == TtsRoadMediaIds.Fictions
+            return LibraryParams.Builder()
+                .setExtras(TtsRoadMediaItems.contentStyle(browsableGrid = grid, playableGrid = false))
+                .setRecent(params?.isRecent == true)
+                .setOffline(params?.isOffline == true)
+                .setSuggested(params?.isSuggested == true)
+                .build()
+        }
 
         private fun rootChildren(): List<MediaItem> = listOf(
             TtsRoadMediaItems.folder(
@@ -384,7 +640,8 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         private suspend fun fictionFolders(): List<MediaItem> {
             val library = service.library() ?: return emptyList()
-            return library.fictions.map(TtsRoadMediaItems::fictionFolder)
+            val serverUrl = service.serverUrl()
+            return library.fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) }
         }
 
         private suspend fun recentItems(): List<MediaItem> {
