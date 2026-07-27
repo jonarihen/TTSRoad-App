@@ -45,6 +45,12 @@ data class PlayerUiState(
     val currentIndex: Int = 0,
     val hasNext: Boolean = false,
     val hasPrevious: Boolean = false,
+    /**
+     * Set while the player is stopped on an error. Clears on its own once playback recovers —
+     * including when the service's automatic retry succeeds, which is the common case for a tunnel
+     * or a Wi-Fi handover.
+     */
+    val error: String? = null,
 )
 
 /**
@@ -221,6 +227,17 @@ class PlaybackController(
         return false
     }
 
+    /**
+     * Re-prepare after a failure the automatic retries gave up on. Does not call play(): prepare()
+     * resumes on its own when playWhenReady was set, so a stream that died while paused stays
+     * paused rather than starting up unasked.
+     */
+    fun retry() {
+        val controller = controller ?: return
+        controller.prepare()
+        publishState(controller)
+    }
+
     fun setSpeed(speed: Float) {
         val controller = controller ?: return
         controller.setPlaybackSpeed(speed)
@@ -296,6 +313,9 @@ class PlaybackController(
             currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
             hasNext = player.hasNextMediaItem(),
             hasPrevious = player.hasPreviousMediaItem(),
+            // The cause does not survive the binder, so the HTTP status is unavailable here; the
+            // service reads it from the real exception and handles the 401 case there.
+            error = player.playerError?.let { classifyPlaybackError(it.errorCode).message },
         )
     }
 }
