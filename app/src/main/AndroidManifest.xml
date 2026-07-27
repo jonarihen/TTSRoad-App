@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Volume boost: attaching a LoudnessEnhancer to the player's audio session needs this.
+         Normal permission, granted at install, so there is nothing to request at runtime. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- In-app self-updater: install a downloaded APK from GitHub Releases. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 

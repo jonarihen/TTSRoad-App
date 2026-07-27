@@ -66,6 +66,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -114,6 +115,7 @@ import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SpeedPresets
+import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.formatSkipInterval
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.player.HistorySnapshot
@@ -1263,6 +1265,61 @@ private fun SettingsScreen(
                     text = "Change it from the player; it is kept across restarts and reboots.",
                     color = AarisColor.Dim,
                 )
+            }
+        }
+
+        MetaText(text = "// Audio", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        MetaText(text = "Skip silence")
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(
+                            text = "Shortens the long pauses synthesised speech leaves around " +
+                                "headings and scene breaks. Turn off to keep dramatic pauses.",
+                            color = AarisColor.Dim,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = prefs.skipSilence,
+                        onCheckedChange = { scope.launch { preferences.setSkipSilence(it) } },
+                    )
+                }
+
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
+                MetaText(text = "Volume boost")
+                MetaText(
+                    text = "Lifts chapters converted at a lower level, so a quiet one does not " +
+                        "mean reaching for the volume.",
+                    color = AarisColor.Dim,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    VolumeBoost.entries.forEach { option ->
+                        val selected = option == prefs.volumeBoost
+                        OutlinedButton(
+                            onClick = { scope.launch { preferences.setVolumeBoost(option) } },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(option.label)
+                        }
+                    }
+                }
             }
         }
 

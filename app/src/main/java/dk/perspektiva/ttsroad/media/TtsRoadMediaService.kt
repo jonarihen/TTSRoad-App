@@ -1,6 +1,9 @@
 package dk.perspektiva.ttsroad.media
 
 import android.app.PendingIntent
+import android.content.Context
+import android.media.AudioManager
+import android.media.audiofx.LoudnessEnhancer
 import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -35,6 +38,7 @@ import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.player.PlaybackFailure
 import dk.perspektiva.ttsroad.player.classifyPlaybackError
 import dk.perspektiva.ttsroad.player.retryDelayMs
@@ -58,6 +62,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var repository: TtsRoadRepository
     private lateinit var preferences: PlaybackPreferences
     private lateinit var player: ExoPlayer
+    private var loudnessEnhancer: LoudnessEnhancer? = null
     private lateinit var session: MediaLibrarySession
     private var lastLibrary: LibraryResponse? = null
 
@@ -84,6 +89,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
         }
         player = createPlayer()
+        startAudioTuning()
         // Speed lives in the service, not the UI: the player is recreated on a swipe-away, a
         // process kill, or a reboot, and the car can start playback with no UI running at all.
         // Applying it here is what makes it survive all three.
@@ -134,6 +140,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
+        // Release the effect before the player: it is attached to the player's audio session, and
+        // leaking an AudioEffect holds a global slot other apps then cannot use.
+        runCatching { loudnessEnhancer?.release() }
+        loudnessEnhancer = null
         session.release()
         player.release()
         serviceScope.cancel()
@@ -173,6 +183,54 @@ class TtsRoadMediaService : MediaLibraryService() {
             )
             .setHandleAudioBecomingNoisy(true)
             .build()
+    }
+
+    /**
+     * Apply the two TTS-specific audio settings, and keep applying them as they change.
+     *
+     * The player is recreated on a swipe-away, a process kill and a reboot, so this has to live in
+     * the service rather than the UI — the car can start playback with no UI running at all.
+     *
+     * The audio session id is generated here and set on the player rather than read back from it.
+     * That way the id is fixed for the life of the service, so [LoudnessEnhancer] is attached once
+     * and never has to be torn down and rebuilt when the player switches output.
+     *
+     * Opted in because setSkipSilenceEnabled and setAudioSessionId are still marked unstable in
+     * media3 1.10.0.
+     */
+    @OptIn(UnstableApi::class)
+    private fun startAudioTuning() {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val sessionId = audioManager?.generateAudioSessionId()
+            ?.takeIf { it != AudioManager.ERROR }
+        if (sessionId != null) {
+            player.audioSessionId = sessionId
+            // Effect creation is genuinely device-dependent — some devices have no spare effect
+            // slots, and some ROMs refuse outright. A missing enhancer must not stop playback.
+            loudnessEnhancer = runCatching { LoudnessEnhancer(sessionId) }.getOrNull()
+        }
+
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.skipSilence }
+                .distinctUntilChanged()
+                .collect { player.skipSilenceEnabled = it }
+        }
+
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.volumeBoost }
+                .distinctUntilChanged()
+                .collect(::applyVolumeBoost)
+        }
+    }
+
+    private fun applyVolumeBoost(boost: VolumeBoost) {
+        val enhancer = loudnessEnhancer ?: return
+        runCatching {
+            enhancer.setTargetGain(boost.gainMillibels)
+            enhancer.enabled = boost != VolumeBoost.Off
+        }
     }
 
     /**

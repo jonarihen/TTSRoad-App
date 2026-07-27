@@ -67,6 +67,18 @@ Notable changes to the TTSRoad Android client.
   did that sentence just say".
 - Preferences live in their own store, so signing out no longer forgets how you listen.
 
+### Audio tuned for synthesised speech
+
+- **Skip silence** (on by default, switchable in Settings). Synthesised chapters carry pauses around
+  headings, scene breaks and sentence boundaries that are far longer than a human narrator's — over
+  an eight-hour night that is a lot of dead air. Turn it off if it clips a dramatic pause.
+- **Volume boost** — Off / Low / Medium / High. Chapters converted at different times or with
+  different voices come out at different levels: in the car that means reaching for the volume knob,
+  and in bed it means a loud chapter after a quiet one wakes you up. Capped at 10 dB, because past
+  that a chapter already near full scale starts to clip.
+- Both are applied by the media service, so they survive a swipe-away, a process kill and a reboot,
+  and they apply to playback started from the car with no UI running.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
