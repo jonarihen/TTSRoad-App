@@ -2,6 +2,20 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.7.0 — 2026-07-27
+
+### Chapter list controls
+
+- **Jump to the chapter you're on**: opening a fiction that is currently playing now scrolls
+  straight to that chapter instead of the top of a 500-row list, and the row is highlighted. A
+  **JUMP TO CURRENT** button appears once you scroll away from it. The player's chapter sheet
+  opens on the playing chapter too.
+- **Filter chips**: All / Unplayed / Ready, filtered client-side on the already-loaded list.
+- **Sort toggle**: switch between oldest-first and newest-first.
+- **Bulk mark played**: long-press any chapter row for "Mark all previous as played" and "Mark
+  all as played" — one API call for the whole range, and the rows update in place. Toggling a
+  single chapter no longer reloads the entire list either.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)

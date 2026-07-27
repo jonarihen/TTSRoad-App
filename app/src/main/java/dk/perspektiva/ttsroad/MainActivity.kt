@@ -4,9 +4,11 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,6 +33,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -47,6 +50,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +66,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -89,12 +95,18 @@ import java.util.Locale
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.data.allChapterIds
+import dk.perspektiva.ttsroad.data.chapterIdsBefore
+import dk.perspektiva.ttsroad.data.chapterView
+import dk.perspektiva.ttsroad.data.withPlayed
+import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
@@ -607,6 +619,12 @@ private fun FictionScreen(
     val scope = rememberCoroutineScope()
     var chapterState by remember(fiction.id) { mutableStateOf<LoadState<List<ChapterSummary>>>(LoadState.Loading) }
     var error by remember { mutableStateOf<String?>(null) }
+    var filter by remember(fiction.id) { mutableStateOf(ChapterFilter.All) }
+    var ascending by remember(fiction.id) { mutableStateOf(true) }
+    var bulkTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
+    var didAutoScroll by remember(fiction.id) { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val playerState by playbackController.state.collectAsStateWithLifecycle()
 
     fun refresh() {
         scope.launch {
@@ -620,6 +638,25 @@ private fun FictionScreen(
         }
     }
 
+    /**
+     * Mark [ids] played/unplayed in one request and patch the loaded rows in place — bulk marking a
+     * few hundred chapters should not cost a reload of the whole list.
+     */
+    fun mark(ids: List<Int>, played: Boolean) {
+        if (ids.isEmpty()) return
+        scope.launch {
+            error = null
+            runCatching { repository.markPlayed(ids, played) }
+                .onSuccess {
+                    val loaded = chapterState
+                    if (loaded is LoadState.Loaded) {
+                        chapterState = LoadState.Loaded(loaded.value.withPlayed(ids, played))
+                    }
+                }
+                .onFailure { error = it.message ?: "Could not update chapter" }
+        }
+    }
+
     LaunchedEffect(fiction.id) { refresh() }
 
     when (val state = chapterState) {
@@ -630,54 +667,196 @@ private fun FictionScreen(
             onRetry = ::refresh,
         )
 
-        is LoadState.Loaded -> LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(16.dp),
-        ) {
-            item {
-                FictionDetailHeader(
-                    fiction = fiction,
-                    chapters = state.value,
-                    onPlay = { chapter ->
-                        scope.launch {
-                            playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
-                            onOpenPlayer()
-                        }
-                    },
-                )
-                error?.let {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = it, color = MaterialTheme.colorScheme.error)
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                SectionHeader(kicker = "CH", title = "Chapters")
+        is LoadState.Loaded -> {
+            // Filtering and sorting are client-side: the full list is already loaded, and a 500+
+            // chapter fiction is still cheap to re-derive whenever the view options change.
+            val visible = remember(state.value, filter, ascending) {
+                state.value.chapterView(filter, ascending)
             }
-            itemsIndexed(state.value, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
-                ChapterRow(
-                    chapter = chapter,
-                    fiction = fiction,
-                    onPlay = {
-                        scope.launch {
-                            playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
-                            onOpenPlayer()
-                        }
-                    },
-                    onMarkPlayed = { played ->
-                        scope.launch {
-                            error = null
-                            runCatching {
-                                repository.markPlayed(listOf(chapter.resolvedChapterId), played)
-                                refresh()
-                            }.onFailure {
-                                error = it.message ?: "Could not update chapter"
+            val currentChapterId = playerState.queue.getOrNull(playerState.currentIndex)
+                ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
+            // Row index inside [visible]; the header occupies list index 0, so rows are offset by 1.
+            val currentRow = remember(visible, currentChapterId) {
+                if (currentChapterId == null) -1 else visible.indexOfFirst { it.resolvedChapterId == currentChapterId }
+            }
+            val currentOffScreen by remember(currentRow) {
+                derivedStateOf {
+                    currentRow >= 0 && listState.layoutInfo.visibleItemsInfo.none { it.index == currentRow + 1 }
+                }
+            }
+
+            // Land on the chapter that is playing when the fiction is opened, then leave the list
+            // alone — re-scrolling on every chapter change would fight the user.
+            LaunchedEffect(currentRow) {
+                if (!didAutoScroll && currentRow >= 0) {
+                    didAutoScroll = true
+                    listState.scrollToItem(currentRow + 1)
+                }
+            }
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentPadding = PaddingValues(16.dp),
+            ) {
+                item {
+                    FictionDetailHeader(
+                        fiction = fiction,
+                        chapters = state.value,
+                        onPlay = { chapter ->
+                            scope.launch {
+                                playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
+                                onOpenPlayer()
                             }
-                        }
+                        },
+                    )
+                    error?.let {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(text = it, color = MaterialTheme.colorScheme.error)
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    SectionHeader(kicker = "CH", title = "Chapters")
+                    ChapterListControls(
+                        filter = filter,
+                        ascending = ascending,
+                        showJumpToCurrent = currentOffScreen,
+                        onFilter = { filter = it },
+                        onToggleSort = { ascending = !ascending },
+                        onJumpToCurrent = {
+                            scope.launch { listState.animateScrollToItem(currentRow + 1) }
+                        },
+                    )
+                }
+                itemsIndexed(visible, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
+                    ChapterRow(
+                        chapter = chapter,
+                        fiction = fiction,
+                        isCurrent = chapter.resolvedChapterId == currentChapterId,
+                        onPlay = {
+                            scope.launch {
+                                // Queue the fiction in reading order, not the filtered/sorted view.
+                                playbackController.playQueue(state.value, chapter.resolvedChapterId, fiction)
+                                onOpenPlayer()
+                            }
+                        },
+                        onMarkPlayed = { played -> mark(listOf(chapter.resolvedChapterId), played) },
+                        onLongPress = { bulkTarget = chapter },
+                    )
+                }
+            }
+
+            bulkTarget?.let { target ->
+                ChapterBulkSheet(
+                    chapter = target,
+                    previousIds = remember(state.value, target) {
+                        state.value.chapterIdsBefore(target.resolvedChapterId)
+                    },
+                    allIds = remember(state.value) { state.value.allChapterIds() },
+                    onDismiss = { bulkTarget = null },
+                    onMark = { ids ->
+                        bulkTarget = null
+                        mark(ids, played = true)
                     },
                 )
             }
         }
+    }
+}
+
+/** Filter chips, sort direction and the "jump to current" affordance above the chapter list. */
+@Composable
+private fun ChapterListControls(
+    filter: ChapterFilter,
+    ascending: Boolean,
+    showJumpToCurrent: Boolean,
+    onFilter: (ChapterFilter) -> Unit,
+    onToggleSort: () -> Unit,
+    onJumpToCurrent: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ChapterFilter.entries.forEach { option ->
+            FilterChip(
+                selected = option == filter,
+                onClick = { onFilter(option) },
+                label = { Text(option.label) },
+                shape = RectangleShape,
+            )
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        TextButton(onClick = onToggleSort) {
+            Text(if (ascending) "OLDEST" else "NEWEST")
+        }
+    }
+    if (showJumpToCurrent) {
+        TextButton(onClick = onJumpToCurrent) { Text("JUMP TO CURRENT") }
+    }
+}
+
+/** Long-press actions for catching up on chapters read elsewhere. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChapterBulkSheet(
+    chapter: ChapterSummary,
+    previousIds: List<Int>,
+    allIds: List<Int>,
+    onDismiss: () -> Unit,
+    onMark: (List<Int>) -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        MetaText(
+            text = "// ${chapter.resolvedTitle}",
+            color = AarisColor.Accent,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+        )
+        BulkAction(
+            title = "Mark all previous as played",
+            subtitle = if (previousIds.isEmpty()) {
+                "Nothing before this chapter"
+            } else {
+                "${previousIds.size} chapters"
+            },
+            enabled = previousIds.isNotEmpty(),
+            onClick = { onMark(previousIds) },
+        )
+        BulkAction(
+            title = "Mark all as played",
+            subtitle = "${allIds.size} chapters",
+            enabled = allIds.isNotEmpty(),
+            onClick = { onMark(allIds) },
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun BulkAction(
+    title: String,
+    subtitle: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Column {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = enabled, onClick = onClick)
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (enabled) AarisColor.Ink else AarisColor.Dim,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            MetaText(text = subtitle, color = AarisColor.Dim)
+        }
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
     }
 }
 
@@ -837,7 +1016,17 @@ private fun PlayerScreen(
                 color = AarisColor.Accent,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
             )
-            LazyColumn(modifier = Modifier.heightIn(max = 440.dp)) {
+            // The sheet is composed fresh each time it opens, so this lands on the playing chapter
+            // instead of the top of a several-hundred-entry queue.
+            val chapterListState = rememberLazyListState()
+            LaunchedEffect(playerState.currentIndex, playerState.queue.size) {
+                if (playerState.queue.isNotEmpty()) {
+                    chapterListState.scrollToItem(
+                        playerState.currentIndex.coerceIn(0, playerState.queue.lastIndex),
+                    )
+                }
+            }
+            LazyColumn(state = chapterListState, modifier = Modifier.heightIn(max = 440.dp)) {
                 itemsIndexed(
                     playerState.queue,
                     key = { index, item -> "${item.mediaId}-$index" },
@@ -1425,14 +1614,18 @@ private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
 
 /**
  * Flat chapter list row (Audible-style): the row itself is the play target, the trailing check
- * toggles played state, and unplayable chapters surface their pipeline status as a tag.
+ * toggles played state, and unplayable chapters surface their pipeline status as a tag. A long
+ * press opens the bulk mark-played actions where [onLongPress] is supplied.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChapterRow(
     chapter: ChapterSummary,
     fiction: FictionSummary?,
     onPlay: () -> Unit,
     onMarkPlayed: ((Boolean) -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
+    isCurrent: Boolean = false,
 ) {
     val playable = chapter.audio != null
     val isPlayed = chapter.playback?.isPlayed == true
@@ -1440,13 +1633,18 @@ private fun ChapterRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(enabled = playable, onClick = onPlay)
+                .background(if (isCurrent) AarisColor.BgHover else Color.Transparent)
+                .combinedClickable(
+                    enabled = playable || onLongPress != null,
+                    onClick = { if (playable) onPlay() },
+                    onLongClick = onLongPress,
+                )
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             MetaText(
                 text = chapterNumberLabel(chapter),
-                color = AarisColor.Dim,
+                color = if (isCurrent) AarisColor.Accent else AarisColor.Dim,
                 modifier = Modifier.width(44.dp),
             )
             Column(modifier = Modifier.weight(1f)) {
