@@ -481,6 +481,7 @@ private fun LibraryScreen(
     onBrowseFictions: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val cache = remember { ServiceLocator.libraryCache(context) }
     val state by cache.library.collectAsStateWithLifecycle()
 
