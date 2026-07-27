@@ -1,9 +1,11 @@
 package dk.perspektiva.ttsroad.media
 
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
@@ -23,12 +25,18 @@ import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.player.ShakeDetector
+import dk.perspektiva.ttsroad.player.SleepTimerAction
+import dk.perspektiva.ttsroad.player.SleepTimerController
+import dk.perspektiva.ttsroad.player.SleepTimerMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -39,6 +47,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var repository: TtsRoadRepository
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
+    private lateinit var sleepTimer: SleepTimerController
+    private var shakeDetector: ShakeDetector? = null
     private var lastLibrary: LibraryResponse? = null
 
     @Volatile
@@ -48,6 +58,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         super.onCreate()
         tokenStore = ServiceLocator.tokenStore(this)
         repository = ServiceLocator.repository(this)
+        sleepTimer = ServiceLocator.sleepTimer()
         serviceScope.launch {
             tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
         }
@@ -68,12 +79,15 @@ class TtsRoadMediaService : MediaLibraryService() {
             },
         )
         startProgressTicker()
+        startSleepTimer()
         session = MediaLibrarySession.Builder(this, player, BrowserCallback(this)).build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
+        shakeDetector?.stop()
+        sleepTimer.cancel()
         session.release()
         player.release()
         serviceScope.cancel()
@@ -113,6 +127,64 @@ class TtsRoadMediaService : MediaLibraryService() {
                 if (player.isPlaying) saveCurrentProgress(forcePlayed = false)
             }
         }
+    }
+
+    /**
+     * Drive the sleep timer from the service, so it keeps counting down with the app backgrounded
+     * and the screen off. The controller owns the decisions; this only applies them to the player.
+     *
+     * Opted in because pauseAtEndOfMediaItems is still marked unstable in media3 1.10.0.
+     */
+    @OptIn(UnstableApi::class)
+    private fun startSleepTimer() {
+        // The next tick picks the extension up and lifts the volume back out of the fade.
+        shakeDetector = ShakeDetector(this) { sleepTimer.extend(SleepTimerController.ExtendMs) }
+
+        serviceScope.launch {
+            while (isActive) {
+                delay(SLEEP_TIMER_TICK_MS)
+                applySleepTimerAction(
+                    sleepTimer.tick(
+                        nowMs = System.currentTimeMillis(),
+                        isPlaying = player.isPlaying,
+                        chapterRemainingMs = chapterRemainingMs(),
+                    ),
+                )
+            }
+        }
+
+        // "End of chapter" leans on the player to stop at the boundary rather than auto-advancing.
+        serviceScope.launch {
+            sleepTimer.state
+                .map { it.mode == SleepTimerMode.EndOfChapter }
+                .distinctUntilChanged()
+                .collect { player.pauseAtEndOfMediaItems = it }
+        }
+
+        // Listen for the shake only while the audio is fading — the rest of the night it is off.
+        serviceScope.launch {
+            sleepTimer.state
+                .map { it.isFading }
+                .distinctUntilChanged()
+                .collect { fading -> if (fading) shakeDetector?.start() else shakeDetector?.stop() }
+        }
+    }
+
+    private fun applySleepTimerAction(action: SleepTimerAction) {
+        when (action) {
+            SleepTimerAction.None -> Unit
+            is SleepTimerAction.SetVolume -> player.volume = action.volume
+            SleepTimerAction.Expire -> {
+                player.pause()
+                // Restore after pausing, so the next play doesn't start silent.
+                player.volume = 1f
+            }
+        }
+    }
+
+    private fun chapterRemainingMs(): Long? {
+        val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: return null
+        return (duration - player.currentPosition).coerceAtLeast(0L)
     }
 
     private suspend fun saveCurrentProgress(forcePlayed: Boolean) {
@@ -345,6 +417,11 @@ class TtsRoadMediaService : MediaLibraryService() {
             val to = (from + pageSize).coerceAtMost(items.size.toLong())
             return items.subList(from.toInt(), to.toInt())
         }
+    }
+
+    private companion object {
+        /** Short enough that the sleep timer's fade-out is smooth rather than stepped. */
+        const val SLEEP_TIMER_TICK_MS = 500L
     }
 }
 

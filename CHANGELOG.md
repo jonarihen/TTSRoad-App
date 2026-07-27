@@ -2,6 +2,21 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.7.0 — 2026-07-27
+
+### Sleep timer
+
+- The player has a **SLEEP** button: 5 / 15 / 30 / 45 / 60 minutes, or **end of the current
+  chapter**. The remaining time replaces the label while the timer is armed, and playback stops
+  on its own instead of streaming all night.
+- The last 30 seconds **fade out** rather than cutting mid-sentence, and **shaking the phone**
+  during the fade adds 5 minutes and brings the volume back — no bright screen, no hunting for
+  a button.
+- "End of chapter" stops at the chapter boundary instead of auto-advancing.
+- The timer lives in the media service, so it keeps counting with the app backgrounded and the
+  screen off. Pausing by hand freezes the countdown rather than spending it; pressing play
+  resumes where it left off.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)

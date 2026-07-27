@@ -70,6 +70,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -98,6 +99,8 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
+import dk.perspektiva.ttsroad.player.SleepTimerController
+import dk.perspektiva.ttsroad.player.SleepTimerMode
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
@@ -694,8 +697,11 @@ private fun PlayerScreen(
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val history by historyStore.snapshots.collectAsStateWithLifecycle()
     val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
+    val sleepTimer = remember { ServiceLocator.sleepTimer() }
+    val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
+    var showSleepTimer by remember { mutableStateOf(false) }
     // Track the drag locally and only seek on release, so scrubbing doesn't spam the player.
     var dragMs by remember { mutableStateOf<Float?>(null) }
 
@@ -806,11 +812,26 @@ private fun PlayerScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(
-                onClick = { playbackController.setSpeed(nextSpeed(playerState.speed)) },
-                enabled = playerState.hasMedia,
-            ) {
-                Text("SPEED ${formatSpeed(playerState.speed)}")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = { playbackController.setSpeed(nextSpeed(playerState.speed)) },
+                    enabled = playerState.hasMedia,
+                ) {
+                    Text("SPEED ${formatSpeed(playerState.speed)}")
+                }
+                TextButton(
+                    onClick = { showSleepTimer = true },
+                    enabled = playerState.hasMedia || sleepTimerState.isArmed,
+                ) {
+                    Text(
+                        text = if (sleepTimerState.isArmed) {
+                            "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
+                        } else {
+                            "SLEEP"
+                        },
+                        color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
+                    )
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (jumpBackOptions.isNotEmpty()) {
@@ -878,6 +899,64 @@ private fun PlayerScreen(
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 }
             }
+        }
+    }
+
+    if (showSleepTimer) {
+        ModalBottomSheet(
+            onDismissRequest = { showSleepTimer = false },
+            containerColor = AarisColor.BgRaise,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MetaText(text = "// Sleep timer", color = AarisColor.Accent)
+                if (sleepTimerState.isArmed) {
+                    TextButton(onClick = {
+                        sleepTimer.cancel()
+                        showSleepTimer = false
+                    }) {
+                        Text("CANCEL")
+                    }
+                }
+            }
+            if (sleepTimerState.isArmed) {
+                MetaText(
+                    text = when (sleepTimerState.mode) {
+                        SleepTimerMode.EndOfChapter ->
+                            "// Stopping at the end of this chapter · " +
+                                "${formatDuration(sleepTimerState.remainingMs)} left"
+                        else -> "// Stopping in ${formatDuration(sleepTimerState.remainingMs)}"
+                    },
+                    color = AarisColor.Muted,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+                )
+            }
+            // Only offered once the chapter's duration is known — without it there is no boundary
+            // to stop at, and the timer would fire the moment it was armed.
+            if (playerState.durationMs > 0L) {
+                SleepTimerOption(label = "End of current chapter") {
+                    sleepTimer.armEndOfChapter(
+                        (playerState.durationMs - playerState.positionMs).coerceAtLeast(0L),
+                    )
+                    showSleepTimer = false
+                }
+            }
+            SleepTimerController.DurationOptionsMinutes.forEach { minutes ->
+                SleepTimerOption(label = "$minutes minutes") {
+                    sleepTimer.armDuration(minutes * 60_000L)
+                    showSleepTimer = false
+                }
+            }
+            MetaText(
+                text = "// Fades out over the last 30s — shake to add 5 minutes",
+                color = AarisColor.Dim,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            )
         }
     }
 
@@ -990,6 +1069,21 @@ private fun PlayerScreen(
             }
         }
     }
+}
+
+/** One row of the sleep-timer sheet, styled like the chapter rows above it. */
+@Composable
+private fun SleepTimerOption(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.titleMedium,
+        color = AarisColor.Ink,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+    )
+    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 }
 
 /**
