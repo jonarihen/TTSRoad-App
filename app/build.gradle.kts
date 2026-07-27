@@ -36,6 +36,7 @@ android {
     }
 
     testOptions {
+        // Robolectric reads the merged manifest and resources for the tests that need a Context.
         unitTests.isIncludeAndroidResources = true
     }
 }
@@ -76,6 +77,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.robolectric)
 }
 

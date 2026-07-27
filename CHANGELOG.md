@@ -2,6 +2,39 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### No more full-screen spinner on every back-navigation
+
+- **Going back to the library shows it instantly.** Screen data now lives above the screens, so
+  leaving a screen no longer destroys it and returning no longer refetches from a blank spinner.
+  The refresh still happens - underneath the content, as a hairline progress strip.
+- **Marking a chapter played updates that row only.** It used to reload the whole list, tearing down
+  a 500-row chapter list and dropping you back at the top, for the sake of one checkmark.
+- **Pull-to-refresh** on the library, all-fictions and fiction screens.
+- A refresh that fails while content is already loaded now shows a one-line notice instead of
+  replacing a perfectly readable library with an error page.
+
+### Cover images load wherever audio does
+
+- Artwork was fetched with Coil's default loader and the raw URL from the API, so it missed both
+  things playback already did: the bearer token, and the host rewrite that points server-built URLs
+  at the address the phone actually connected to. On any setup where the backend's `BASE_URL`
+  differs from the connect address (LAN IP vs domain, VPN, `10.0.2.2` on the emulator), or where
+  covers sit behind auth, every cover rendered as the letter-fallback tile while audio played fine.
+  Phone UI and Android Auto artwork both fixed.
+
+### Android Auto: voice search and a browse tree that shows progress
+
+- **"Hey Google, play Ashes of Aether on TTSRoad"** now works, and starts that fiction at its resume
+  position. Voice is the only safe way to start something new while driving, and it previously did
+  nothing at all.
+- **Searching in the car** returns matching fictions and chapters, matched on title, author and tags.
+- **The Fictions node renders as a grid** with artwork instead of plain rows, and **chapters show
+  completion progress** — a started chapter no longer looks identical to an untouched one.
+- A weak match deliberately does *not* start playing. Matching a shared tag or an author with more
+  than one book resolves to nothing rather than starting the wrong book at speed.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)
