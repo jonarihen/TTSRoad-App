@@ -199,6 +199,48 @@ class TtsRoadMediaService : MediaLibraryService() {
         )
     }
 
+    /**
+     * Resolve a spoken query to a fiction and return its queue positioned at the resume point.
+     *
+     * Deliberately refuses a weak match: starting an unrelated book because a misheard query
+     * happened to share a tag is worse, while driving, than the request simply not working.
+     */
+    private suspend fun queueForSpokenQuery(
+        query: String,
+    ): MediaSession.MediaItemsWithStartPosition? {
+        val library = library() ?: return null
+        val fiction = resolveSpokenFiction(library.fictions, query) ?: return null
+        return buildFictionQueue(fiction.id, resumeChapterId(library, fiction.id))
+    }
+
+    /**
+     * Where to start a fiction the user asked for by name: wherever they left off, or the first
+     * chapter. 0 is a safe fallback — [buildFictionQueue] coerces an unmatched id to the start.
+     */
+    private fun resumeChapterId(library: LibraryResponse, fictionId: Int): Int =
+        library.continueListening
+            .firstOrNull { it.resolvedFictionId == fictionId }
+            ?.resolvedChapterId
+            ?: 0
+
+    /** Fictions and chapters matching a car search, as browse items. */
+    private suspend fun searchItems(query: String): List<MediaItem> {
+        val library = library() ?: return emptyList()
+        val serverUrl = serverUrl()
+        val fictions = searchFictions(library.fictions, query)
+        val chapters = searchChapters(
+            library.continueListening + library.recentChapters,
+            query,
+        ).distinctBy { it.resolvedChapterId }
+
+        return fictions.map { TtsRoadMediaItems.fictionFolder(it) } +
+            chapters.mapNotNull { chapter ->
+                val fiction = chapter.fiction
+                    ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
+                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
+            }
+    }
+
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
         val library = library() ?: return null
@@ -246,6 +288,16 @@ class TtsRoadMediaService : MediaLibraryService() {
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
             service.serviceScope.future {
                 val single = mediaItems.singleOrNull()
+
+                // "Hey Google, play Ashes of Aether on TTSRoad" arrives as a single item carrying
+                // only the spoken query — no media id, no extras. Resolve it to a fiction and start
+                // it at its resume point, which is the only safe way to start something new while
+                // driving.
+                val spoken = single?.requestMetadata?.searchQuery
+                if (!spoken.isNullOrBlank()) {
+                    service.queueForSpokenQuery(spoken)?.let { return@future it }
+                }
+
                 val extras = single?.mediaMetadata?.extras
                 val fictionId = extras?.getInt("fiction_id", 0)?.takeIf { it > 0 }
                 val chapterId = extras?.getInt("chapter_id", 0)?.takeIf { it > 0 }
@@ -270,6 +322,44 @@ class TtsRoadMediaService : MediaLibraryService() {
                 service.resumeQueue() ?: throw UnsupportedOperationException("Nothing to resume")
             }
 
+        // Media3 splits searching in two: onSearch does the work and reports how many results
+        // exist, then the browser asks for the page it wants. The result is cached between the two
+        // so the library is not fetched and matched twice per spoken search.
+        private var cachedQuery: String? = null
+        private var cachedResults: List<MediaItem> = emptyList()
+
+        private suspend fun results(query: String): List<MediaItem> {
+            if (query == cachedQuery) return cachedResults
+            val found = service.searchItems(query)
+            cachedQuery = query
+            cachedResults = found
+            return found
+        }
+
+        override fun onSearch(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<Void>> =
+            service.serviceScope.future {
+                val found = results(query)
+                session.notifySearchResultChanged(browser, query, found.size, params)
+                LibraryResult.ofVoid()
+            }
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
+            service.serviceScope.future {
+                LibraryResult.ofItemList(page(results(query), page, pageSize), params)
+            }
+
         override fun onGetChildren(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
@@ -287,8 +377,25 @@ class TtsRoadMediaService : MediaLibraryService() {
                     parentId.startsWith(TtsRoadMediaIds.FictionPrefix) -> fictionChildren(parentId)
                     else -> emptyList()
                 }
-                LibraryResult.ofItemList(page(items, page, pageSize), params)
+                LibraryResult.ofItemList(page(items, page, pageSize), styleFor(parentId, params))
             }
+
+        /**
+         * How the car should draw this node's children. Fictions are cover-led and read far better
+         * as a grid; everything else is an ordered list where the title carries the meaning.
+         *
+         * The hints ride on the returned [LibraryParams], which is where a media browser looks for
+         * per-node styling.
+         */
+        private fun styleFor(parentId: String, params: LibraryParams?): LibraryParams {
+            val grid = parentId == TtsRoadMediaIds.Fictions
+            return LibraryParams.Builder()
+                .setExtras(TtsRoadMediaItems.contentStyle(browsableGrid = grid, playableGrid = false))
+                .setRecent(params?.isRecent == true)
+                .setOffline(params?.isOffline == true)
+                .setSuggested(params?.isSuggested == true)
+                .build()
+        }
 
         private fun rootChildren(): List<MediaItem> = listOf(
             TtsRoadMediaItems.folder(
