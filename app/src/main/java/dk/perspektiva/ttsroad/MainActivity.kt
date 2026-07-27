@@ -1,9 +1,12 @@
 package dk.perspektiva.ttsroad
 
+import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -86,7 +89,10 @@ import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
@@ -123,23 +129,59 @@ private sealed interface LoadState<out T> {
 }
 
 class MainActivity : ComponentActivity() {
+    // Notification taps that arrive while the activity is already running come through
+    // onNewIntent, so they are relayed to the composition rather than read from the start intent.
+    private val openPlayerRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val startOnPlayer = consumeOpenPlayer(intent)
         setContent {
             TtsRoadTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = AarisColor.Bg,
                 ) {
-                    TtsRoadApp()
+                    TtsRoadApp(
+                        startOnPlayer = startOnPlayer,
+                        openPlayerRequests = openPlayerRequests,
+                    )
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (consumeOpenPlayer(intent)) openPlayerRequests.tryEmit(Unit)
+    }
+
+    companion object {
+        private const val EXTRA_OPEN_PLAYER = "dk.perspektiva.ttsroad.extra.OPEN_PLAYER"
+
+        /** Start intent used by the media session so a notification tap lands on the player. */
+        fun playerIntent(context: Context): Intent =
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(EXTRA_OPEN_PLAYER, true)
+
+        // Read once and clear, so an activity recreation (rotation, theme change) does not bounce
+        // the user back to the player after they have navigated away.
+        @VisibleForTesting
+        internal fun consumeOpenPlayer(intent: Intent?): Boolean {
+            if (intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) != true) return false
+            intent.removeExtra(EXTRA_OPEN_PLAYER)
+            return true
         }
     }
 }
 
 @Composable
-private fun TtsRoadApp() {
+private fun TtsRoadApp(
+    startOnPlayer: Boolean = false,
+    openPlayerRequests: Flow<Unit> = emptyFlow(),
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val tokenStore = remember { ServiceLocator.tokenStore(context) }
@@ -149,6 +191,7 @@ private fun TtsRoadApp() {
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val session by tokenStore.session.collectAsStateWithLifecycle(initialValue = SessionState())
     var screen by remember { mutableStateOf<AppScreen>(AppScreen.Library) }
+    var openPlayerPending by remember { mutableStateOf(startOnPlayer) }
 
     LaunchedEffect(session.isLoggedIn) {
         if (session.isLoggedIn) {
@@ -156,6 +199,19 @@ private fun TtsRoadApp() {
         } else {
             screen = AppScreen.Library
             playbackController.stop()
+        }
+    }
+
+    LaunchedEffect(openPlayerRequests) {
+        openPlayerRequests.collect { openPlayerPending = true }
+    }
+
+    // The stored session loads asynchronously, so a notification tap can land before isLoggedIn is
+    // known. Holding the request until then keeps the reset above from swallowing it.
+    LaunchedEffect(openPlayerPending, session.isLoggedIn) {
+        if (openPlayerPending && session.isLoggedIn) {
+            screen = AppScreen.Player
+            openPlayerPending = false
         }
     }
 
