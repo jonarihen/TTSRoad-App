@@ -246,6 +246,9 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val sessionExpired by repository.sessionExpired.collectAsStateWithLifecycle()
+    // A failed attempt has more to say than "your old token went stale", so it wins.
+    val notice = error ?: "Session expired - sign in again".takeIf { sessionExpired }
 
     Column(
         modifier = Modifier
@@ -308,7 +311,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
                 supportingText = { MetaText(text = "From your authenticator app, or a recovery code") },
             )
         }
-        error?.let {
+        notice?.let {
             Spacer(modifier = Modifier.height(12.dp))
             Text(text = it, color = MaterialTheme.colorScheme.error)
         }

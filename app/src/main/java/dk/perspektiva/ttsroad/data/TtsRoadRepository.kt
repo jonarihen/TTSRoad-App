@@ -4,6 +4,9 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import retrofit2.HttpException
@@ -18,7 +21,7 @@ sealed interface LoginResult {
     data class Failure(val message: String) : LoginResult
 }
 
-class TtsRoadRepository(private val tokenStore: TokenStore) {
+class TtsRoadRepository(private val tokenStore: SessionStore) {
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
@@ -41,6 +44,14 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
 
     private val apiCache = HashMap<String, TtsRoadApi>()
 
+    private val _sessionExpired = MutableStateFlow(false)
+
+    /**
+     * True once an authenticated call came back 401 and the stored token was dropped, so the
+     * login screen can say why it is being shown. Cleared by a successful [login].
+     */
+    val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
+
     suspend fun login(
         baseUrl: String,
         username: String,
@@ -62,6 +73,7 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
                 ),
             )
             tokenStore.saveLogin(normalized, response)
+            _sessionExpired.value = false
             LoginResult.Success
         } catch (e: HttpException) {
             val body = e.response()?.errorBody()?.string()
@@ -121,17 +133,18 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
         positionSeconds: Double,
         isPlayed: Boolean,
     ): PlaybackProgressResponse? = withContext(Dispatchers.IO) {
-        val session = tokenStore.current()
-        if (!session.isLoggedIn) return@withContext null
-        authHeader = session.authorizationHeader
-        api(session.serverUrl).saveProgress(
-            PlaybackProgressRequest(
-                fictionId = fictionId,
-                chapterId = chapterId,
-                positionSeconds = positionSeconds.coerceAtLeast(0.0),
-                isPlayed = isPlayed,
-            ),
-        )
+        // Progress saves fire in the background; a missing token is not worth an exception.
+        if (!tokenStore.current().isLoggedIn) return@withContext null
+        authorized {
+            it.saveProgress(
+                PlaybackProgressRequest(
+                    fictionId = fictionId,
+                    chapterId = chapterId,
+                    positionSeconds = positionSeconds.coerceAtLeast(0.0),
+                    isPlayed = isPlayed,
+                ),
+            )
+        }
     }
 
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =
@@ -145,12 +158,35 @@ class TtsRoadRepository(private val tokenStore: TokenStore) {
         }
 
     private suspend fun <T> withAuthorizedApi(block: suspend (TtsRoadApi) -> T): T =
-        withContext(Dispatchers.IO) {
-            val session = tokenStore.current()
-            require(session.isLoggedIn) { "Not logged in" }
-            authHeader = session.authorizationHeader
+        withContext(Dispatchers.IO) { authorized(block) }
+
+    /**
+     * Runs an authenticated call, turning a server-side 401 into a forced sign-out.
+     *
+     * A 401 on an authenticated endpoint means the stored token is no longer valid — revoked
+     * from another device, pruned, or the server database was reset — so retrying can never
+     * succeed. Dropping the token lets the session observer in `TtsRoadApp` fall back to the
+     * login screen (which also stops playback) instead of every screen showing "HTTP 401
+     * Unauthorized" until the user finds Settings > Sign out.
+     *
+     * [login] deliberately does not go through here: it answers 401 for a wrong password and
+     * for `totp_required`, neither of which should clear a stored session.
+     */
+    private suspend fun <T> authorized(block: suspend (TtsRoadApi) -> T): T {
+        val session = tokenStore.current()
+        require(session.isLoggedIn) { "Not logged in" }
+        authHeader = session.authorizationHeader
+        return try {
             block(api(session.serverUrl))
+        } catch (e: HttpException) {
+            if (e.code() == 401) {
+                authHeader = null
+                tokenStore.clearToken()
+                _sessionExpired.value = true
+            }
+            throw e
         }
+    }
 
     private fun api(baseUrl: String): TtsRoadApi {
         val normalized = normalizeBaseUrl(baseUrl)
