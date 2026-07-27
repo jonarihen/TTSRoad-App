@@ -180,8 +180,7 @@ class PlaybackController(
 
     fun skipBy(deltaMs: Long) {
         val controller = controller ?: return
-        val duration = controller.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: Long.MAX_VALUE
-        controller.seekTo((controller.currentPosition + deltaMs).coerceIn(0L, duration))
+        controller.seekTo(skipTargetMs(controller.currentPosition, controller.duration, deltaMs))
         publishState(controller)
     }
 
