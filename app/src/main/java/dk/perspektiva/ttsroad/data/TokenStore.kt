@@ -32,7 +32,17 @@ data class SessionState(
         get() = token?.takeIf { it.isNotBlank() }?.let { "Bearer $it" }
 }
 
-class TokenStore(private val context: Context) {
+/**
+ * The slice of session storage the repository needs. Kept separate from [TokenStore] so
+ * repository tests can substitute an in-memory store instead of a DataStore-backed one.
+ */
+interface SessionStore {
+    suspend fun current(): SessionState
+    suspend fun saveLogin(baseUrl: String, response: LoginResponse)
+    suspend fun clearToken()
+}
+
+class TokenStore(private val context: Context) : SessionStore {
     private object Keys {
         val ServerUrl = stringPreferencesKey("server_url")
         val Token = stringPreferencesKey("token")
@@ -59,9 +69,9 @@ class TokenStore(private val context: Context) {
             )
         }
 
-    suspend fun current(): SessionState = session.first()
+    override suspend fun current(): SessionState = session.first()
 
-    suspend fun saveLogin(baseUrl: String, response: LoginResponse) {
+    override suspend fun saveLogin(baseUrl: String, response: LoginResponse) {
         context.sessionDataStore.edit { prefs ->
             prefs[Keys.ServerUrl] = normalizeBaseUrl(baseUrl)
             prefs[Keys.Token] = response.token
@@ -71,7 +81,7 @@ class TokenStore(private val context: Context) {
         }
     }
 
-    suspend fun clearToken() {
+    override suspend fun clearToken() {
         context.sessionDataStore.edit { prefs ->
             prefs.remove(Keys.Token)
             prefs.remove(Keys.Username)

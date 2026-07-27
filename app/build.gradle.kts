@@ -70,5 +70,9 @@ dependencies {
     implementation(libs.retrofit.moshi)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
 }
 
