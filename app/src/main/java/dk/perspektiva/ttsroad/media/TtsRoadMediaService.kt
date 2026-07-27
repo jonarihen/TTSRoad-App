@@ -140,17 +140,25 @@ class TtsRoadMediaService : MediaLibraryService() {
         // The next tick picks the extension up and lifts the volume back out of the fade.
         shakeDetector = ShakeDetector(this) { sleepTimer.extend(SleepTimerController.ExtendMs) }
 
+        // Tick only while a timer is actually armed. The fade needs a half-second tick to be
+        // smooth, but this app's whole job is playing all night, and waking twice a second for a
+        // timer nobody set would cost far more than the fade is worth.
         serviceScope.launch {
-            while (isActive) {
-                delay(SLEEP_TIMER_TICK_MS)
-                applySleepTimerAction(
-                    sleepTimer.tick(
-                        nowMs = System.currentTimeMillis(),
-                        isPlaying = player.isPlaying,
-                        chapterRemainingMs = chapterRemainingMs(),
-                    ),
-                )
-            }
+            sleepTimer.state
+                .map { it.isArmed }
+                .distinctUntilChanged()
+                .collectLatest { armed ->
+                    if (!armed) {
+                        // One tick on disarm, so a cancel (or an expiry) mid-fade lifts the volume
+                        // back to full instead of leaving the player permanently ducked.
+                        tickSleepTimer()
+                        return@collectLatest
+                    }
+                    while (isActive) {
+                        tickSleepTimer()
+                        delay(SLEEP_TIMER_TICK_MS)
+                    }
+                }
         }
 
         // "End of chapter" leans on the player to stop at the boundary rather than auto-advancing.
@@ -168,6 +176,16 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .distinctUntilChanged()
                 .collect { fading -> if (fading) shakeDetector?.start() else shakeDetector?.stop() }
         }
+    }
+
+    private fun tickSleepTimer() {
+        applySleepTimerAction(
+            sleepTimer.tick(
+                nowMs = System.currentTimeMillis(),
+                isPlaying = player.isPlaying,
+                chapterRemainingMs = chapterRemainingMs(),
+            ),
+        )
     }
 
     private fun applySleepTimerAction(action: SleepTimerAction) {
