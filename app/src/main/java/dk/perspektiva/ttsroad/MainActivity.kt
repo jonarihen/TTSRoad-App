@@ -63,6 +63,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +71,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -91,6 +93,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
@@ -117,6 +120,12 @@ private sealed interface AppScreen {
     data object Player : AppScreen
     data object Settings : AppScreen
 }
+
+/**
+ * Server the user signed in to, so cover URLs built from the backend's BASE_URL can be pointed at
+ * the address the phone can actually reach. See [ServerUrls.rewriteHost].
+ */
+private val LocalServerUrl = staticCompositionLocalOf { "" }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -161,16 +170,18 @@ private fun TtsRoadApp() {
     // Quietly check GitHub Releases for a newer build once per launch.
     LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
 
-    if (!session.isLoggedIn) {
-        LoginScreen(repository = repository, session = session)
-    } else {
-        MainScaffold(
-            session = session,
-            screen = screen,
-            onScreenChange = { screen = it },
-            repository = repository,
-            playbackController = playbackController,
-        )
+    CompositionLocalProvider(LocalServerUrl provides session.serverUrl) {
+        if (!session.isLoggedIn) {
+            LoginScreen(repository = repository, session = session)
+        } else {
+            MainScaffold(
+                session = session,
+                screen = screen,
+                onScreenChange = { screen = it },
+                repository = repository,
+                playbackController = playbackController,
+            )
+        }
     }
 
     UpdateOverlay(
@@ -1779,9 +1790,10 @@ private fun CoverFill(imageUrl: String?, fallback: String, modifier: Modifier, b
             .let { if (bordered) it.border(1.dp, AarisColor.Line) else it },
         contentAlignment = Alignment.Center,
     ) {
-        if (!imageUrl.isNullOrBlank()) {
+        val model = ServerUrls.rewriteHostOrNull(imageUrl, LocalServerUrl.current)
+        if (model != null) {
             AsyncImage(
-                model = imageUrl,
+                model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -1805,9 +1817,10 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
             .border(1.dp, AarisColor.Line),
         contentAlignment = Alignment.Center,
     ) {
-        if (!imageUrl.isNullOrBlank()) {
+        val model = ServerUrls.rewriteHostOrNull(imageUrl, LocalServerUrl.current)
+        if (model != null) {
             AsyncImage(
-                model = imageUrl,
+                model = model,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

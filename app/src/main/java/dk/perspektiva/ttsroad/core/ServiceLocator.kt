@@ -7,6 +7,7 @@ import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.update.UpdateManager
+import okhttp3.OkHttpClient
 
 object ServiceLocator {
     @Volatile
@@ -44,6 +45,9 @@ object ServiceLocator {
         repository ?: synchronized(this) {
             repository ?: TtsRoadRepository(tokenStore(context)).also { repository = it }
         }
+
+    /** The repository's authenticated OkHttp client, shared with Coil for cover art. */
+    fun httpClient(context: Context): OkHttpClient = repository(context).httpClient
 
     fun playbackController(context: Context): PlaybackController =
         playbackController ?: synchronized(this) {

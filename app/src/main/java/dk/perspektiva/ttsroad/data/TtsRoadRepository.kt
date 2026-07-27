@@ -42,6 +42,13 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
         }
         .build()
 
+    /**
+     * The shared client, for non-Retrofit callers that must talk to the same server — currently
+     * Coil, which needs the bearer token to load cover art. Reuses this client's connection pool.
+     */
+    val httpClient: OkHttpClient
+        get() = client
+
     private val apiCache = HashMap<String, TtsRoadApi>()
 
     private val _sessionExpired = MutableStateFlow(false)

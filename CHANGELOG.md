@@ -15,6 +15,15 @@ Notable changes to the TTSRoad Android client.
 - A refresh that fails while content is already loaded now shows a one-line notice instead of
   replacing a perfectly readable library with an error page.
 
+### Cover images load wherever audio does
+
+- Artwork was fetched with Coil's default loader and the raw URL from the API, so it missed both
+  things playback already did: the bearer token, and the host rewrite that points server-built URLs
+  at the address the phone actually connected to. On any setup where the backend's `BASE_URL`
+  differs from the connect address (LAN IP vs domain, VPN, `10.0.2.2` on the emulator), or where
+  covers sit behind auth, every cover rendered as the letter-fallback tile while audio played fine.
+  Phone UI and Android Auto artwork both fixed.
+
 ## 0.6.0 — 2026-07-02
 
 ### Media-app UI overhaul (Netflix/Audible-style)

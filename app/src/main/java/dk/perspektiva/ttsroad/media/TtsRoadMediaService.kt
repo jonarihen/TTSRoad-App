@@ -319,7 +319,8 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         private suspend fun fictionFolders(): List<MediaItem> {
             val library = service.library() ?: return emptyList()
-            return library.fictions.map(TtsRoadMediaItems::fictionFolder)
+            val serverUrl = service.serverUrl()
+            return library.fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) }
         }
 
         private suspend fun recentItems(): List<MediaItem> {
