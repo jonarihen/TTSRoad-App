@@ -111,6 +111,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -118,12 +119,14 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.data.Capability
 import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
+import dk.perspektiva.ttsroad.data.ServerProbe
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SpeedPresets
@@ -160,6 +163,9 @@ import kotlinx.coroutines.launch
  * the address the phone can actually reach. See [ServerUrls.rewriteHost].
  */
 private val LocalServerUrl = staticCompositionLocalOf { "" }
+
+/** How long the login screen waits after the last keystroke before probing the typed URL. */
+private const val ServerProbeDebounceMs = 600L
 
 class MainActivity : ComponentActivity() {
     // Notification taps that arrive while the activity is already running come through
@@ -220,6 +226,7 @@ private fun TtsRoadApp(
     val tokenStore = remember { ServiceLocator.tokenStore(context) }
     val repository = remember { ServiceLocator.repository(context) }
     val playbackController = remember { ServiceLocator.playbackController(context) }
+    val capabilityStore = remember { ServiceLocator.serverCapabilities(context) }
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val session by tokenStore.session.collectAsStateWithLifecycle(initialValue = SessionState())
@@ -244,6 +251,17 @@ private fun TtsRoadApp(
             // The cache outlives the composition, so signing out has to empty it explicitly —
             // otherwise the next account is shown the previous one's library.
             ServiceLocator.libraryCache(context).clear()
+        }
+    }
+
+    // Ask the signed-in server what it supports before any screen that gates on the answer is
+    // composed. Deliberately not something the library waits on: discovery failing has to leave
+    // the baseline login/library/playback flow exactly as it was.
+    LaunchedEffect(session.isLoggedIn, session.serverUrl) {
+        if (session.isLoggedIn) {
+            runCatching { capabilityStore.activate(session.serverUrl) }
+        } else {
+            capabilityStore.clear()
         }
     }
 
@@ -343,7 +361,9 @@ private fun UpdateOverlay(
 
 @Composable
 private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val capabilityStore = remember { ServiceLocator.serverCapabilities(context) }
     var serverUrl by remember { mutableStateOf(session.serverUrl.ifBlank { "https://" }) }
     var username by remember { mutableStateOf(session.username.orEmpty().ifBlank { "admin" }) }
     var password by remember { mutableStateOf("") }
@@ -352,9 +372,24 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var probe by remember { mutableStateOf<ServerProbe?>(null) }
     val sessionExpired by repository.sessionExpired.collectAsStateWithLifecycle()
     // A failed attempt has more to say than "your old token went stale", so it wins.
     val notice = error ?: "Session expired - sign in again".takeIf { sessionExpired }
+
+    // Validate the typed URL in the background, so "is this a TTSRoad server, and what can it do"
+    // is answered here rather than three screens later. Nothing about signing in depends on it.
+    LaunchedEffect(serverUrl) {
+        probe = null
+        val candidate = serverUrl.trim()
+        val host = candidate.removePrefix("https://").removePrefix("http://")
+        if (candidate == host || host.isBlank()) return@LaunchedEffect
+        delay(ServerProbeDebounceMs) // the field is still being typed into
+        probe = runCatching { capabilityStore.probe(candidate) }.fold(
+            onSuccess = ServerProbe::Reached,
+            onFailure = { ServerProbe.Unreachable },
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -380,6 +415,13 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
         )
+        probe?.let {
+            Spacer(modifier = Modifier.height(6.dp))
+            MetaText(
+                text = it.summary,
+                color = if (it is ServerProbe.Unreachable) AarisColor.Danger else AarisColor.Muted,
+            )
+        }
         Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(
             value = username,
@@ -1578,6 +1620,8 @@ private fun SettingsScreen(
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
+    val capabilities by ServiceLocator.serverCapabilities(context).current
+        .collectAsStateWithLifecycle()
     var isBusy by remember { mutableStateOf(false) }
 
     // Re-read on resume so returning from system settings reflects the new state.
@@ -1608,6 +1652,40 @@ private fun SettingsScreen(
                 SettingsItem(label = "User", value = session.username.orEmpty())
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                SettingsItem(
+                    label = "Server version",
+                    // A server that answered 404 is real but predates discovery, so it never
+                    // reported a version — that is worth saying plainly rather than "Unknown".
+                    value = capabilities.serverVersion
+                        ?: if (capabilities.discovered) "Not reported" else "Unknown",
+                )
+            }
+        }
+
+        // What the server said it can do, so an absent feature reads as "this server does not
+        // have it" rather than as the app being broken.
+        MetaText(text = "// Server features", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (!capabilities.discovered) {
+                    MetaText(text = "Not reported - baseline features only")
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Capability.entries.forEach { capability ->
+                        AarisTag(
+                            text = "${capability.label}: ${if (capability in capabilities) "on" else "off"}",
+                        )
+                    }
+                }
             }
         }
 

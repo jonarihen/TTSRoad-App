@@ -21,7 +21,8 @@ server. `CHANGELOG.md` records what shipped in each version.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-There is no test source set (`app/src/test`, `app/src/androidTest` do not exist) — no tests to run.
+JVM unit tests live in `app/src/test` and run with `./gradlew test`. There is no
+`app/src/androidTest` — nothing is exercised on a device or emulator.
 
 Builds need a JDK and the Android SDK, normally provisioned by Android Studio; the Gradle daemon
 toolchain is pinned to JDK 21 (`gradle/gradle-daemon-jvm.properties`) while compilation targets

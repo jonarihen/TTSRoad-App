@@ -36,9 +36,16 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .addInterceptor { chain ->
-            val builder = chain.request().newBuilder()
-            authHeader?.let { builder.header("Authorization", it) }
-            chain.proceed(builder.build())
+            val request = chain.request()
+            // Capability discovery opts out: it runs against a URL the user is still typing, and
+            // handing an arbitrary host the bearer token for the last server would leak it.
+            if (request.header(NoAuthHeader) != null) {
+                chain.proceed(request.newBuilder().removeHeader(NoAuthHeader).build())
+            } else {
+                val builder = request.newBuilder()
+                authHeader?.let { builder.header("Authorization", it) }
+                chain.proceed(builder.build())
+            }
         }
         .build()
 
@@ -111,6 +118,22 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
             }
         }
         tokenStore.clearToken()
+    }
+
+    /**
+     * Ask a server what optional features it has.
+     *
+     * A `404` is the documented answer from a server built before discovery existed, and comes
+     * back as [ServerCapabilities.Baseline] rather than an error — that pairing is exactly what
+     * this endpoint exists to make safe. Everything else (unreachable host, TLS failure, a body
+     * that is not JSON) still throws, so callers can tell an old server from no server.
+     */
+    suspend fun capabilities(baseUrl: String): ServerCapabilities = withContext(Dispatchers.IO) {
+        try {
+            ServerCapabilities.from(api(normalizeBaseUrl(baseUrl)).capabilities())
+        } catch (e: HttpException) {
+            if (e.code() == 404) ServerCapabilities.Baseline else throw e
+        }
     }
 
     suspend fun library(): LibraryResponse = withAuthorizedApi { it.library() }

@@ -49,6 +49,55 @@ Use this header for authenticated API and audio requests:
 Authorization: Bearer <token>
 ```
 
+## Capability Discovery
+
+```http
+GET /api/mobile/capabilities
+```
+
+Unauthenticated on purpose, so it can be called while a server URL is still being
+validated. The client calls it twice: once from the login screen as the URL is
+typed, and once after login before the library loads.
+
+```json
+{
+  "api_version": 1,
+  "server": {
+    "name": "TTSRoad",
+    "version": "1.4.0",
+    "base_url": "https://ttsroad.example.com"
+  },
+  "capabilities": {
+    "readalong": true,
+    "search": false,
+    "bookmarks": false,
+    "delta_sync": false,
+    "batch_progress": false,
+    "audio_content_hash": false,
+    "device_management": true
+  },
+  "limits": {
+    "max_chapters_per_page": 200
+  }
+}
+```
+
+Rules the client follows:
+
+- Only a literal `true` enables a feature. A missing key, a `null`, or a value of
+  another type all mean "off", and none of them is an error.
+- Keys the app does not recognise are ignored, so a newer server can advertise
+  features this build has never heard of without breaking it.
+- `404` means a server older than discovery: real and usable, every optional
+  capability off, baseline login/library/playback unchanged.
+- `api_version` is a breaking-change signal only. It never stands in for an
+  additive capability — each one is gated on its own flag.
+- Answers are cached per normalized base URL for six hours. Re-asking is also how
+  a `server.version` bump is noticed, since the version arrives in this payload.
+
+`Capability` in `data/ServerCapabilities.kt` is the list of keys this build knows.
+Adding a value there is what makes a new capability visible to the app.
+
 ## Mobile API
 
 ### Login

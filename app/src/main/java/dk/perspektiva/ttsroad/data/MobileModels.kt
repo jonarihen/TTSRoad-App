@@ -37,6 +37,25 @@ data class ServerInfo(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
 )
 
+/**
+ * Answer from the public `/api/mobile/capabilities` endpoint.
+ *
+ * The maps are deliberately untyped: the server is free to advertise keys this build has never
+ * heard of, and decoding must not fail on one. [ServerCapabilities.from] does the narrowing.
+ */
+data class CapabilitiesResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val server: CapabilityServerInfo? = null,
+    val capabilities: Map<String, Any?> = emptyMap(),
+    val limits: Map<String, Any?> = emptyMap(),
+)
+
+data class CapabilityServerInfo(
+    val name: String = "TTSRoad",
+    val version: String? = null,
+    @param:Json(name = "base_url") val baseUrl: String? = null,
+)
+
 data class LibraryResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
     val fictions: List<FictionSummary> = emptyList(),

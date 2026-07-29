@@ -2,11 +2,26 @@ package dk.perspektiva.ttsroad.data
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
+/**
+ * Marks a request the auth interceptor must leave alone. It is stripped before the request goes
+ * out; see the interceptor in [TtsRoadRepository].
+ */
+const val NoAuthHeader = "X-TtsRoad-No-Auth"
+
 interface TtsRoadApi {
+    /**
+     * Public capability discovery. Unauthenticated on purpose — the login screen calls it against
+     * a URL the user is still typing, which must never receive the previous server's token.
+     */
+    @Headers("X-TtsRoad-No-Auth: 1")
+    @GET("api/mobile/capabilities")
+    suspend fun capabilities(): CapabilitiesResponse
+
     @POST("api/mobile/login")
     suspend fun login(@Body request: LoginRequest): LoginResponse
 

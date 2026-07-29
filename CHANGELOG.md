@@ -2,6 +2,19 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Server capability discovery
+
+- The login screen now checks the server URL as you type it and says what it found: the server
+  name and version, which optional features it offers, or that it could not be reached. Sign-in
+  itself is unchanged and never waits for the check.
+- The app asks the signed-in server what it supports before the library loads, and Settings lists
+  the answer, so a feature that is missing reads as "this server does not have it" rather than as
+  the app misbehaving.
+- Servers older than capability discovery keep working exactly as before, with every optional
+  feature off.
+
 ## 0.7.2 — 2026-07-27
 
 ### Cover artwork hotfix
