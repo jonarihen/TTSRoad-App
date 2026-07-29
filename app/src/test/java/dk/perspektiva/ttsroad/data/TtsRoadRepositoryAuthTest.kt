@@ -55,7 +55,7 @@ class TtsRoadRepositoryAuthTest {
     }
 
     @Test
-    fun `401 on an authenticated call clears the token and flags the session as expired`() = runTest {
+    fun `401 on an authenticated call clears the token and ends the session`() = runTest {
         val store = loggedInStore()
         val repository = TtsRoadRepository(store)
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"detail":"Invalid token"}"""))
@@ -67,7 +67,81 @@ class TtsRoadRepositoryAuthTest {
         assertEquals(1, store.clearTokenCalls)
         assertNull(store.current().token)
         assertFalse(store.current().isLoggedIn)
-        assertTrue(repository.sessionExpired.value)
+        assertEquals("Invalid token", repository.sessionEnded.value?.message)
+    }
+
+    @Test
+    fun `an expired token keeps the server's reason and wording`() = runTest {
+        val store = loggedInStore()
+        val repository = TtsRoadRepository(store)
+        server.enqueue(
+            MockResponse().setResponseCode(401).setBody(
+                """{"detail":{"message":"This device session expired. Sign in again.",""" +
+                    """"reason":"token_expired"}}""",
+            ),
+        )
+
+        runCatching { repository.library() }
+
+        val ended = repository.sessionEnded.value
+        assertEquals(AuthFailureReason.Expired, ended?.reason)
+        assertEquals("This device session expired. Sign in again.", ended?.message)
+        assertEquals(1, store.clearTokenCalls)
+    }
+
+    @Test
+    fun `a revoked token is reported as revoked, not expired`() = runTest {
+        val store = loggedInStore()
+        val repository = TtsRoadRepository(store)
+        server.enqueue(
+            MockResponse().setResponseCode(401).setBody(
+                """{"detail":{"message":"This device session was revoked. Sign in again.",""" +
+                    """"reason":"token_revoked"}}""",
+            ),
+        )
+
+        runCatching { repository.library() }
+
+        assertEquals(AuthFailureReason.Revoked, repository.sessionEnded.value?.reason)
+    }
+
+    @Test
+    fun `the first reason wins when later background calls also get a 401`() = runTest {
+        val store = loggedInStore()
+        val repository = TtsRoadRepository(store)
+        server.enqueue(
+            MockResponse().setResponseCode(401).setBody(
+                """{"detail":{"message":"Revoked","reason":"token_revoked"}}""",
+            ),
+        )
+        runCatching { repository.library() }
+
+        // The audio stream (or a queued progress save) finds out moments later. The reason that
+        // ended the session is the useful one, so the second notice must not overwrite it.
+        repository.endSession(
+            SessionEndedNotice(AuthFailureReason.Invalid, "The bearer token is invalid."),
+        )
+
+        assertEquals(AuthFailureReason.Revoked, repository.sessionEnded.value?.reason)
+        assertEquals("Revoked", repository.sessionEnded.value?.message)
+    }
+
+    @Test
+    fun `the audio sign-out path drops the token just like an API call`() = runTest {
+        val store = loggedInStore()
+        val repository = TtsRoadRepository(store)
+
+        // What TtsRoadMediaService does with a 401 from the audio stream.
+        repository.endSession(
+            parseSessionEndedNotice(
+                """{"detail":{"message":"This device session was revoked. Sign in again.",""" +
+                    """"reason":"token_revoked"}}""",
+            ),
+        )
+
+        assertEquals(1, store.clearTokenCalls)
+        assertFalse(store.current().isLoggedIn)
+        assertEquals(AuthFailureReason.Revoked, repository.sessionEnded.value?.reason)
     }
 
     @Test
@@ -79,7 +153,7 @@ class TtsRoadRepositoryAuthTest {
         assertEquals(0, repository.library().fictions.size)
         assertEquals(0, store.clearTokenCalls)
         assertTrue(store.current().isLoggedIn)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnded.value)
     }
 
     @Test
@@ -93,7 +167,7 @@ class TtsRoadRepositoryAuthTest {
         assertEquals(500, (thrown as HttpException).code())
         assertEquals(0, store.clearTokenCalls)
         assertTrue(store.current().isLoggedIn)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnded.value)
     }
 
     @Test
@@ -107,7 +181,7 @@ class TtsRoadRepositoryAuthTest {
         }
 
         assertEquals(1, store.clearTokenCalls)
-        assertTrue(repository.sessionExpired.value)
+        assertNotNull(repository.sessionEnded.value)
     }
 
     @Test
@@ -127,7 +201,7 @@ class TtsRoadRepositoryAuthTest {
 
         assertEquals(LoginResult.Failure("Incorrect username or password"), result)
         assertEquals(0, store.clearTokenCalls)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnded.value)
     }
 
     @Test
@@ -147,7 +221,7 @@ class TtsRoadRepositoryAuthTest {
 
         assertEquals(LoginResult.TotpRequired, result)
         assertEquals(0, store.clearTokenCalls)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnded.value)
     }
 
     @Test
@@ -156,7 +230,7 @@ class TtsRoadRepositoryAuthTest {
         val repository = TtsRoadRepository(store)
         server.enqueue(MockResponse().setResponseCode(401))
         runCatching { repository.library() }
-        assertTrue(repository.sessionExpired.value)
+        assertNotNull(repository.sessionEnded.value)
 
         server.enqueue(
             MockResponse().setBody(
@@ -171,7 +245,7 @@ class TtsRoadRepositoryAuthTest {
         )
 
         assertEquals(LoginResult.Success, result)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnded.value)
         assertEquals("fresh", store.current().token)
     }
 

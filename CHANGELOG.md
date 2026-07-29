@@ -2,6 +2,20 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Device sessions
+
+- The server now expires a sign-in after 90 days unused, and can revoke one from the web account
+  page. When that happens the app signs out once and says which it was — "this device session
+  expired" or "was revoked" — instead of failing silently or looking like a playback error.
+- A 401 on the audio stream and a 401 on an ordinary API call now take the same sign-out path, so
+  whichever one notices first, the reason shown on the login screen is the same.
+- New Settings > Manage devices screen: every phone or tablet signed in to this account, with when
+  it was signed in, when it was last used, how long its session has left, and its last address.
+- A device can be signed out from that screen, or all other devices at once. The device you are
+  holding is never signed out by "sign out other devices", and keeps playing.
+
 ## 0.7.2 — 2026-07-27
 
 ### Cover artwork hotfix

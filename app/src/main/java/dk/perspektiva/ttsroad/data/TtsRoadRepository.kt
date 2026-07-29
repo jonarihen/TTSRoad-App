@@ -44,13 +44,14 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
 
     private val apiCache = HashMap<String, TtsRoadApi>()
 
-    private val _sessionExpired = MutableStateFlow(false)
+    private val _sessionEnded = MutableStateFlow<SessionEndedNotice?>(null)
 
     /**
-     * True once an authenticated call came back 401 and the stored token was dropped, so the
-     * login screen can say why it is being shown. Cleared by a successful [login].
+     * Set once an authenticated request came back 401 and the stored token was dropped, carrying
+     * the server's own explanation so the login screen can say whether the session expired or was
+     * revoked rather than just reappearing. Cleared by a successful [login].
      */
-    val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
+    val sessionEnded: StateFlow<SessionEndedNotice?> = _sessionEnded.asStateFlow()
 
     suspend fun login(
         baseUrl: String,
@@ -73,7 +74,7 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
                 ),
             )
             tokenStore.saveLogin(normalized, response)
-            _sessionExpired.value = false
+            _sessionEnded.value = null
             LoginResult.Success
         } catch (e: HttpException) {
             val body = e.response()?.errorBody()?.string()
@@ -87,18 +88,19 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
         }
     }
 
-    /** Pull a human-readable message out of FastAPI's `{"detail": ...}` error body. */
-    private fun parseDetailMessage(body: String?): String? {
-        if (body.isNullOrBlank()) return null
-        return try {
-            val parsed = moshi.adapter(Any::class.java).fromJson(body) as? Map<*, *>
-            when (val detail = parsed?.get("detail")) {
-                is String -> detail
-                is Map<*, *> -> detail["message"] as? String
-                else -> null
-            }
-        } catch (_: Exception) {
-            null
+    /**
+     * Drop the stored credential and record why.
+     *
+     * Public because the media service reaches the same conclusion from a 401 on the audio stream
+     * and must land in the same place: one sign-out path, one explanation, whichever request found
+     * out first. Repeated calls keep the first notice — the reason that ended the session is more
+     * useful than whichever background request noticed last.
+     */
+    suspend fun endSession(notice: SessionEndedNotice) = withContext(Dispatchers.IO) {
+        authHeader = null
+        tokenStore.clearToken()
+        if (_sessionEnded.value == null) {
+            _sessionEnded.value = notice
         }
     }
 
@@ -114,6 +116,15 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
     }
 
     suspend fun library(): LibraryResponse = withAuthorizedApi { it.library() }
+
+    suspend fun devices(): DevicesResponse = withAuthorizedApi { it.devices() }
+
+    suspend fun revokeDevice(tokenId: Int): RevokeDeviceResponse =
+        withAuthorizedApi { it.revokeDevice(tokenId) }
+
+    /** Signs every other device out. The token making the request is kept by the server. */
+    suspend fun revokeOtherDevices(): RevokeOtherDevicesResponse =
+        withAuthorizedApi { it.revokeOtherDevices() }
 
     suspend fun chapters(
         fictionId: Int,
@@ -180,9 +191,7 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
             block(api(session.serverUrl))
         } catch (e: HttpException) {
             if (e.code() == 401) {
-                authHeader = null
-                tokenStore.clearToken()
-                _sessionExpired.value = true
+                endSession(parseSessionEndedNotice(e.response()?.errorBody()?.string()))
             }
             throw e
         }

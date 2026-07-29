@@ -74,6 +74,8 @@ Success response:
 {
   "token": "ttsr_...",
   "token_type": "bearer",
+  "device_id": 42,
+  "expires_at": "2026-10-26T12:00:00Z",
   "user": {
     "id": 1,
     "username": "admin",
@@ -87,12 +89,30 @@ Success response:
 }
 ```
 
-Store `token` in DataStore. Never log it.
+Store `token` in DataStore. Never log it. Tokens expire after 90 days without
+use; an authenticated request renews the expiry silently. Do not build a refresh
+loop around the absolute timestamp.
 
 Errors:
 
 - `401` invalid credentials
 - `429` throttled, with `Retry-After`
+
+An authenticated request whose bearer token can no longer be used returns a
+distinguishable `401`:
+
+```json
+{
+  "detail": {
+    "message": "This device session expired. Sign in again.",
+    "reason": "token_expired"
+  }
+}
+```
+
+`reason` is `token_expired`, `token_revoked`, or `invalid_token`. Clear the
+stored credential, stop retrying, and show the message. This applies to JSON API
+requests and bearer-authenticated `/audio/...` requests.
 
 ### Logout
 
@@ -109,6 +129,27 @@ Response:
   "revoked": true
 }
 ```
+
+### Devices
+
+```http
+GET /api/mobile/devices
+Authorization: Bearer <token>
+```
+
+Returns `{"api_version": 1, "devices": [...]}`. Each device has `id`,
+`device_name`, `created_at`, `last_used_at`, `expires_at`, `last_ip`, `status`,
+and `is_current`.
+
+```http
+DELETE /api/mobile/devices/{token_id}
+POST /api/mobile/devices/revoke-others
+Authorization: Bearer <token>
+```
+
+The first revokes the named session if it belongs to the current user. The
+second revokes every other mobile session and deliberately keeps the token used
+for the request.
 
 ### Current User
 

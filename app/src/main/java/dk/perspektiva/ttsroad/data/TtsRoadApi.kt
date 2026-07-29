@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -15,6 +16,15 @@ interface TtsRoadApi {
 
     @GET("api/mobile/me")
     suspend fun me(): CurrentUserResponse
+
+    @GET("api/mobile/devices")
+    suspend fun devices(): DevicesResponse
+
+    @DELETE("api/mobile/devices/{token_id}")
+    suspend fun revokeDevice(@Path("token_id") tokenId: Int): RevokeDeviceResponse
+
+    @POST("api/mobile/devices/revoke-others")
+    suspend fun revokeOtherDevices(): RevokeOtherDevicesResponse
 
     @GET("api/mobile/library")
     suspend fun library(): LibraryResponse

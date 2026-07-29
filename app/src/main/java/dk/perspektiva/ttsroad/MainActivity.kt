@@ -39,6 +39,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -120,6 +121,7 @@ import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.DeviceSession
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
@@ -133,6 +135,10 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterView
+import dk.perspektiva.ttsroad.data.deviceExpiryLabel
+import dk.perspektiva.ttsroad.data.deviceLastUsedLabel
+import dk.perspektiva.ttsroad.data.deviceTimestampLabel
+import dk.perspektiva.ttsroad.data.isActive
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.nav.AppScreen
 import dk.perspektiva.ttsroad.nav.navigateTo
@@ -352,9 +358,10 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val sessionExpired by repository.sessionExpired.collectAsStateWithLifecycle()
-    // A failed attempt has more to say than "your old token went stale", so it wins.
-    val notice = error ?: "Session expired - sign in again".takeIf { sessionExpired }
+    val sessionEnded by repository.sessionEnded.collectAsStateWithLifecycle()
+    // A failed attempt has more to say than "your old token went stale", so it wins. Otherwise the
+    // server's own wording explains whether the session aged out or was revoked from elsewhere.
+    val notice = error ?: sessionEnded?.message
 
     Column(
         modifier = Modifier
@@ -502,6 +509,7 @@ private fun MainScaffold(
         AppScreen.Fictions -> "All fictions"
         AppScreen.Player -> "Now playing"
         AppScreen.Settings -> "Settings"
+        AppScreen.Devices -> "Devices"
     }
 
     Scaffold(
@@ -592,6 +600,12 @@ private fun MainScaffold(
                 AppScreen.Settings -> SettingsScreen(
                     padding = padding,
                     session = session,
+                    repository = repository,
+                    onOpenDevices = { onScreenChange(AppScreen.Devices) },
+                )
+
+                AppScreen.Devices -> DevicesScreen(
+                    padding = padding,
                     repository = repository,
                 )
             }
@@ -1571,6 +1585,7 @@ private fun SettingsScreen(
     padding: PaddingValues,
     session: SessionState,
     repository: TtsRoadRepository,
+    onOpenDevices: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1608,6 +1623,15 @@ private fun SettingsScreen(
                 SettingsItem(label = "User", value = session.username.orEmpty())
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(
+                    text = "Every phone or tablet signed in to this account holds its own key. " +
+                        "Review them if one was lost.",
+                    color = AarisColor.Dim,
+                )
+                OutlinedButton(onClick = onOpenDevices, shape = RectangleShape) {
+                    Text("MANAGE DEVICES")
+                }
             }
         }
 
@@ -1765,6 +1789,194 @@ private fun SettingsScreen(
         ) {
             Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
         }
+    }
+}
+
+/**
+ * Every session signed in to this account, with a way to end the ones that should not exist.
+ *
+ * The point of the screen is the lost phone: a bearer token is a key to the whole library, and
+ * until the server grew device sessions the only way to take one back was to be holding the device.
+ * Revoking here takes effect on the server immediately — the revoked device's next API call or
+ * audio request gets a 401 and signs itself out.
+ */
+@Composable
+private fun DevicesScreen(
+    padding: PaddingValues,
+    repository: TtsRoadRepository,
+) {
+    val scope = rememberCoroutineScope()
+    var devices by remember { mutableStateOf<List<DeviceSession>?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var actionError by remember { mutableStateOf<String?>(null) }
+    var isBusy by remember { mutableStateOf(false) }
+    var confirmRevokeOthers by remember { mutableStateOf(false) }
+
+    suspend fun load() {
+        runCatching { repository.devices() }
+            .onSuccess {
+                devices = it.devices
+                loadError = null
+            }
+            .onFailure { loadError = it.message ?: "Could not load devices" }
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    /** Run a revoke, then reload — the server decides what the list looks like afterwards. */
+    fun revoke(block: suspend () -> Unit) {
+        scope.launch {
+            isBusy = true
+            actionError = null
+            runCatching { block() }
+                .onFailure { actionError = it.message ?: "Could not revoke the session" }
+            load()
+            isBusy = false
+        }
+    }
+
+    val loaded = devices
+    when {
+        loaded == null && loadError == null -> LoadingPane(padding)
+        loaded == null -> ErrorPane(
+            padding = padding,
+            message = loadError ?: "Could not load devices",
+            onRetry = { scope.launch { load() } },
+        )
+
+        else -> {
+            val others = loaded.count { !it.isCurrent && it.isActive }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item {
+                    MetaText(text = "// Signed-in devices", color = AarisColor.Accent)
+                }
+                actionError?.let { message ->
+                    item { MetaText(text = message, color = AarisColor.Danger) }
+                }
+                if (loaded.isEmpty()) {
+                    item { EmptyCard("No device sessions") }
+                }
+                items(loaded, key = { it.id }) { device ->
+                    DeviceCard(
+                        device = device,
+                        enabled = !isBusy,
+                        onRevoke = { revoke { repository.revokeDevice(device.id) } },
+                    )
+                }
+                if (others > 0) {
+                    item {
+                        OutlinedButton(
+                            onClick = { confirmRevokeOthers = true },
+                            enabled = !isBusy,
+                            shape = RectangleShape,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = AarisColor.Danger,
+                            ),
+                        ) {
+                            Text("SIGN OUT $others OTHER DEVICE${if (others == 1) "" else "S"}")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (confirmRevokeOthers) {
+        AlertDialog(
+            onDismissRequest = { confirmRevokeOthers = false },
+            title = { Text("Sign out other devices?") },
+            text = {
+                MetaText(
+                    text = "Every other phone or tablet signed in to this account is signed out " +
+                        "and has to sign in again. This device keeps playing.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRevokeOthers = false
+                        revoke { repository.revokeOtherDevices() }
+                    },
+                ) {
+                    Text("SIGN THEM OUT")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRevokeOthers = false }) { Text("CANCEL") }
+            },
+            containerColor = AarisColor.BgRaise,
+            shape = RectangleShape,
+        )
+    }
+}
+
+@Composable
+private fun DeviceCard(
+    device: DeviceSession,
+    enabled: Boolean,
+    onRevoke: () -> Unit,
+) {
+    AarisCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = device.deviceName,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                AarisTag(text = if (device.isCurrent) "This device" else device.status)
+            }
+            DeviceDetail(label = "Last used", value = deviceLastUsedLabel(device.lastUsedAt))
+            DeviceDetail(label = "Signed in", value = deviceTimestampLabel(device.createdAt))
+            DeviceDetail(label = "Session", value = deviceExpiryLabel(device.expiresAt))
+            device.lastIp?.takeIf { it.isNotBlank() }?.let {
+                DeviceDetail(label = "Last address", value = it)
+            }
+            // The current session is ended from Settings > Sign out, which also stops playback and
+            // returns to the login screen. Revoking it from here would leave the app holding a
+            // token the server has already thrown away.
+            if (!device.isCurrent && device.isActive) {
+                OutlinedButton(
+                    onClick = onRevoke,
+                    enabled = enabled,
+                    shape = RectangleShape,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Danger),
+                ) {
+                    Text("SIGN THIS DEVICE OUT")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceDetail(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        MetaText(text = label, color = AarisColor.Dim)
+        Spacer(modifier = Modifier.width(12.dp))
+        MetaText(text = value, color = AarisColor.Muted)
     }
 }
 

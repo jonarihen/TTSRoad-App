@@ -12,6 +12,10 @@ data class LoginRequest(
 data class LoginResponse(
     val token: String,
     @param:Json(name = "token_type") val tokenType: String = "bearer",
+    /** Row id of this device's session, so the devices screen can mark it even before first use. */
+    @param:Json(name = "device_id") val deviceId: Int? = null,
+    /** When the token dies if unused. Renewed silently server-side — never poll or refresh on it. */
+    @param:Json(name = "expires_at") val expiresAt: String? = null,
     val user: MobileUser,
     val server: ServerInfo? = null,
 )
@@ -35,6 +39,41 @@ data class ServerInfo(
     val name: String = "TTSRoad",
     @param:Json(name = "base_url") val baseUrl: String? = null,
     @param:Json(name = "api_version") val apiVersion: Int = 1,
+)
+
+/**
+ * One bearer-token session from `GET /api/mobile/devices` — this phone, an old phone, a tablet.
+ *
+ * Every field except the id is optional on the wire in practice: a session that has never been used
+ * has no `last_used_at`, and a server behind a proxy may not record an IP.
+ */
+data class DeviceSession(
+    val id: Int = 0,
+    @param:Json(name = "device_name") val deviceName: String = "Unnamed device",
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    @param:Json(name = "last_used_at") val lastUsedAt: String? = null,
+    @param:Json(name = "expires_at") val expiresAt: String? = null,
+    @param:Json(name = "last_ip") val lastIp: String? = null,
+    /** `active`, `expired`, or `revoked`. */
+    val status: String = "active",
+    /** True for the session making the request — the one that must not be revoked by mistake. */
+    @param:Json(name = "is_current") val isCurrent: Boolean = false,
+)
+
+data class DevicesResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val devices: List<DeviceSession> = emptyList(),
+)
+
+data class RevokeDeviceResponse(
+    val status: String = "",
+    val revoked: Boolean = false,
+    @param:Json(name = "token_id") val tokenId: Int = 0,
+)
+
+data class RevokeOtherDevicesResponse(
+    val status: String = "",
+    @param:Json(name = "revoked_count") val revokedCount: Int = 0,
 )
 
 data class LibraryResponse(

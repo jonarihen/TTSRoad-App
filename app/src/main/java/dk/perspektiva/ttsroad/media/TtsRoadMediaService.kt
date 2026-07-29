@@ -38,6 +38,7 @@ import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.data.parseSessionEndedNotice
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.player.PlaybackFailure
 import dk.perspektiva.ttsroad.player.ShakeDetector
@@ -258,19 +259,25 @@ class TtsRoadMediaService : MediaLibraryService() {
      */
     @OptIn(UnstableApi::class)
     private fun handlePlayerError(error: PlaybackException) {
-        val httpStatus = generateSequence(error.cause) { it.cause }
+        val httpFailure = generateSequence(error.cause) { it.cause }
             .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
             .firstOrNull()
-            ?.responseCode
 
-        when (classifyPlaybackError(error.errorCode, httpStatus)) {
+        when (classifyPlaybackError(error.errorCode, httpFailure?.responseCode)) {
             PlaybackFailure.Unauthorized -> {
-                // Same conclusion as a 401 on an API call: the stored token cannot be used again,
-                // so drop it and let the session observer fall back to the login screen. Retrying
-                // would just burn battery against a server that will keep saying no.
+                // Same conclusion as a 401 on an API call, so take the same exit: the stored token
+                // cannot be used again, and the session observer falls back to the login screen.
+                // Retrying would just burn battery against a server that will keep saying no.
+                //
+                // The rejected response body carries the server's reason ("expired" vs "revoked"),
+                // and this is the only place it can be read — a PlaybackException relayed to a
+                // controller has already lost its cause.
                 retryJob?.cancel()
                 retryAttempt = 0
-                serviceScope.launch { tokenStore.clearToken() }
+                val notice = parseSessionEndedNotice(
+                    httpFailure?.responseBody?.toString(Charsets.UTF_8),
+                )
+                serviceScope.launch { repository.endSession(notice) }
             }
 
             is PlaybackFailure.Transient -> scheduleRetry()
