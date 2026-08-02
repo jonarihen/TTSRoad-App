@@ -1,0 +1,297 @@
+package dk.perspektiva.ttsroad.download
+
+import android.content.Context
+import androidx.annotation.OptIn
+import androidx.core.net.toUri
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.database.DatabaseProvider
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.datasource.cache.Cache
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheKeyFactory
+import androidx.media3.datasource.cache.NoOpCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadManager
+import androidx.media3.exoplayer.offline.DownloadRequest
+import androidx.media3.exoplayer.offline.DownloadService
+import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.TokenStore
+import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
+import java.io.File
+import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+
+/**
+ * Owns the on-disk media cache and the download queue.
+ *
+ * One instance per process, held by `ServiceLocator`, because [SimpleCache] refuses to open a
+ * directory a second time — the playback service and the download service must share it or neither
+ * works.
+ *
+ * Two things it deliberately does *not* do, because the policy has not been decided:
+ * - evict anything automatically. The evictor is [NoOpCacheEvictor] and there is no size cap, so
+ *   nothing the user listened to or downloaded disappears behind their back. The cost is that the
+ *   read-through cache grows until "delete all downloads" is used.
+ * - distinguish a read-through cache entry from an explicit download in terms of storage budget.
+ *   Both live in one cache; only the download index knows which chapters were asked for by name.
+ *
+ * Opted in once for the class: the cache, download and datasource APIs are all still marked
+ * unstable in media3 1.10.0.
+ */
+@OptIn(UnstableApi::class)
+class OfflineDownloads(
+    private val context: Context,
+    tokenStore: TokenStore,
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    // Same contract as the player's resolver: read the latest header per request, so signing out
+    // and back in does not require rebuilding the cache, the manager or the player.
+    @Volatile
+    private var authHeader: String? = null
+
+    private val _downloads = MutableStateFlow<Map<String, ChapterDownload>>(emptyMap())
+
+    /** Every known download, keyed by the chapter's media id. Empty until the index has loaded. */
+    val downloads: StateFlow<Map<String, ChapterDownload>> = _downloads.asStateFlow()
+
+    private val databaseProvider: DatabaseProvider by lazy { StandaloneDatabaseProvider(context) }
+
+    /**
+     * Deliberately under `filesDir`, not `cacheDir`: the OS empties `cacheDir` under storage
+     * pressure, and silently deleting the chapters someone downloaded for a flight is the exact
+     * failure this feature exists to prevent.
+     */
+    private val cache: Cache by lazy {
+        SimpleCache(File(context.filesDir, CacheDirName), NoOpCacheEvictor(), databaseProvider)
+    }
+
+    /**
+     * Cache identity for a request. Falls back to the URL's path rather than the whole URL, so a
+     * download survives the user signing in against a different address for the same server — see
+     * [DownloadCacheKeys].
+     *
+     * The fallback matters more than the explicit key: controllers hand media items back across the
+     * binder stripped of their local configuration, so a played item often arrives with no key at
+     * all and the URL is the only thing left to derive one from.
+     */
+    private val cacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
+        dataSpec.key ?: DownloadCacheKeys.forUrl(dataSpec.uri.toString())
+    }
+
+    /** Auth-injecting HTTP source used to fetch bytes the cache does not have. */
+    private val upstreamFactory: DataSource.Factory = ResolvingDataSource.Factory(
+        DefaultHttpDataSource.Factory(),
+        ResolvingDataSource.Resolver { dataSpec ->
+            val header = authHeader ?: return@Resolver dataSpec
+            dataSpec.withAdditionalHeaders(mapOf("Authorization" to header))
+        },
+    )
+
+    val downloadManager: DownloadManager by lazy {
+        DownloadManager(
+            context,
+            databaseProvider,
+            cache,
+            upstreamFactory,
+            // Two at a time: enough to keep a phone's link busy without starving playback of the
+            // chapter the user is actually listening to.
+            Executors.newFixedThreadPool(MaxParallelDownloads),
+        ).apply {
+            maxParallelDownloads = MaxParallelDownloads
+            addListener(
+                object : DownloadManager.Listener {
+                    override fun onInitialized(downloadManager: DownloadManager) {
+                        // Fired once the persisted index has been read — this is what makes a
+                        // download that was in flight when the app died reappear in the UI.
+                        publish(downloadManager.currentDownloads)
+                        loadIndex()
+                    }
+
+                    override fun onDownloadChanged(
+                        downloadManager: DownloadManager,
+                        download: Download,
+                        finalException: Exception?,
+                    ) {
+                        put(download)
+                    }
+
+                    override fun onDownloadRemoved(
+                        downloadManager: DownloadManager,
+                        download: Download,
+                    ) {
+                        _downloads.value = _downloads.value - download.request.id
+                    }
+                },
+            )
+        }
+    }
+
+    init {
+        scope.launch {
+            tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
+        }
+        // Touching the manager is what makes it read the persisted index, which is what makes
+        // yesterday's downloads show up in the chapter rows again. Done off the main thread because
+        // opening the cache scans its directory, and it is not worth janking the first frame.
+        scope.launch(Dispatchers.IO) { downloadManager }
+    }
+
+    /**
+     * Wrap [upstream] so the player reads through the cache first.
+     *
+     * The caller passes its own auth-injecting source rather than this class's, so the service keeps
+     * one resolver for playback and there is no second place that knows how the header is built.
+     * Writes go through the same cache the downloads use, which is what makes a chapter that was
+     * merely streamed replay without touching the server.
+     */
+    fun readThroughFactory(upstream: DataSource.Factory): DataSource.Factory =
+        CacheDataSource.Factory()
+            .setCache(cache)
+            .setUpstreamDataSourceFactory(upstream)
+            .setCacheKeyFactory(cacheKeyFactory)
+            // A cache that cannot be written (full disk, revoked permission) must degrade to plain
+            // streaming rather than stopping playback.
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
+    /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
+    fun download(chapter: ChapterSummary, serverUrl: String?) {
+        val spec = chapterDownloadSpec(chapter, serverUrl) ?: return
+        send(spec.toDownloadRequest())
+    }
+
+    /** Queue several chapters in one go — the fiction header's "download next N". */
+    fun download(chapters: List<ChapterSummary>, serverUrl: String?) {
+        chapters.forEach { download(it, serverUrl) }
+    }
+
+    /** Delete a chapter's audio, or cancel it if it is still downloading. */
+    fun remove(chapterId: Int) {
+        DownloadService.sendRemoveDownload(
+            context,
+            TtsRoadDownloadService::class.java,
+            TtsRoadMediaIds.chapter(chapterId),
+            /* foreground= */ false,
+        )
+    }
+
+    /**
+     * Delete every download *and* everything the read-through cache picked up while streaming.
+     *
+     * Both live in one cache, so this is the only honest "free the space" action available until the
+     * budget question is decided.
+     */
+    fun removeAll() {
+        DownloadService.sendRemoveAllDownloads(
+            context,
+            TtsRoadDownloadService::class.java,
+            /* foreground= */ false,
+        )
+        scope.launch(Dispatchers.IO) {
+            // removeAllDownloads only clears what the index knows about; chapters that were merely
+            // streamed have cache spans but no download record.
+            runCatching { cache.keys.toList().forEach(cache::removeResource) }
+            refreshCacheBytes()
+        }
+    }
+
+    /**
+     * Restart whatever was still in flight when the app was last killed.
+     *
+     * Called from the activity, so the process is in the foreground and starting the service is
+     * allowed. Downloads are not resumed from the background on purpose: an audiobook is not worth
+     * a background service start, and the user will open the app before the next drive anyway.
+     */
+    fun resumeUnfinished() {
+        runCatching {
+            DownloadService.sendResumeDownloads(
+                context,
+                TtsRoadDownloadService::class.java,
+                /* foreground= */ false,
+            )
+        }
+    }
+
+    private val _cacheBytes = MutableStateFlow(0L)
+
+    /** Total bytes the media cache occupies — downloads and streamed-through audio together. */
+    val cacheBytes: StateFlow<Long> = _cacheBytes.asStateFlow()
+
+    /** Re-read the cache size. Touches the disk, so it is kept off the main thread. */
+    fun refreshCacheBytes() {
+        scope.launch(Dispatchers.IO) {
+            _cacheBytes.value = runCatching { cache.cacheSpace }.getOrDefault(0L)
+        }
+    }
+
+    private fun send(request: DownloadRequest) {
+        DownloadService.sendAddDownload(
+            context,
+            TtsRoadDownloadService::class.java,
+            request,
+            /* foreground= */ false,
+        )
+    }
+
+    /** Read every persisted download, including the completed ones the manager does not hold. */
+    private fun loadIndex() {
+        scope.launch(Dispatchers.IO) {
+            val loaded = runCatching {
+                downloadManager.downloadIndex.getDownloads().use { cursor ->
+                    buildList {
+                        while (cursor.moveToNext()) add(cursor.download)
+                    }
+                }
+            }.getOrDefault(emptyList())
+            publish(loaded)
+            refreshCacheBytes()
+        }
+    }
+
+    private fun publish(loaded: List<Download>) {
+        if (loaded.isEmpty()) return
+        _downloads.value = _downloads.value + loaded.associate { it.request.id to it.toChapterDownload() }
+    }
+
+    private fun put(download: Download) {
+        _downloads.value = _downloads.value + (download.request.id to download.toChapterDownload())
+        refreshCacheBytes()
+    }
+
+    private fun Download.toChapterDownload() = ChapterDownload(
+        state = chapterDownloadState(state),
+        percent = downloadPercent(percentDownloaded),
+        bytesDownloaded = bytesDownloaded,
+    )
+
+    private companion object {
+        const val CacheDirName = "media_downloads"
+        const val MaxParallelDownloads = 2
+    }
+}
+
+/**
+ * The Media3 request for this spec.
+ *
+ * Lives here rather than on [ChapterDownloadSpec] because parsing a `Uri` is the one part of
+ * building a request that cannot run in a JVM unit test — keeping it out of the spec is what leaves
+ * the id, host and cache-key decisions testable.
+ */
+@OptIn(UnstableApi::class)
+private fun ChapterDownloadSpec.toDownloadRequest(): DownloadRequest =
+    DownloadRequest.Builder(id, url.toUri())
+        .setCustomCacheKey(cacheKey)
+        .setData(encodedIds())
+        .build()

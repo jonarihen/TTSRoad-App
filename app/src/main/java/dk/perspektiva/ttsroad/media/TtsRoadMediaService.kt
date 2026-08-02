@@ -186,7 +186,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 }
             },
         )
-        val mediaSourceFactory = DefaultMediaSourceFactory(resolvingFactory)
+        // Read through the offline cache before the network. A downloaded chapter then plays with
+        // the server unreachable, and a streamed one is not re-fetched when it is replayed — with no
+        // other change to how playback works, because the auth injection above still runs for every
+        // byte the cache does not already have.
+        val cachingFactory = ServiceLocator.offlineDownloads(this).readThroughFactory(resolvingFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(cachingFactory)
         return ExoPlayer.Builder(this)
             .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(

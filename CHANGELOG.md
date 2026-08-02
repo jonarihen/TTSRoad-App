@@ -42,6 +42,22 @@ Notable changes to the TTSRoad Android client.
 - Genuine network trouble — a tunnel, a Wi-Fi handover, a server restart — still retries exactly as
   before.
 
+### Chapters you can take with you
+
+- **Download a chapter and it plays with the server unreachable** — in a tunnel, on a plane, or
+  when the home connection drops mid-drive. Every chapter row has a download button, and the
+  fiction header downloads the next ten chapters from wherever you are up to.
+- **Streamed chapters are kept as well.** Rewinding an hour of overnight playback no longer
+  re-fetches the whole chapter from the server.
+- Downloads keep running with a progress notification, survive the app being closed, and pick up
+  again the next time you open it.
+- **Nothing is ever deleted automatically.** Settings shows how much space the offline audio takes
+  and offers "delete all downloads" to clear the lot. A size cap, a Wi-Fi-only switch and automatic
+  clean-up of played chapters are deliberately not in yet.
+- A download stays valid when you sign in again on a different address for the same server: it is
+  tied to the chapter, not to the URL you happened to connect through.
+- Chapters that are not downloaded stream exactly as before.
+
 ## 0.7.2 — 2026-07-27
 
 ### Cover artwork hotfix
