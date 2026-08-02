@@ -2,11 +2,23 @@ package dk.perspektiva.ttsroad.data
 
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
+/**
+ * Marks a request the shared auth interceptor must leave alone. The header never reaches the wire —
+ * the interceptor strips it. Discovery runs while the user is still typing a server URL, so a token
+ * left over from a previous session must not travel to an unrelated host.
+ */
+const val NoAuthHeader = "X-TtsRoad-No-Auth"
+
 interface TtsRoadApi {
+    @Headers("$NoAuthHeader: 1")
+    @GET("api/mobile/capabilities")
+    suspend fun capabilities(): CapabilitiesResponse
+
     @POST("api/mobile/login")
     suspend fun login(@Body request: LoginRequest): LoginResponse
 
