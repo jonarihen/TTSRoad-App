@@ -39,12 +39,16 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
@@ -84,7 +88,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -100,14 +106,22 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -126,17 +140,28 @@ import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.DeviceSession
 import dk.perspektiva.ttsroad.data.FictionSummary
+import dk.perspektiva.ttsroad.data.HighlightGranularity
 import dk.perspektiva.ttsroad.data.formatExpiresIn
 import dk.perspektiva.ttsroad.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.data.LoginResult
+import dk.perspektiva.ttsroad.data.ReadAlongDocument
+import dk.perspektiva.ttsroad.data.ReadAlongHighlight
+import dk.perspektiva.ttsroad.data.ReaderFontScales
+import dk.perspektiva.ttsroad.data.ReaderPrefs
+import dk.perspektiva.ttsroad.data.ReaderTheme
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SpeedPresets
+import dk.perspektiva.ttsroad.data.TextSpan
 import dk.perspektiva.ttsroad.data.VolumeBoost
+import dk.perspektiva.ttsroad.data.formatReaderFontScale
 import dk.perspektiva.ttsroad.data.formatSkipInterval
+import dk.perspektiva.ttsroad.data.readAlongAvailability
+import dk.perspektiva.ttsroad.data.readerAutoScrollOffsetPx
+import dk.perspektiva.ttsroad.data.shouldKeepReaderScreenOn
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
@@ -165,6 +190,9 @@ import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
+import dk.perspektiva.ttsroad.ui.ReaderPalette
+import dk.perspektiva.ttsroad.ui.readerPalette
+import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
@@ -540,6 +568,7 @@ private fun MainScaffold(
         AppScreen.Library -> session.serverName
         AppScreen.Fictions -> "All fictions"
         AppScreen.Player -> "Now playing"
+        is AppScreen.Reader -> screen.title
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Device sessions"
     }
@@ -620,6 +649,7 @@ private fun MainScaffold(
                     repository = repository,
                     playbackController = playbackController,
                     onOpenPlayer = { onScreenChange(AppScreen.Player) },
+                    onOpenReader = { onScreenChange(it) },
                 )
 
                 AppScreen.Player -> PlayerScreen(
@@ -627,6 +657,15 @@ private fun MainScaffold(
                     playerState = playerState,
                     playbackController = playbackController,
                     skipIntervalMs = skipIntervalMs,
+                    onOpenReader = { onScreenChange(it) },
+                )
+
+                is AppScreen.Reader -> ReaderScreen(
+                    padding = padding,
+                    screen = screen,
+                    playerState = playerState,
+                    playbackController = playbackController,
+                    repository = repository,
                 )
 
                 AppScreen.Settings -> SettingsScreen(
@@ -846,10 +885,12 @@ private fun FictionScreen(
     repository: TtsRoadRepository,
     playbackController: PlaybackController,
     onOpenPlayer: () -> Unit,
+    onOpenReader: (AppScreen.Reader) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val cache = remember { ServiceLocator.libraryCache(context) }
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     val chapterState by remember(fiction.id) { cache.chapters(fiction.id) }
         .collectAsStateWithLifecycle()
     val downloads = remember { ServiceLocator.offlineDownloads(context) }
@@ -1006,6 +1047,20 @@ private fun FictionScreen(
                                     downloads.download(chapter, serverUrl)
                                 }
                             },
+                            // Two gates: the server has read-along, and this chapter is not known
+                            // to be untimed. Both live in readAlongAvailability.
+                            onOpenReader = readAlongAvailability(capabilities, chapter)
+                                .takeIf { it.offersReader }
+                                ?.let {
+                                    {
+                                        onOpenReader(
+                                            AppScreen.Reader(
+                                                chapterId = chapter.resolvedChapterId,
+                                                title = chapter.resolvedTitle,
+                                            ),
+                                        )
+                                    }
+                                },
                         )
                     }
                 }
@@ -1131,10 +1186,16 @@ private fun PlayerScreen(
     playerState: PlayerUiState,
     playbackController: PlaybackController,
     skipIntervalMs: Long,
+    onOpenReader: (AppScreen.Reader) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { ServiceLocator.repository(context) }
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    // Only the chapter id is known here — the player has no chapter row, so whether this one has
+    // timings is settled by the document once the reader loads it.
+    val playingChapterId = playerState.queue.getOrNull(playerState.currentIndex)
+        ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val history by historyStore.snapshots.collectAsStateWithLifecycle()
     val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
@@ -1279,6 +1340,21 @@ private fun PlayerScreen(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Hidden entirely on a server without read-along, rather than shown and then 404ing.
+                if (capabilities.readAlong && playingChapterId != null) {
+                    TextButton(
+                        onClick = {
+                            onOpenReader(
+                                AppScreen.Reader(
+                                    chapterId = playingChapterId,
+                                    title = playerState.title,
+                                ),
+                            )
+                        },
+                    ) {
+                        Text("READ")
+                    }
+                }
                 if (jumpBackOptions.isNotEmpty()) {
                     TextButton(onClick = { showJumpBack = true }) {
                         Text("JUMP BACK")
@@ -2572,6 +2648,7 @@ private fun ChapterRow(
     onPlay: () -> Unit,
     onMarkPlayed: ((Boolean) -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
+    onOpenReader: (() -> Unit)? = null,
     isCurrent: Boolean = false,
     download: ChapterDownload? = null,
     onToggleDownload: (() -> Unit)? = null,
@@ -2624,6 +2701,16 @@ private fun ChapterRow(
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
+            // Offered even for a chapter with no audio yet: the text is worth reading on its own.
+            onOpenReader?.let { open ->
+                TransportIconButton(
+                    icon = Icons.Default.Article,
+                    contentDescription = "Read along",
+                    enabled = true,
+                    size = 36.dp,
+                ) { open() }
+                Spacer(modifier = Modifier.width(8.dp))
+            }
             if (!playable) {
                 AarisTag(text = chapter.status ?: "pending")
             } else {
@@ -3043,6 +3130,397 @@ private fun EmptyCard(message: String) {
             modifier = Modifier.padding(16.dp),
         )
     }
+}
+
+/**
+ * The read-along reader: a chapter's text, following the audio.
+ *
+ * Reading works with nothing playing at all — that is both a feature in its own right and the only
+ * thing a chapter with no timings can offer — so playback state only ever *adds* a highlight.
+ */
+@Composable
+private fun ReaderScreen(
+    padding: PaddingValues,
+    screen: AppScreen.Reader,
+    playerState: PlayerUiState,
+    playbackController: PlaybackController,
+    repository: TtsRoadRepository,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val readerPreferences = remember { ServiceLocator.readerPreferences(context) }
+    val prefs by readerPreferences.prefs.collectAsStateWithLifecycle(initialValue = ReaderPrefs())
+    val sleepTimer = remember { ServiceLocator.sleepTimer() }
+    val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
+    val palette = remember(prefs.theme) { readerPalette(prefs.theme) }
+
+    var document by remember(screen.chapterId) { mutableStateOf<ReadAlongDocument?>(null) }
+    var error by remember(screen.chapterId) { mutableStateOf<String?>(null) }
+    var loading by remember(screen.chapterId) { mutableStateOf(true) }
+    var reloadToken by remember(screen.chapterId) { mutableStateOf(0) }
+    var showSettings by remember { mutableStateOf(false) }
+
+    LaunchedEffect(screen.chapterId, reloadToken) {
+        loading = true
+        error = null
+        runCatching { repository.readAlong(screen.chapterId) }
+            .onSuccess { document = it }
+            // A 404 is not an error and never lands here: the repository answers it with null.
+            .onFailure { error = it.message ?: "Could not load the chapter text" }
+        loading = false
+    }
+
+    // Only follow when this is the chapter actually playing. Opening the reader for a different
+    // chapter is an ordinary thing to do, and highlighting it against someone else's audio would
+    // be worse than not highlighting at all.
+    val playingChapterId = playerState.queue.getOrNull(playerState.currentIndex)
+        ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
+    val isPlayingThisChapter = playingChapterId == screen.chapterId
+
+    var highlight by remember(screen.chapterId) { mutableStateOf(ReadAlongHighlight.None) }
+
+    // Frame-paced, and driven purely by the position the player reports — never by elapsed wall
+    // time. Skip-silence is on by default and removes real time from the media timeline, so a
+    // highlight advanced by a clock would drift further out of step for the whole chapter. Only the
+    // cue actually changing writes to state, so this is a handful of recompositions a second rather
+    // than one per frame.
+    LaunchedEffect(document, isPlayingThisChapter) {
+        val loaded = document
+        if (loaded == null || !isPlayingThisChapter || !loaded.hasTimings) {
+            highlight = ReadAlongHighlight.None
+            return@LaunchedEffect
+        }
+        while (true) {
+            withFrameMillis { it }
+            val reported = playbackController.reportedPositionMs() ?: continue
+            val next = loaded.highlightAtMillis(reported)
+            if (next != highlight) highlight = next
+        }
+    }
+
+    val listState = rememberLazyListState()
+    var followPlayback by remember(screen.chapterId) { mutableStateOf(true) }
+    val activeParagraph = remember(highlight, document) {
+        val loaded = document
+        val word = highlight.word
+        if (loaded == null || word == null) -1 else loaded.paragraphIndexAt(word.start)
+    }
+
+    // A drag hands control to the user and keeps it. Re-scrolling under a finger is the single most
+    // irritating thing an auto-scrolling reader can do, so it offers to catch up instead.
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) followPlayback = false
+        }
+    }
+
+    // The chapter header occupies list index 0, so paragraph N is list item N + 1.
+    fun paragraphListIndex(paragraph: Int) = paragraph + 1
+
+    suspend fun scrollToActiveParagraph() {
+        val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+        listState.animateScrollToItem(
+            paragraphListIndex(activeParagraph),
+            readerAutoScrollOffsetPx(viewport),
+        )
+    }
+
+    LaunchedEffect(activeParagraph, followPlayback) {
+        if (!followPlayback || activeParagraph < 0) return@LaunchedEffect
+        scrollToActiveParagraph()
+    }
+
+    val view = LocalView.current
+    DisposableEffect(prefs.keepScreenOn, sleepTimerState.isFading) {
+        view.keepScreenOn = shouldKeepReaderScreenOn(
+            preferenceEnabled = prefs.keepScreenOn,
+            sleepTimerFading = sleepTimerState.isFading,
+        )
+        onDispose { view.keepScreenOn = false }
+    }
+
+    fun seekToOffset(charOffset: Int) {
+        val seconds = document?.seekSecondsForOffset(charOffset) ?: return
+        if (!isPlayingThisChapter) return
+        playbackController.seekTo((seconds * 1000).roundToLong())
+        followPlayback = true
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .background(palette.background),
+    ) {
+        val loaded = document
+        when {
+            loading && loaded == null -> LoadingPane(PaddingValues(0.dp))
+
+            loaded == null && error != null -> ErrorPane(
+                padding = PaddingValues(0.dp),
+                message = error ?: "Could not load the chapter text",
+                onRetry = { reloadToken++ },
+            )
+
+            // Null with no error is the 404: this chapter simply has no read-along.
+            loaded == null -> Column(
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                MetaText(text = "// No text for this chapter", color = palette.muted)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "This chapter was converted before read-along text was recorded.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = palette.muted,
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            else -> ReaderPage(
+                document = loaded,
+                highlight = highlight,
+                palette = palette,
+                prefs = prefs,
+                listState = listState,
+                isPlayingThisChapter = isPlayingThisChapter,
+                onSeekToOffset = ::seekToOffset,
+                onOpenSettings = { showSettings = true },
+            )
+        }
+
+        // Offered rather than forced: the user scrolled away deliberately, so catching up is a tap.
+        if (!followPlayback && activeParagraph >= 0) {
+            TextButton(
+                onClick = {
+                    followPlayback = true
+                    scope.launch { scrollToActiveParagraph() }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 20.dp)
+                    .background(palette.background)
+                    .border(1.dp, palette.accent),
+            ) {
+                Text("BACK TO CURRENT", color = palette.accent)
+            }
+        }
+    }
+
+    if (showSettings) {
+        ReaderSettingsSheet(
+            prefs = prefs,
+            palette = palette,
+            onDismiss = { showSettings = false },
+            onFontScale = { scope.launch { readerPreferences.setFontScale(it) } },
+            onTheme = { scope.launch { readerPreferences.setTheme(it) } },
+            onHighlight = { scope.launch { readerPreferences.setHighlight(it) } },
+        )
+    }
+}
+
+/** The page itself: paragraphs, the band, and the tap target that seeks. */
+@Composable
+private fun ReaderPage(
+    document: ReadAlongDocument,
+    highlight: ReadAlongHighlight,
+    palette: ReaderPalette,
+    prefs: ReaderPrefs,
+    listState: LazyListState,
+    isPlayingThisChapter: Boolean,
+    onSeekToOffset: (Int) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    // Multiplies the system font scale rather than replacing it: `sp` already carries the user's
+    // accessibility setting, and this is the reader-specific adjustment on top of it.
+    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
+        color = palette.ink,
+        fontSize = 17.sp * prefs.fontScale,
+        lineHeight = 28.sp * prefs.fontScale,
+    )
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item(key = "reader-header") {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MetaText(
+                        text = if (document.hasTimings) "// Read along" else "// Text only",
+                        color = palette.accent,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onOpenSettings) {
+                        Text("TEXT", color = palette.muted)
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = document.title.ifBlank { "Chapter" },
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = palette.ink,
+                )
+                if (!document.hasTimings) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    MetaText(
+                        text = "No timings for this chapter — the text does not follow the audio",
+                        color = palette.muted,
+                    )
+                } else if (!isPlayingThisChapter) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    MetaText(text = "Play this chapter to follow along", color = palette.muted)
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(thickness = 1.dp, color = palette.line)
+            }
+        }
+
+        itemsIndexed(
+            document.paragraphs,
+            key = { index, span -> "p-$index-${span.start}" },
+        ) { _, span ->
+            ReaderParagraph(
+                document = document,
+                span = span,
+                highlight = highlight,
+                palette = palette,
+                granularity = prefs.highlight,
+                style = bodyStyle,
+                onSeekToOffset = onSeekToOffset,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReaderParagraph(
+    document: ReadAlongDocument,
+    span: TextSpan,
+    highlight: ReadAlongHighlight,
+    palette: ReaderPalette,
+    granularity: HighlightGranularity,
+    style: TextStyle,
+    onSeekToOffset: (Int) -> Unit,
+) {
+    // Rebuilt only when something this paragraph actually draws changes, so the other few hundred
+    // paragraphs are skipped on every cue change.
+    val sentence = highlight.sentence?.takeIf { granularity.showsSentence && it.overlaps(span) }
+    val word = highlight.word?.takeIf { granularity.showsWord && it.overlaps(span) }
+    val annotated = remember(span, sentence, word, palette) {
+        buildAnnotatedString {
+            append(document.textIn(span))
+            sentence?.let { addStyle(SpanStyle(background = palette.band), span, it) }
+            word?.let {
+                addStyle(
+                    SpanStyle(color = palette.accent, fontWeight = FontWeight.Bold),
+                    span,
+                    it,
+                )
+            }
+        }
+    }
+
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    Text(
+        text = annotated,
+        style = style,
+        onTextLayout = { layout = it },
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(span) {
+                detectTapGestures { position ->
+                    val local = layout?.getOffsetForPosition(position) ?: return@detectTapGestures
+                    onSeekToOffset(span.start + local)
+                }
+            },
+    )
+}
+
+/** Apply [style] to the part of [highlight] that falls inside [paragraph], in paragraph coordinates. */
+private fun AnnotatedString.Builder.addStyle(
+    style: SpanStyle,
+    paragraph: TextSpan,
+    highlight: TextSpan,
+) {
+    val start = (highlight.start - paragraph.start).coerceIn(0, paragraph.length)
+    val end = (highlight.end - paragraph.start).coerceIn(0, paragraph.length)
+    if (end > start) addStyle(style, start, end)
+}
+
+private fun TextSpan.overlaps(other: TextSpan): Boolean = start < other.end && other.start < end
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReaderSettingsSheet(
+    prefs: ReaderPrefs,
+    palette: ReaderPalette,
+    onDismiss: () -> Unit,
+    onFontScale: (Float) -> Unit,
+    onTheme: (ReaderTheme) -> Unit,
+    onHighlight: (HighlightGranularity) -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+            MetaText(text = "// Text size", color = AarisColor.Accent)
+            Spacer(modifier = Modifier.height(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReaderFontScales.forEach { scale ->
+                    val selected = kotlin.math.abs(scale - prefs.fontScale) < 0.001f
+                    ReaderOptionChip(
+                        label = formatReaderFontScale(scale),
+                        selected = selected,
+                        onClick = { onFontScale(scale) },
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            MetaText(text = "// Page", color = AarisColor.Accent)
+            Spacer(modifier = Modifier.height(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReaderTheme.entries.forEach { theme ->
+                    ReaderOptionChip(
+                        label = theme.label,
+                        selected = theme == prefs.theme,
+                        onClick = { onTheme(theme) },
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            MetaText(text = "// Follow along", color = AarisColor.Accent)
+            Spacer(modifier = Modifier.height(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HighlightGranularity.entries.forEach { granularity ->
+                    ReaderOptionChip(
+                        label = granularity.label,
+                        selected = granularity == prefs.highlight,
+                        onClick = { onHighlight(granularity) },
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            // Worth saying out loud: the web reader has its own copy of these, and #32 wanted them
+            // shared. There is no server endpoint to share them through yet.
+            MetaText(text = "// Kept on this phone only", color = palette.muted)
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun ReaderOptionChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text = label.uppercase(),
+        color = if (selected) AarisColor.Accent else AarisColor.Muted,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier
+            .border(1.dp, if (selected) AarisColor.Accent else AarisColor.Line)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    )
 }
 
 @Composable
