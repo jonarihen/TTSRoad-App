@@ -1,8 +1,10 @@
 package dk.perspektiva.ttsroad.data
 
+import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -50,6 +52,20 @@ interface TtsRoadApi {
         @Query("playable_only") playableOnly: Boolean = false,
         @Query("include_excluded") includeExcluded: Boolean = false,
     ): ChaptersResponse
+
+    /**
+     * Returns the raw [Response] rather than the body so the caller can see the `ETag` and a `304`.
+     * Chapter text never changes after conversion, so revalidation is the normal path for any
+     * chapter opened twice, and re-downloading a megabyte of cues to be told nothing changed is
+     * exactly what the conditional request avoids.
+     *
+     * A null [ifNoneMatch] is omitted by Retrofit, which is the first-fetch case.
+     */
+    @GET("api/mobile/chapters/{chapter_id}/readalong")
+    suspend fun readAlong(
+        @Path("chapter_id") chapterId: Int,
+        @Header("If-None-Match") ifNoneMatch: String? = null,
+    ): Response<ReadAlongResponse>
 
     @POST("api/mobile/playback/progress")
     suspend fun saveProgress(@Body request: PlaybackProgressRequest): PlaybackProgressResponse

@@ -32,6 +32,8 @@ class TtsRoadRepository(
     private val tokenStore: SessionStore,
     /** Injectable so the capability cache's expiry can be tested without waiting on wall time. */
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Where read-along documents survive a restart. Defaults to not persisting at all. */
+    private val readAlongStore: ReadAlongStore = ReadAlongStore.None,
 ) {
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
@@ -70,6 +72,20 @@ class TtsRoadRepository(
     private data class CachedCapabilities(
         val value: ServerCapabilities,
         val fetchedAtMillis: Long,
+    )
+
+    /**
+     * Parsed read-along documents by chapter id, with the ETag they were served under.
+     *
+     * The parsed document is held, not the payload, because a chapter runs to tens of thousands of
+     * cues: re-deriving spans and sentences on every 304 would put a visible pause on the way back
+     * into a chapter the user just left.
+     */
+    private val readAlongCache = HashMap<Int, CachedReadAlongDocument>()
+
+    private data class CachedReadAlongDocument(
+        val etag: String?,
+        val document: ReadAlongDocument,
     )
 
     private val _currentCapabilities = MutableStateFlow(ServerCapabilities.Baseline)
@@ -153,6 +169,10 @@ class TtsRoadRepository(
         // flags in place would show read-along or device management on a server without them.
         forgetCapabilities(session.serverUrl)
         _currentCapabilities.value = ServerCapabilities.Baseline
+        // Chapter text is account-visible content, and chapter ids are only unique per server, so a
+        // cached read-along must never outlive the session that fetched it.
+        synchronized(readAlongCache) { readAlongCache.clear() }
+        readAlongStore.clear()
     }
 
     /**
@@ -251,6 +271,62 @@ class TtsRoadRepository(
                 ),
             )
         }
+    }
+
+    /**
+     * The read-along document for [chapterId], or null when this chapter simply does not have one.
+     *
+     * A `404` is an ordinary answer, not a failure: plenty of chapters were converted before timing
+     * existed, and the reader's job there is to say "no read-along", quietly. Only a genuine
+     * failure with nothing cached to fall back on throws.
+     *
+     * The three caches stack. In memory, a repeat open costs nothing at all. On disk, a chapter
+     * opened once reads with the phone offline. On the wire, the stored `ETag` turns every reopen
+     * into a `304` — chapter text never changes after conversion, so that is the normal case, and
+     * it is what keeps re-entering a chapter from re-downloading a megabyte of cues.
+     */
+    suspend fun readAlong(chapterId: Int): ReadAlongDocument? = withContext(Dispatchers.IO) {
+        val cached = cachedReadAlong(chapterId)
+        try {
+            authorized { api ->
+                // Only send If-None-Match when there is something to revalidate, so a 304 can never
+                // arrive without a document to answer it with.
+                val response = api.readAlong(chapterId, cached?.etag)
+                when {
+                    response.code() == 304 -> cached?.document
+                    response.code() == 404 -> null
+                    response.isSuccessful -> response.body()?.let { body ->
+                        val document = ReadAlongDocument.from(body)
+                        val etag = response.headers()["ETag"]
+                        synchronized(readAlongCache) {
+                            readAlongCache[chapterId] = CachedReadAlongDocument(etag, document)
+                        }
+                        readAlongStore.write(chapterId, CachedReadAlong(etag, body))
+                        document
+                    }
+
+                    // Rethrown so `authorized` can see a 401 and expire the session; every other
+                    // status falls through to the cached copy below.
+                    else -> throw HttpException(response)
+                }
+            }
+        } catch (e: HttpException) {
+            if (e.code() == 401) throw e
+            cached?.document ?: throw e
+        } catch (e: Exception) {
+            // Offline, or the server is down: the text the user already read is a far better answer
+            // than an error screen.
+            cached?.document ?: throw e
+        }
+    }
+
+    /** Whatever copy of [chapterId] we already hold, promoting the on-disk one into memory. */
+    private fun cachedReadAlong(chapterId: Int): CachedReadAlongDocument? {
+        synchronized(readAlongCache) { readAlongCache[chapterId] }?.let { return it }
+        val stored = readAlongStore.read(chapterId) ?: return null
+        val restored = CachedReadAlongDocument(stored.etag, ReadAlongDocument.from(stored.response))
+        synchronized(readAlongCache) { readAlongCache[chapterId] = restored }
+        return restored
     }
 
     suspend fun markPlayed(chapterIds: List<Int>, played: Boolean): PlaybackMarkResponse =

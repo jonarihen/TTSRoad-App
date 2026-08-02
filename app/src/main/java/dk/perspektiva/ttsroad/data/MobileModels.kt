@@ -118,6 +118,12 @@ data class ChapterSummary(
     @param:Json(name = "audio_duration") val audioDuration: Double? = null,
     @param:Json(name = "audio_duration_label") val audioDurationLabel: String? = null,
     @param:Json(name = "audio_filesize") val audioFileSize: Long? = null,
+    /**
+     * Whether this chapter has read-along timings. Null on a server that predates the field, which
+     * is why it is not a plain Boolean: "we were not told" and "there are none" call for different
+     * behaviour, and defaulting the first to false would hide a working reader.
+     */
+    @param:Json(name = "has_timings") val hasTimings: Boolean? = null,
     val audio: AudioInfo? = null,
     val playback: PlaybackInfo? = null,
     val fiction: FictionSummary? = null,

@@ -327,6 +327,60 @@ Response:
 
 Call this periodically during playback, on pause, and near completion. Mark `is_played=true` when playback reaches the app's completion threshold, for example 96% or last 20 seconds.
 
+### Chapter Read-Along
+
+Gated on the `readalong` capability. Do not call it on a server that does not advertise the flag.
+
+```http
+GET /api/mobile/chapters/{chapter_id}/readalong
+Authorization: Bearer <token>
+If-None-Match: "<etag>"
+```
+
+Response:
+
+```json
+{
+  "api_version": 1,
+  "chapter": {
+    "id": 10,
+    "fiction_id": 1,
+    "title": "Chapter 1",
+    "chapter_number": 1,
+    "audio_duration": 1420.5,
+    "has_timings": true,
+    "timing_version": 1
+  },
+  "text": "The knight rode north.\n\nSnow fell on the pass.",
+  "paragraphs": [[0, 22], [24, 45]],
+  "cues": [[0, 3, 0.0], [4, 10, 0.42], [11, 15, 0.98]]
+}
+```
+
+`paragraphs` are `[char_start, char_end]` and `cues` are `[char_start, char_end, start_seconds]`,
+both indexing into the same `text` string. Ranges are half-open. They are bare arrays rather than
+objects because a chapter runs to tens of thousands of cues and object keys would roughly triple the
+payload.
+
+Rules the client depends on:
+
+- A cue's **end time is the next cue's start time**; the last cue runs to `audio_duration`.
+- Cues are **sorted by start time and non-overlapping**, so lookup is a binary search. Validate this
+  on load anyway — one mis-ordered row otherwise makes the highlight jump for the rest of the chapter.
+- Times are in **media time**, so a listener at 2x needs no adjustment.
+- `cues` is `[]`, never absent, for a chapter with no timings. Still show the text; there is just
+  nothing to follow.
+- Where a pronunciation rule applies, cues point at the **original** term, not what was spoken: the
+  reader sees "INT" while the listener hears "Intelligence", and the highlight covers "INT" for the
+  whole spoken word.
+- The `ETag` is strong, and chapter text never changes after conversion, so `If-None-Match` should
+  `304` approximately forever. Treat revalidation as the normal path for any chapter reopened.
+- A `404` is an ordinary answer meaning this chapter has no read-along. It is not an error and must
+  not be surfaced as one.
+
+`GET /api/mobile/fictions/{id}/chapters` also carries `has_timings` per chapter, so the reader
+affordance can be decided without a request per row.
+
 ### Mark Played/Unplayed
 
 ```http
