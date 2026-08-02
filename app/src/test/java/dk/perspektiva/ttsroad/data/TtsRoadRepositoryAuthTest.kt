@@ -13,29 +13,6 @@ import org.junit.Before
 import org.junit.Test
 import retrofit2.HttpException
 
-/** In-memory [SessionStore] so these tests need no Android context or DataStore. */
-private class FakeSessionStore(private var state: SessionState) : SessionStore {
-    var clearTokenCalls = 0
-        private set
-
-    override suspend fun current(): SessionState = state
-
-    override suspend fun saveLogin(baseUrl: String, response: LoginResponse) {
-        state = SessionState(
-            serverUrl = normalizeBaseUrl(baseUrl),
-            token = response.token,
-            username = response.user.username,
-            isAdmin = response.user.isAdmin,
-            serverName = response.server?.name ?: "TTSRoad",
-        )
-    }
-
-    override suspend fun clearToken() {
-        clearTokenCalls++
-        state = state.copy(token = null, username = null, isAdmin = false)
-    }
-}
-
 class TtsRoadRepositoryAuthTest {
     private lateinit var server: MockWebServer
 
@@ -67,7 +44,7 @@ class TtsRoadRepositoryAuthTest {
         assertEquals(1, store.clearTokenCalls)
         assertNull(store.current().token)
         assertFalse(store.current().isLoggedIn)
-        assertTrue(repository.sessionExpired.value)
+        assertNotNull(repository.sessionEnd.value)
     }
 
     @Test
@@ -79,7 +56,7 @@ class TtsRoadRepositoryAuthTest {
         assertEquals(0, repository.library().fictions.size)
         assertEquals(0, store.clearTokenCalls)
         assertTrue(store.current().isLoggedIn)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnd.value)
     }
 
     @Test
@@ -93,7 +70,7 @@ class TtsRoadRepositoryAuthTest {
         assertEquals(500, (thrown as HttpException).code())
         assertEquals(0, store.clearTokenCalls)
         assertTrue(store.current().isLoggedIn)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnd.value)
     }
 
     @Test
@@ -107,7 +84,7 @@ class TtsRoadRepositoryAuthTest {
         }
 
         assertEquals(1, store.clearTokenCalls)
-        assertTrue(repository.sessionExpired.value)
+        assertNotNull(repository.sessionEnd.value)
     }
 
     @Test
@@ -127,7 +104,7 @@ class TtsRoadRepositoryAuthTest {
 
         assertEquals(LoginResult.Failure("Incorrect username or password"), result)
         assertEquals(0, store.clearTokenCalls)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnd.value)
     }
 
     @Test
@@ -147,7 +124,7 @@ class TtsRoadRepositoryAuthTest {
 
         assertEquals(LoginResult.TotpRequired, result)
         assertEquals(0, store.clearTokenCalls)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnd.value)
     }
 
     @Test
@@ -156,7 +133,7 @@ class TtsRoadRepositoryAuthTest {
         val repository = TtsRoadRepository(store)
         server.enqueue(MockResponse().setResponseCode(401))
         runCatching { repository.library() }
-        assertTrue(repository.sessionExpired.value)
+        assertNotNull(repository.sessionEnd.value)
 
         server.enqueue(
             MockResponse().setBody(
@@ -171,7 +148,7 @@ class TtsRoadRepositoryAuthTest {
         )
 
         assertEquals(LoginResult.Success, result)
-        assertFalse(repository.sessionExpired.value)
+        assertNull(repository.sessionEnd.value)
         assertEquals("fresh", store.current().token)
     }
 

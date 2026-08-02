@@ -80,13 +80,16 @@ class TtsRoadRepository(
      */
     val currentCapabilities: StateFlow<ServerCapabilities> = _currentCapabilities.asStateFlow()
 
-    private val _sessionExpired = MutableStateFlow(false)
+    private val _sessionEnd = MutableStateFlow<SessionEnd?>(null)
 
     /**
-     * True once an authenticated call came back 401 and the stored token was dropped, so the
-     * login screen can say why it is being shown. Cleared by a successful [login].
+     * Why the stored token was dropped, or null while the session is still usable.
+     *
+     * Set once an authenticated call — or an audio request, via [endSession] — came back 401, so the
+     * login screen can say why it is being shown rather than appearing out of nowhere. Cleared by a
+     * successful [login].
      */
-    val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
+    val sessionEnd: StateFlow<SessionEnd?> = _sessionEnd.asStateFlow()
 
     suspend fun login(
         baseUrl: String,
@@ -109,33 +112,32 @@ class TtsRoadRepository(
                 ),
             )
             tokenStore.saveLogin(normalized, response)
-            _sessionExpired.value = false
+            _sessionEnd.value = null
             LoginResult.Success
         } catch (e: HttpException) {
             val body = e.response()?.errorBody()?.string()
             if (e.code() == 401 && body?.contains("totp_required") == true) {
                 LoginResult.TotpRequired
             } else {
-                LoginResult.Failure(parseDetailMessage(body) ?: "Invalid username or password")
+                LoginResult.Failure(detailMessage(body) ?: "Invalid username or password")
             }
         } catch (e: Exception) {
             LoginResult.Failure(e.message ?: "Login failed")
         }
     }
 
-    /** Pull a human-readable message out of FastAPI's `{"detail": ...}` error body. */
-    private fun parseDetailMessage(body: String?): String? {
-        if (body.isNullOrBlank()) return null
-        return try {
-            val parsed = moshi.adapter(Any::class.java).fromJson(body) as? Map<*, *>
-            when (val detail = parsed?.get("detail")) {
-                is String -> detail
-                is Map<*, *> -> detail["message"] as? String
-                else -> null
-            }
-        } catch (_: Exception) {
-            null
-        }
+    /**
+     * Drop the session because the server refused the credential.
+     *
+     * Public because the audio path reaches the same conclusion from somewhere this class cannot
+     * see: a 401 on a `/audio/...` request means exactly what a 401 on an API call means, and both
+     * should land on the same login screen with the same explanation. See
+     * [dk.perspektiva.ttsroad.media.TtsRoadMediaService].
+     */
+    suspend fun endSession(end: SessionEnd) = withContext(Dispatchers.IO) {
+        authHeader = null
+        tokenStore.clearToken()
+        _sessionEnd.value = end
     }
 
     suspend fun logout() = withContext(Dispatchers.IO) {
@@ -261,17 +263,50 @@ class TtsRoadRepository(
             )
         }
 
+    /** Every mobile session on this account, or null on a server that has no devices endpoint. */
+    suspend fun devices(): List<DeviceSession>? = ifDevicesSupported { it.devices() }?.devices
+
+    /** Revokes one session. False means the server has no devices endpoint, not that it refused. */
+    suspend fun revokeDevice(tokenId: Int): Boolean =
+        ifDevicesSupported { it.revokeDevice(tokenId) } != null
+
+    /**
+     * Revokes every *other* mobile session.
+     *
+     * One server-side call rather than a loop of deletes, precisely so the client cannot get the
+     * "which one am I" question wrong: the token making the request is the one kept.
+     */
+    suspend fun revokeOtherDevices(): Boolean =
+        ifDevicesSupported { it.revokeOtherDevices() } != null
+
+    /**
+     * Run a devices call, answering null when the server has never heard of the endpoint.
+     *
+     * The devices API is additive and `api_version` did not change with it, so there is no version
+     * to test against — a 404 is the only signal that the backend predates it. Treating that as
+     * "not supported" lets the screen say so instead of showing an HTTP error the user cannot act
+     * on. Anything else, including a 401, keeps its normal meaning.
+     */
+    private suspend fun <T> ifDevicesSupported(block: suspend (TtsRoadApi) -> T): T? = try {
+        withAuthorizedApi(block)
+    } catch (e: HttpException) {
+        if (e.code() == 404) null else throw e
+    }
+
     private suspend fun <T> withAuthorizedApi(block: suspend (TtsRoadApi) -> T): T =
         withContext(Dispatchers.IO) { authorized(block) }
 
     /**
      * Runs an authenticated call, turning a server-side 401 into a forced sign-out.
      *
-     * A 401 on an authenticated endpoint means the stored token is no longer valid — revoked
-     * from another device, pruned, or the server database was reset — so retrying can never
-     * succeed. Dropping the token lets the session observer in `TtsRoadApp` fall back to the
-     * login screen (which also stops playback) instead of every screen showing "HTTP 401
+     * A 401 on an authenticated endpoint means the stored token is no longer valid — expired after
+     * 90 days unused, revoked from another device, or the server database was reset — so retrying
+     * can never succeed. Dropping the token lets the session observer in `TtsRoadApp` fall back to
+     * the login screen (which also stops playback) instead of every screen showing "HTTP 401
      * Unauthorized" until the user finds Settings > Sign out.
+     *
+     * The server distinguishes those cases in the 401 body, so the reason is carried through to
+     * the login screen rather than reduced to a generic "signed out".
      *
      * [login] deliberately does not go through here: it answers 401 for a wrong password and
      * for `totp_required`, neither of which should clear a stored session.
@@ -286,7 +321,7 @@ class TtsRoadRepository(
             if (e.code() == 401) {
                 authHeader = null
                 tokenStore.clearToken()
-                _sessionExpired.value = true
+                _sessionEnd.value = parseSessionEnd(e.response()?.errorBody()?.string())
             }
             throw e
         }

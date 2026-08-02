@@ -114,6 +114,8 @@ Success response:
 {
   "token": "ttsr_...",
   "token_type": "bearer",
+  "device_id": 42,
+  "expires_at": "2026-10-26T12:00:00Z",
   "user": {
     "id": 1,
     "username": "admin",
@@ -129,9 +131,19 @@ Success response:
 
 Store `token` in DataStore. Never log it.
 
+`device_id` identifies this token among the account's mobile sessions; store it so the device list
+can mark the current row. `expires_at` is when the token lapses **if it goes unused** — tokens last
+90 days, and every authenticated request silently renews the expiry. Store it for display only. Do
+not build a refresh loop around the absolute timestamp: an app in daily use will never reach it, and
+a client that pre-emptively signed out on it would be wrong far more often than right.
+
+Both fields are absent on servers that predate the devices endpoints. Treat them as optional.
+
 Errors:
 
 - `401` invalid credentials
+- `401` with `detail.code == "totp_required"` when 2FA is enabled — resubmit with `totp_code`. This
+  is **not** a dead session and must not clear stored credentials.
 - `429` throttled, with `Retry-After`
 
 ### Logout
@@ -149,6 +161,39 @@ Response:
   "revoked": true
 }
 ```
+
+### Expired Or Revoked Sessions
+
+An authenticated request whose bearer token can no longer be used answers `401` with a structured
+body, so the client can tell a dead session apart from a bad password:
+
+```json
+{
+  "detail": {
+    "message": "This device session expired. Sign in again.",
+    "reason": "token_expired"
+  }
+}
+```
+
+`reason` is one of:
+
+| `reason`         | Meaning                                                              |
+| ---------------- | -------------------------------------------------------------------- |
+| `token_expired`  | Unused for 90 days. Any authenticated request would have renewed it.  |
+| `token_revoked`  | Signed out from the web console or another device's session list.     |
+| `invalid_token`  | Not recognised at all — a reset database, or a mangled value.         |
+
+On any of these: clear the stored credential, **stop retrying**, and show `message`. Retrying can
+never succeed, and the app should land on the login screen with the reason rather than leaving every
+screen showing "HTTP 401 Unauthorized".
+
+An unrecognised or absent `reason` still means the token does not work — sign out, and fall back to
+generic wording. Only the explanation is lost.
+
+This applies to JSON API requests **and** to bearer-authenticated `/audio/...` requests. A 401 on an
+audio stream must take the same route: it is not a transient network failure, and must not enter the
+player's retry backoff.
 
 ### Current User
 
@@ -309,6 +354,62 @@ Response:
   "count": 3
 }
 ```
+
+### Device Sessions
+
+Lists and revokes the account's mobile sign-ins. Additive: `api_version` stays `1`, so there is no
+version to test against — a `404` is the only signal that the backend predates these endpoints, and
+the client should degrade quietly (say "not supported") rather than surface an HTTP error.
+
+```http
+GET /api/mobile/devices
+Authorization: Bearer <token>
+```
+
+Response:
+
+```json
+{
+  "api_version": 1,
+  "devices": [
+    {
+      "id": 42,
+      "device_name": "Pixel 8",
+      "created_at": "2026-07-01T09:15:00Z",
+      "last_used_at": "2026-08-01T18:04:00Z",
+      "expires_at": "2026-10-30T09:15:00Z",
+      "last_ip": "192.168.1.24",
+      "status": "active",
+      "is_current": true
+    }
+  ]
+}
+```
+
+`is_current` marks the session making the request — match it against the `device_id` stored at login
+as a second opinion. `last_ip` is null until the session has actually been used; treat every field
+but `id` as optional.
+
+Revoke one session:
+
+```http
+DELETE /api/mobile/devices/{token_id}
+Authorization: Bearer <token>
+```
+
+Revokes that session if it belongs to the current user. Refetch the list afterwards rather than
+guessing what survived.
+
+Revoke every other session:
+
+```http
+POST /api/mobile/devices/revoke-others
+Authorization: Bearer <token>
+```
+
+Revokes every **other** mobile session, deliberately keeping the token used for the request. This is
+one server-side call rather than a client-side loop of deletes precisely so the client cannot get
+the "which one am I" question wrong.
 
 ## Existing API Access
 

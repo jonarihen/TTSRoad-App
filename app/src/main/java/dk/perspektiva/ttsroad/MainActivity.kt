@@ -120,7 +120,10 @@ import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.DeviceSession
 import dk.perspektiva.ttsroad.data.FictionSummary
+import dk.perspektiva.ttsroad.data.formatExpiresIn
+import dk.perspektiva.ttsroad.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
@@ -358,9 +361,10 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val sessionExpired by repository.sessionExpired.collectAsStateWithLifecycle()
-    // A failed attempt has more to say than "your old token went stale", so it wins.
-    val notice = error ?: "Session expired - sign in again".takeIf { sessionExpired }
+    val sessionEnd by repository.sessionEnd.collectAsStateWithLifecycle()
+    // A failed attempt has more to say than "your old token went stale", so it wins. Otherwise the
+    // server's own wording explains which of expiry, revocation or a reset put the user here.
+    val notice = error ?: sessionEnd?.message
     var probed by remember { mutableStateOf<ServerCapabilities?>(null) }
 
     // Capability discovery is public, so the URL can be checked before any credentials are typed.
@@ -522,6 +526,7 @@ private fun MainScaffold(
         AppScreen.Fictions -> "All fictions"
         AppScreen.Player -> "Now playing"
         AppScreen.Settings -> "Settings"
+        AppScreen.Devices -> "Device sessions"
     }
 
     Scaffold(
@@ -610,6 +615,13 @@ private fun MainScaffold(
                 )
 
                 AppScreen.Settings -> SettingsScreen(
+                    padding = padding,
+                    session = session,
+                    repository = repository,
+                    onOpenDevices = { onScreenChange(AppScreen.Devices) },
+                )
+
+                AppScreen.Devices -> DevicesScreen(
                     padding = padding,
                     session = session,
                     repository = repository,
@@ -1591,6 +1603,7 @@ private fun SettingsScreen(
     padding: PaddingValues,
     session: SessionState,
     repository: TtsRoadRepository,
+    onOpenDevices: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1628,6 +1641,14 @@ private fun SettingsScreen(
                 SettingsItem(label = "User", value = session.username.orEmpty())
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingsItem(label = "Role", value = if (session.isAdmin) "Admin" else "User")
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(
+                    text = "Every phone, tablet or car head unit signed in to this account.",
+                    color = AarisColor.Dim,
+                )
+                OutlinedButton(onClick = onOpenDevices, shape = RectangleShape) {
+                    Text("DEVICE SESSIONS")
+                }
             }
         }
 
@@ -1786,6 +1807,262 @@ private fun SettingsScreen(
             Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
         }
     }
+}
+
+/**
+ * Every mobile sign-in on this account, and the two ways to end one.
+ *
+ * Loaded on entry rather than through [dk.perspektiva.ttsroad.data.LibraryCache]: this list is only
+ * ever looked at deliberately, and a stale one is worse than a short spinner — the whole point is
+ * seeing what is signed in *now*.
+ */
+@Composable
+private fun DevicesScreen(
+    padding: PaddingValues,
+    session: SessionState,
+    repository: TtsRoadRepository,
+) {
+    val scope = rememberCoroutineScope()
+    var devices by remember { mutableStateOf<List<DeviceSession>?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // Servers older than the devices endpoints answer 404; that is a missing feature, not a fault.
+    var unsupported by remember { mutableStateOf(false) }
+    var isBusy by remember { mutableStateOf(false) }
+    var confirmRevoke by remember { mutableStateOf<DeviceSession?>(null) }
+    var confirmRevokeOthers by remember { mutableStateOf(false) }
+
+    fun load() {
+        scope.launch {
+            isLoading = true
+            error = null
+            runCatching { repository.devices() }
+                .onSuccess { loaded ->
+                    unsupported = loaded == null
+                    devices = loaded
+                }
+                .onFailure { error = it.message ?: "Could not load device sessions" }
+            isLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    /** Run a revoke, then reload — the server decides what survived, so never guess locally. */
+    fun revoke(action: suspend () -> Boolean) {
+        scope.launch {
+            isBusy = true
+            error = null
+            runCatching { action() }
+                .onSuccess { supported -> if (!supported) unsupported = true }
+                .onFailure { error = it.message ?: "Could not revoke the session" }
+            isBusy = false
+            load()
+        }
+    }
+
+    val loaded = devices
+    when {
+        isLoading && loaded == null && error == null -> LoadingPane(padding)
+        loaded == null && !unsupported -> ErrorPane(
+            padding = padding,
+            message = error ?: "Could not load device sessions",
+            onRetry = ::load,
+        )
+
+        else -> {
+            // The current session is the one the user is holding, so it leads and is never offered
+            // for revocation from here — signing this device out is what Settings > Sign out is for.
+            val others = loaded.orEmpty().filterNot { it.isCurrent(session) }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                if (unsupported) {
+                    MetaText(text = "// Not available", color = AarisColor.Accent)
+                    EmptyCard(
+                        "This server is older than the device-session API. Update the backend to " +
+                            "manage sign-ins from here.",
+                    )
+                } else {
+                    if (isLoading) {
+                        ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+                    }
+                    error?.let { MetaText(text = it, color = AarisColor.Danger) }
+
+                    MetaText(text = "// This device", color = AarisColor.Accent)
+                    val current = loaded.orEmpty().firstOrNull { it.isCurrent(session) }
+                    if (current == null) {
+                        EmptyCard("This session is not in the list yet")
+                    } else {
+                        DeviceCard(device = current, isCurrent = true, onRevoke = null)
+                    }
+
+                    MetaText(text = "// Other sessions", color = AarisColor.Accent)
+                    if (others.isEmpty()) {
+                        EmptyCard("Nothing else is signed in")
+                    } else {
+                        others.forEach { device ->
+                            DeviceCard(
+                                device = device,
+                                isCurrent = false,
+                                onRevoke = { confirmRevoke = device }.takeIf { !isBusy },
+                            )
+                        }
+                        Button(
+                            onClick = { confirmRevokeOthers = true },
+                            enabled = !isBusy,
+                            shape = RectangleShape,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (isBusy) "WORKING" else "SIGN OUT ALL OTHER DEVICES")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = ::load,
+                        enabled = !isLoading && !isBusy,
+                        shape = RectangleShape,
+                    ) {
+                        Text("REFRESH")
+                    }
+                }
+            }
+        }
+    }
+
+    confirmRevoke?.let { device ->
+        ConfirmDialog(
+            title = "SIGN OUT DEVICE",
+            body = "${device.resolvedName} will need to sign in again. Anything playing on it stops.",
+            confirmLabel = "SIGN IT OUT",
+            onConfirm = {
+                confirmRevoke = null
+                revoke { repository.revokeDevice(device.id) }
+            },
+            onDismiss = { confirmRevoke = null },
+        )
+    }
+
+    if (confirmRevokeOthers) {
+        ConfirmDialog(
+            title = "SIGN OUT OTHERS",
+            body = "Every other signed-in device will need to sign in again. This device stays " +
+                "signed in.",
+            confirmLabel = "SIGN THEM OUT",
+            onConfirm = {
+                confirmRevokeOthers = false
+                revoke { repository.revokeOtherDevices() }
+            },
+            onDismiss = { confirmRevokeOthers = false },
+        )
+    }
+}
+
+/**
+ * Whether this row is the phone in the user's hand.
+ *
+ * The server marks it, but only from the token making the request — so a client that fetched the
+ * list before its own session existed, or a backend that omits the flag, would show no current
+ * device at all. The stored device id from login is the local second opinion.
+ */
+private fun DeviceSession.isCurrent(session: SessionState): Boolean =
+    isCurrent || (session.deviceId != null && session.deviceId == id)
+
+@Composable
+private fun DeviceCard(
+    device: DeviceSession,
+    isCurrent: Boolean,
+    onRevoke: (() -> Unit)?,
+) {
+    AarisCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = device.resolvedName,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (isCurrent) AarisTag(text = "This device")
+                    device.status?.takeIf { it.isNotBlank() }?.let { AarisTag(text = it) }
+                }
+            }
+
+            DeviceDetail(label = "Last used", value = formatServerTimestamp(device.lastUsedAt) ?: "Never")
+            DeviceDetail(label = "Signed in", value = formatServerTimestamp(device.createdAt) ?: "-")
+            DeviceDetail(
+                label = "Expires",
+                value = listOfNotNull(
+                    formatServerTimestamp(device.expiresAt),
+                    formatExpiresIn(device.expiresAt, System.currentTimeMillis()),
+                ).joinToString(" · ").ifBlank { "-" },
+            )
+            // Null until the session is actually used, so a fresh sign-in shows a dash, not "null".
+            DeviceDetail(label = "Last IP", value = device.lastIp ?: "-")
+
+            onRevoke?.let {
+                OutlinedButton(
+                    onClick = it,
+                    shape = RectangleShape,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Danger),
+                ) {
+                    Text("SIGN OUT")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceDetail(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        MetaText(text = label)
+        Spacer(modifier = Modifier.width(12.dp))
+        MetaText(text = value, color = AarisColor.Ink)
+    }
+}
+
+/** Square, orange-accented confirmation for the two irreversible actions on the devices screen. */
+@Composable
+private fun ConfirmDialog(
+    title: String,
+    body: String,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AarisColor.BgRaise,
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+        text = { MetaText(text = body, color = AarisColor.Muted) },
+        confirmButton = {
+            Button(onClick = onConfirm, shape = RectangleShape) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("CANCEL") }
+        },
+    )
 }
 
 private fun updateStatusText(state: UpdateState): Pair<String, Boolean>? = when (state) {

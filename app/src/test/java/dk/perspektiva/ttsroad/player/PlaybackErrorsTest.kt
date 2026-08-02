@@ -24,6 +24,43 @@ class PlaybackErrorsTest {
         )
     }
 
+    /**
+     * A rejected token does not arrive with a tidy error code. ExoPlayer settles on whatever fits
+     * the failure it saw, and several of those codes are exactly the ones auto-retry exists for, so
+     * the HTTP status has to win — otherwise a revoked token spends the whole backoff being asked
+     * again, and the user is left staring at "retrying" instead of the login screen.
+     */
+    @Test
+    fun `a 401 is fatal auth even when the error code says network`() {
+        for (code in listOf(
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+            PlaybackException.ERROR_CODE_UNSPECIFIED,
+        )) {
+            assertEquals(
+                "error code $code with a 401 must not be retried",
+                PlaybackFailure.Unauthorized,
+                classifyPlaybackError(code, httpStatus = 401),
+            )
+        }
+    }
+
+    /** The other half of the same rule: a server hiccup stays retryable whatever the code says. */
+    @Test
+    fun `a 503 stays retryable even under an auth-looking error code`() {
+        for (code in listOf(
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+            PlaybackException.ERROR_CODE_UNSPECIFIED,
+        )) {
+            assertTrue(
+                "error code $code with a 503 should be retried",
+                classifyPlaybackError(code, httpStatus = 503) is PlaybackFailure.Transient,
+            )
+        }
+    }
+
     @Test
     fun `server-side hiccups are transient`() {
         for (status in listOf(500, 502, 503, 504, 408, 429)) {

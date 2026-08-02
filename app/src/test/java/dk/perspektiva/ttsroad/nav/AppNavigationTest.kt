@@ -83,5 +83,16 @@ class AppNavigationTest {
         assertEquals("Fictions", AppScreen.Fictions.saveKey)
         assertEquals("Fiction:1", AppScreen.Fiction(fiction(1)).saveKey)
         assertEquals("Fiction:2", AppScreen.Fiction(fiction(2)).saveKey)
+        assertEquals("Devices", AppScreen.Devices.saveKey)
+    }
+
+    /** Devices hangs off Settings, so backing out of it lands back on Settings, not the library. */
+    @Test
+    fun `back from devices returns to settings`() {
+        val stack = rootBackStack
+            .navigateTo(AppScreen.Settings)
+            .navigateTo(AppScreen.Devices)
+
+        assertEquals(listOf(AppScreen.Library, AppScreen.Settings), stack.popScreen())
     }
 }

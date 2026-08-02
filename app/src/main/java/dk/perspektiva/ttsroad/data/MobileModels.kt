@@ -12,6 +12,12 @@ data class LoginRequest(
 data class LoginResponse(
     val token: String,
     @param:Json(name = "token_type") val tokenType: String = "bearer",
+    // Which of the account's mobile sessions this token is, so the devices screen can mark the
+    // row the user is holding. Absent on servers that predate the devices endpoints.
+    @param:Json(name = "device_id") val deviceId: Int? = null,
+    // When the token lapses if it goes unused. Stored, not watched: every authenticated request
+    // renews it server-side, so a countdown here would say nothing true.
+    @param:Json(name = "expires_at") val expiresAt: String? = null,
     val user: MobileUser,
     val server: ServerInfo? = null,
 )
@@ -24,6 +30,32 @@ data class LogoutResponse(
 data class CurrentUserResponse(
     val user: MobileUser,
 )
+
+data class DevicesResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val devices: List<DeviceSession> = emptyList(),
+)
+
+/**
+ * One mobile sign-in on this account.
+ *
+ * Everything but the id is optional: `last_ip` is null until the session is used, and older or
+ * partially-populated rows should list rather than fail the whole response.
+ */
+data class DeviceSession(
+    val id: Int = 0,
+    @param:Json(name = "device_name") val deviceName: String? = null,
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    @param:Json(name = "last_used_at") val lastUsedAt: String? = null,
+    @param:Json(name = "expires_at") val expiresAt: String? = null,
+    @param:Json(name = "last_ip") val lastIp: String? = null,
+    val status: String? = null,
+    @param:Json(name = "is_current") val isCurrent: Boolean = false,
+) {
+    /** Never blank, so a nameless session still has something to tap on. */
+    val resolvedName: String
+        get() = deviceName?.trim()?.takeIf { it.isNotEmpty() } ?: "Unnamed device"
+}
 
 data class MobileUser(
     val id: Int,

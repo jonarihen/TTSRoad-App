@@ -9,6 +9,9 @@ sealed interface AppScreen {
     data class Fiction(val fiction: FictionSummary) : AppScreen
     data object Player : AppScreen
     data object Settings : AppScreen
+
+    /** The account's other mobile sign-ins, reached from Settings. */
+    data object Devices : AppScreen
 }
 
 /** Stable key for per-entry saved UI state (scroll offsets, search text). */
@@ -19,6 +22,7 @@ val AppScreen.saveKey: String
         is AppScreen.Fiction -> "Fiction:${fiction.id}"
         AppScreen.Player -> "Player"
         AppScreen.Settings -> "Settings"
+        AppScreen.Devices -> "Devices"
     }
 
 /** The stack every session starts from. */
