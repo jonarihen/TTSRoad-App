@@ -49,6 +49,46 @@ Use this header for authenticated API and audio requests:
 Authorization: Bearer <token>
 ```
 
+## Capability discovery — call this first
+
+Before presenting optional features, call:
+
+```http
+GET /api/mobile/capabilities
+```
+
+This endpoint is unauthenticated so it can also be used while validating a server URL. Call it
+again after login before loading the library. Cache the result per base URL, and refresh it when
+`server.version` changes or periodically:
+
+```json
+{
+  "api_version": 1,
+  "server": {
+    "name": "TTSRoad",
+    "version": "1.4.0",
+    "base_url": "https://ttsroad.example.com"
+  },
+  "capabilities": {
+    "readalong": true,
+    "search": false,
+    "bookmarks": false,
+    "delta_sync": false,
+    "batch_progress": false,
+    "audio_content_hash": false,
+    "device_management": true
+  },
+  "limits": {
+    "max_chapters_per_page": 200
+  }
+}
+```
+
+Treat an unknown capability as `false` and ignore keys the client does not recognise. A `404` means
+an older server: continue with the baseline API and treat every optional capability as `false`.
+Never use `api_version` as a proxy for an additive feature — it tracks breaking changes to the
+baseline, so inferring an additive one from it lights up UI the server cannot serve.
+
 ## Mobile API
 
 ### Login

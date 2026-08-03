@@ -122,6 +122,7 @@ import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LoginResult
+import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
@@ -153,6 +154,7 @@ import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdateState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -233,6 +235,10 @@ private fun TtsRoadApp(
 
     LaunchedEffect(session.isLoggedIn) {
         if (session.isLoggedIn) {
+            // Ask what this server supports before the library renders, so optional affordances are
+            // gated by the time there is anything to gate. Never throws; an older or unreachable
+            // server resolves to the baseline and the ordinary flow continues.
+            repository.refreshCurrentCapabilities()
             playbackController.connect()
             // Ask once playback becomes possible, so the rationale for the prompt is obvious.
             if (needsNotificationPermission(context)) {
@@ -355,6 +361,17 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     val sessionExpired by repository.sessionExpired.collectAsStateWithLifecycle()
     // A failed attempt has more to say than "your old token went stale", so it wins.
     val notice = error ?: "Session expired - sign in again".takeIf { sessionExpired }
+    var probed by remember { mutableStateOf<ServerCapabilities?>(null) }
+
+    // Capability discovery is public, so the URL can be checked before any credentials are typed.
+    // Debounced because this runs on every keystroke in the URL field; a failure stays silent since
+    // an unreachable server here is usually just a half-typed address.
+    LaunchedEffect(serverUrl) {
+        probed = null
+        if (!serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) return@LaunchedEffect
+        delay(600)
+        probed = repository.capabilities(serverUrl).takeIf { it.serverVersion != null }
+    }
 
     Column(
         modifier = Modifier
@@ -379,6 +396,9 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            supportingText = probed?.let { found ->
+                { MetaText(text = "${found.serverName} ${found.serverVersion}", color = AarisColor.Accent) }
+            },
         )
         Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(

@@ -13,6 +13,13 @@ import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
+/**
+ * How long a discovered capability set is trusted before it is re-asked. The server advertises new
+ * features when it is upgraded under a long-lived app process, so this is short enough to notice an
+ * upgrade the same day without making discovery a per-screen cost.
+ */
+private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
+
 /** Outcome of a mobile login attempt. */
 sealed interface LoginResult {
     data object Success : LoginResult
@@ -21,7 +28,11 @@ sealed interface LoginResult {
     data class Failure(val message: String) : LoginResult
 }
 
-class TtsRoadRepository(private val tokenStore: SessionStore) {
+class TtsRoadRepository(
+    private val tokenStore: SessionStore,
+    /** Injectable so the capability cache's expiry can be tested without waiting on wall time. */
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
@@ -36,13 +47,38 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .addInterceptor { chain ->
-            val builder = chain.request().newBuilder()
-            authHeader?.let { builder.header("Authorization", it) }
+            val request = chain.request()
+            val builder = request.newBuilder()
+            if (request.header(NoAuthHeader) != null) {
+                builder.removeHeader(NoAuthHeader)
+            } else {
+                authHeader?.let { builder.header("Authorization", it) }
+            }
             chain.proceed(builder.build())
         }
         .build()
 
     private val apiCache = HashMap<String, TtsRoadApi>()
+
+    /**
+     * Discovered capabilities per normalized base URL. Kept in memory rather than on disk: it is one
+     * cheap unauthenticated call per launch, and a stale flag surviving a reinstall would be worse
+     * than refetching.
+     */
+    private val capabilityCache = HashMap<String, CachedCapabilities>()
+
+    private data class CachedCapabilities(
+        val value: ServerCapabilities,
+        val fetchedAtMillis: Long,
+    )
+
+    private val _currentCapabilities = MutableStateFlow(ServerCapabilities.Baseline)
+
+    /**
+     * What the signed-in server supports. Optional UI observes this and stays hidden at the
+     * baseline, which is also what an older or unreachable server resolves to.
+     */
+    val currentCapabilities: StateFlow<ServerCapabilities> = _currentCapabilities.asStateFlow()
 
     private val _sessionExpired = MutableStateFlow(false)
 
@@ -111,6 +147,74 @@ class TtsRoadRepository(private val tokenStore: SessionStore) {
             }
         }
         tokenStore.clearToken()
+        // Discovery is per server, and the next sign-in may be a different one. Leaving the old
+        // flags in place would show read-along or device management on a server without them.
+        forgetCapabilities(session.serverUrl)
+        _currentCapabilities.value = ServerCapabilities.Baseline
+    }
+
+    /**
+     * Ask [baseUrl] which optional features it supports.
+     *
+     * Never throws. Discovery is a convenience, not a gate on signing in: a server that 404s (too
+     * old to have the endpoint) and a server that cannot be reached at all both resolve to
+     * [ServerCapabilities.Baseline] so the baseline login, library and playback flow is untouched.
+     *
+     * A definitive 404 is cached — that server will not grow the endpoint under us — but a transient
+     * failure is not, and leaves any previously discovered capabilities in place. Downgrading a
+     * working server to baseline over one dropped request would make features flicker.
+     */
+    suspend fun capabilities(
+        baseUrl: String,
+        forceRefresh: Boolean = false,
+    ): ServerCapabilities = withContext(Dispatchers.IO) {
+        val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull()
+            ?: return@withContext ServerCapabilities.Baseline
+        val cached = synchronized(capabilityCache) { capabilityCache[normalized] }
+        if (!forceRefresh && cached != null && clock() - cached.fetchedAtMillis < CapabilityTtlMillis) {
+            return@withContext cached.value
+        }
+        try {
+            val discovered = ServerCapabilities.from(api(normalized).capabilities())
+            synchronized(capabilityCache) {
+                capabilityCache[normalized] = CachedCapabilities(discovered, clock())
+            }
+            discovered
+        } catch (e: HttpException) {
+            if (e.code() == 404) {
+                synchronized(capabilityCache) {
+                    capabilityCache[normalized] =
+                        CachedCapabilities(ServerCapabilities.Baseline, clock())
+                }
+                ServerCapabilities.Baseline
+            } else {
+                cached?.value ?: ServerCapabilities.Baseline
+            }
+        } catch (_: Exception) {
+            cached?.value ?: ServerCapabilities.Baseline
+        }
+    }
+
+    /**
+     * Re-ask the signed-in server what it supports and publish the answer to [currentCapabilities].
+     *
+     * Called after login before the library loads, so optional UI is gated by the time there is
+     * anything to gate. Signed out, it resets to the baseline rather than leaving the previous
+     * account's flags standing.
+     */
+    suspend fun refreshCurrentCapabilities(forceRefresh: Boolean = false): ServerCapabilities {
+        val session = tokenStore.current()
+        if (!session.isLoggedIn) {
+            _currentCapabilities.value = ServerCapabilities.Baseline
+            return ServerCapabilities.Baseline
+        }
+        return capabilities(session.serverUrl, forceRefresh).also { _currentCapabilities.value = it }
+    }
+
+    /** Drop discovered capabilities for [baseUrl], so the next call re-asks. Used on sign-out. */
+    fun forgetCapabilities(baseUrl: String) {
+        val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull() ?: return
+        synchronized(capabilityCache) { capabilityCache.remove(normalized) }
     }
 
     suspend fun library(): LibraryResponse = withAuthorizedApi { it.library() }

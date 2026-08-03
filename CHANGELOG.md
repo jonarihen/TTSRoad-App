@@ -2,6 +2,19 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Knows what your server can do
+
+- The app now asks the server which optional features it supports instead of assuming. Features the
+  server does not have stay hidden rather than appearing and then failing.
+- Typing a server URL on the sign-in screen now confirms what answered, showing the server name and
+  version under the field once it responds.
+- An older server that has never heard of the question is treated as a perfectly good server with
+  none of the optional extras — signing in, the library, and playback are unchanged.
+- Signing out forgets what the previous server could do, so connecting to a different one does not
+  inherit its features.
+
 ## 0.7.2 — 2026-07-27
 
 ### Cover artwork hotfix
