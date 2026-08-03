@@ -4,6 +4,29 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+### Read along while you listen
+
+- **A new reader shows the chapter's text and follows the audio.** Open it from the player, or from
+  the icon on any chapter row. The sentence being read is banded, with the current word picked out
+  inside it — a lone moving word is impossible to follow at 1.5x or 2x, which is how this app is
+  actually listened to.
+- **Tap any word to jump the audio there.** Useful for going back over the sentence you missed
+  without hunting for it on the scrubber.
+- The text scrolls itself to keep the current line high on the screen. **Scroll it yourself and it
+  stops fighting you** — a "back to current" button appears instead, and nothing moves until you
+  ask.
+- **Reading works without playing anything.** It is also what a chapter converted before timings
+  existed falls back to: the text is there, it just does not follow.
+- **A chapter you have opened once reads offline.** The text is kept on the phone, and reopening a
+  chapter asks the server only whether anything changed rather than downloading it again.
+- Text size, page colour (console, paper, or a dimmed night page) and how much is highlighted are
+  all adjustable from the reader. These are kept on this phone; the web reader still has its own
+  copy, because the server has nowhere to share them yet.
+- The screen stays awake while you read — until the sleep timer starts fading out, at which point it
+  lets go rather than shining at someone falling asleep.
+- The reader is deliberately not available in Android Auto.
+- Servers without read-along show none of this rather than offering a button that fails.
+
 ### Knows what your server can do
 
 - The app now asks the server which optional features it supports instead of assuming. Features the

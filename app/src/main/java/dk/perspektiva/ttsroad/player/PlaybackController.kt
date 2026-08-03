@@ -175,6 +175,19 @@ class PlaybackController(
         publishState(controller)
     }
 
+    /**
+     * The position the player reports *right now*, or null when nothing is connected.
+     *
+     * [state] only republishes on a one-second ticker, which is far too coarse to highlight words
+     * with. The read-along reader samples this per frame instead.
+     *
+     * It deliberately reads the player rather than any clock of ours. Skip-silence removes real
+     * time from the media timeline, so a highlight advanced by elapsed wall time would drift
+     * further out of step for the whole length of a chapter; re-reading the reported position means
+     * any error is corrected on the very next frame.
+     */
+    fun reportedPositionMs(): Long? = controller?.currentPosition?.coerceAtLeast(0L)
+
     fun seekTo(positionMs: Long) {
         val controller = controller ?: return
         controller.seekTo(positionMs.coerceAtLeast(0L))

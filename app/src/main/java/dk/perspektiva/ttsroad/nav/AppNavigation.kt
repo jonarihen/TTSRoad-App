@@ -8,6 +8,21 @@ sealed interface AppScreen {
     data object Fictions : AppScreen
     data class Fiction(val fiction: FictionSummary) : AppScreen
     data object Player : AppScreen
+
+    /**
+     * The read-along reader for one chapter.
+     *
+     * Carries the chapter id rather than a [dk.perspektiva.ttsroad.data.ChapterSummary] because the
+     * reader is reachable from the player, where all that is known is the media id of what is
+     * playing — there is no loaded chapter row to hand over. For the same reason there is no fiction
+     * id here: the loaded document carries one, and a placeholder would only be wrong. [title] is
+     * what the top bar shows until the document arrives.
+     */
+    data class Reader(
+        val chapterId: Int,
+        val title: String,
+    ) : AppScreen
+
     data object Settings : AppScreen
 
     /** The account's other mobile sign-ins, reached from Settings. */
@@ -21,6 +36,9 @@ val AppScreen.saveKey: String
         AppScreen.Fictions -> "Fictions"
         is AppScreen.Fiction -> "Fiction:${fiction.id}"
         AppScreen.Player -> "Player"
+        // Keyed by chapter, so reading on to the next one starts at the top of the new chapter
+        // rather than restoring the scroll position of the one just finished.
+        is AppScreen.Reader -> "Reader:$chapterId"
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Devices"
     }

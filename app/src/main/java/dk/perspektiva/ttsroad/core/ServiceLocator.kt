@@ -2,7 +2,10 @@ package dk.perspektiva.ttsroad.core
 
 import android.content.Context
 import dk.perspektiva.ttsroad.data.LibraryCache
+import dk.perspektiva.ttsroad.data.LocalReaderPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
+import dk.perspektiva.ttsroad.data.ReadAlongFileStore
+import dk.perspektiva.ttsroad.data.ReaderPreferenceStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.download.OfflineDownloads
@@ -10,6 +13,7 @@ import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.update.UpdateManager
+import java.io.File
 
 object ServiceLocator {
     @Volatile
@@ -34,6 +38,9 @@ object ServiceLocator {
     private var libraryCache: LibraryCache? = null
 
     @Volatile
+    private var readerPreferences: ReaderPreferenceStore? = null
+
+    @Volatile
     private var updateManager: UpdateManager? = null
 
     @Volatile
@@ -46,6 +53,7 @@ object ServiceLocator {
         playbackHistory(context)
         sleepTimer()
         playbackPreferences(context)
+        readerPreferences(context)
         libraryCache(context)
     }
 
@@ -56,7 +64,19 @@ object ServiceLocator {
 
     fun repository(context: Context): TtsRoadRepository =
         repository ?: synchronized(this) {
-            repository ?: TtsRoadRepository(tokenStore(context)).also { repository = it }
+            repository ?: TtsRoadRepository(
+                tokenStore = tokenStore(context),
+                // Read-along documents outlive the process so a chapter opened once reads offline.
+                readAlongStore = ReadAlongFileStore(
+                    File(context.applicationContext.filesDir, "readalong"),
+                ),
+            ).also { repository = it }
+        }
+
+    fun readerPreferences(context: Context): ReaderPreferenceStore =
+        readerPreferences ?: synchronized(this) {
+            readerPreferences
+                ?: LocalReaderPreferences(context.applicationContext).also { readerPreferences = it }
         }
 
     fun playbackController(context: Context): PlaybackController =

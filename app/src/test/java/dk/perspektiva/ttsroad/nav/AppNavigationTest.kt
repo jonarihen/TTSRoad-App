@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.nav
 
 import dk.perspektiva.ttsroad.data.FictionSummary
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class AppNavigationTest {
@@ -94,5 +95,49 @@ class AppNavigationTest {
             .navigateTo(AppScreen.Devices)
 
         assertEquals(listOf(AppScreen.Library, AppScreen.Settings), stack.popScreen())
+    }
+
+    private fun reader(chapterId: Int) = AppScreen.Reader(
+        chapterId = chapterId,
+        title = "Chapter $chapterId",
+    )
+
+    @Test
+    fun `back from the reader returns to whatever opened it`() {
+        val fromPlayer = rootBackStack.navigateTo(AppScreen.Player).navigateTo(reader(10))
+        assertEquals(AppScreen.Player, fromPlayer.popScreen().last())
+
+        val fictionScreen = AppScreen.Fiction(fiction(1))
+        val fromChapterList = rootBackStack.navigateTo(fictionScreen).navigateTo(reader(10))
+        assertEquals(fictionScreen, fromChapterList.popScreen().last())
+    }
+
+    @Test
+    fun `each chapter is its own reader entry`() {
+        // Reading on from chapter 10 to 11 is a new destination, not a re-entry, so the scroll
+        // position of the chapter just finished is not restored over the new one.
+        val stack = rootBackStack.navigateTo(reader(10)).navigateTo(reader(11))
+
+        assertEquals(3, stack.size)
+        assertEquals(reader(10), stack.popScreen().last())
+        assertEquals("Reader:10", reader(10).saveKey)
+        assertEquals("Reader:11", reader(11).saveKey)
+    }
+
+    @Test
+    fun `reopening the same chapter pops back to it instead of stacking a copy`() {
+        val stack = rootBackStack
+            .navigateTo(reader(10))
+            .navigateTo(AppScreen.Player)
+
+        assertEquals(
+            listOf(AppScreen.Library, reader(10)),
+            stack.navigateTo(reader(10)),
+        )
+    }
+
+    @Test
+    fun `the reader save key does not collide with a fiction of the same id`() {
+        assertNotEquals(reader(1).saveKey, AppScreen.Fiction(fiction(1)).saveKey)
     }
 }
