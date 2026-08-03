@@ -6,7 +6,6 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -191,7 +190,7 @@ class ReadAlongRepositoryTest {
         val document = repository.readAlong(chapterId = 10)
 
         assertNull(document)
-        assertFalse("a missing read-along must not look like an expired session", repository.sessionExpired.value)
+        assertNull("a missing read-along must not look like an expired session", repository.sessionEnd.value)
     }
 
     @Test
@@ -205,7 +204,7 @@ class ReadAlongRepositoryTest {
         assertTrue(thrown is HttpException)
         assertEquals(401, (thrown as HttpException).code())
         assertEquals(1, sessionStore.clearTokenCalls)
-        assertTrue(repository.sessionExpired.value)
+        assertNotNull(repository.sessionEnd.value)
     }
 
     @Test
