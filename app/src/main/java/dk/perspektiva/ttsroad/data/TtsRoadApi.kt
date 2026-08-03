@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
@@ -27,6 +28,18 @@ interface TtsRoadApi {
 
     @GET("api/mobile/me")
     suspend fun me(): CurrentUserResponse
+
+    @GET("api/mobile/devices")
+    suspend fun devices(): DevicesResponse
+
+    // Both revoke calls answer with a small status object whose shape is not part of the documented
+    // contract, so the body is ignored and the list is refetched instead.
+    @DELETE("api/mobile/devices/{token_id}")
+    suspend fun revokeDevice(@Path("token_id") tokenId: Int)
+
+    /** Revokes every other mobile session; the token making the request is deliberately kept. */
+    @POST("api/mobile/devices/revoke-others")
+    suspend fun revokeOtherDevices()
 
     @GET("api/mobile/library")
     suspend fun library(): LibraryResponse

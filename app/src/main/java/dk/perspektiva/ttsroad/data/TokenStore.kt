@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.io.IOException
@@ -24,6 +25,16 @@ data class SessionState(
     val username: String? = null,
     val isAdmin: Boolean = false,
     val serverName: String = "TTSRoad",
+    /** Which mobile session this token is, so the devices screen can mark the row for this phone. */
+    val deviceId: Int? = null,
+    /**
+     * When the token lapses if it goes unused, as the server wrote it.
+     *
+     * Kept for display only. Every authenticated request renews the expiry server-side, so a client
+     * that watched this timestamp and pre-emptively signed out would be wrong far more often than
+     * right.
+     */
+    val expiresAt: String? = null,
 ) {
     val isLoggedIn: Boolean
         get() = !serverUrl.isBlank() && !token.isNullOrBlank()
@@ -49,6 +60,8 @@ class TokenStore(private val context: Context) : SessionStore {
         val Username = stringPreferencesKey("username")
         val IsAdmin = booleanPreferencesKey("is_admin")
         val ServerName = stringPreferencesKey("server_name")
+        val DeviceId = intPreferencesKey("device_id")
+        val ExpiresAt = stringPreferencesKey("expires_at")
     }
 
     val session: Flow<SessionState> = context.sessionDataStore.data
@@ -66,6 +79,8 @@ class TokenStore(private val context: Context) : SessionStore {
                 username = prefs[Keys.Username],
                 isAdmin = prefs[Keys.IsAdmin] ?: false,
                 serverName = prefs[Keys.ServerName] ?: "TTSRoad",
+                deviceId = prefs[Keys.DeviceId],
+                expiresAt = prefs[Keys.ExpiresAt],
             )
         }
 
@@ -78,6 +93,10 @@ class TokenStore(private val context: Context) : SessionStore {
             prefs[Keys.Username] = response.user.username
             prefs[Keys.IsAdmin] = response.user.isAdmin
             prefs[Keys.ServerName] = response.server?.name ?: "TTSRoad"
+            // Absent on servers that predate the devices endpoints, so remove rather than write a
+            // sentinel — a stale device id would mark the wrong row as "this device".
+            response.deviceId?.let { prefs[Keys.DeviceId] = it } ?: prefs.remove(Keys.DeviceId)
+            response.expiresAt?.let { prefs[Keys.ExpiresAt] = it } ?: prefs.remove(Keys.ExpiresAt)
         }
     }
 
@@ -86,6 +105,8 @@ class TokenStore(private val context: Context) : SessionStore {
             prefs.remove(Keys.Token)
             prefs.remove(Keys.Username)
             prefs.remove(Keys.IsAdmin)
+            prefs.remove(Keys.DeviceId)
+            prefs.remove(Keys.ExpiresAt)
         }
     }
 

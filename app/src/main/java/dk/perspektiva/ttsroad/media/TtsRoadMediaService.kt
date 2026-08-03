@@ -39,6 +39,7 @@ import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
+import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.PlaybackFailure
 import dk.perspektiva.ttsroad.player.ShakeDetector
 import dk.perspektiva.ttsroad.player.SleepTimerAction
@@ -258,19 +259,23 @@ class TtsRoadMediaService : MediaLibraryService() {
      */
     @OptIn(UnstableApi::class)
     private fun handlePlayerError(error: PlaybackException) {
-        val httpStatus = generateSequence(error.cause) { it.cause }
+        val httpFailure = generateSequence(error.cause) { it.cause }
             .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
             .firstOrNull()
-            ?.responseCode
 
-        when (classifyPlaybackError(error.errorCode, httpStatus)) {
+        when (classifyPlaybackError(error.errorCode, httpFailure?.responseCode)) {
             PlaybackFailure.Unauthorized -> {
                 // Same conclusion as a 401 on an API call: the stored token cannot be used again,
                 // so drop it and let the session observer fall back to the login screen. Retrying
                 // would just burn battery against a server that will keep saying no.
                 retryJob?.cancel()
                 retryAttempt = 0
-                serviceScope.launch { tokenStore.clearToken() }
+                // Bearer-authenticated /audio/... requests carry the same structured 401 body as
+                // the JSON API, so go through the repository rather than clearing the token here:
+                // that is what carries the reason to the login screen instead of dropping the user
+                // there with no explanation.
+                val body = httpFailure?.responseBody?.toString(Charsets.UTF_8)
+                serviceScope.launch { repository.endSession(parseSessionEnd(body)) }
             }
 
             is PlaybackFailure.Transient -> scheduleRetry()

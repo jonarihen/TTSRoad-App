@@ -15,6 +15,33 @@ Notable changes to the TTSRoad Android client.
 - Signing out forgets what the previous server could do, so connecting to a different one does not
   inherit its features.
 
+### See and sign out your other devices
+
+- **Settings > Device sessions** lists every phone, tablet and car head unit signed in to your
+  account: when it signed in, when it was last used, when its session lapses, and the address it
+  last connected from. The device you are holding is marked and listed first.
+- Sign out a single device, or sign out every other device in one go — the phone in your hand always
+  stays signed in. Both ask first, because neither can be undone from here.
+- On a server too old to know about device sessions the screen simply says so, instead of showing an
+  error you can do nothing about.
+
+### The login screen now says why you are looking at it
+
+- Being bounced to the sign-in screen used to be silent. It now explains itself: whether the session
+  lapsed from 90 days of disuse, was signed out from another device, or is no longer recognised by
+  the server at all — in the server's own words.
+- Sessions renew themselves whenever the app talks to the server, so an app you use is never signed
+  out for being old.
+
+### A rejected session no longer stalls playback
+
+- If the server refused a chapter's audio because the session was over, the player treated it like a
+  dropped connection and spent the full retry backoff asking again before anything happened. It now
+  recognises the refusal immediately and takes you to the sign-in screen, with the same explanation
+  as everywhere else.
+- Genuine network trouble — a tunnel, a Wi-Fi handover, a server restart — still retries exactly as
+  before.
+
 ## 0.7.2 — 2026-07-27
 
 ### Cover artwork hotfix
