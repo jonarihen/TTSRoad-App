@@ -2,7 +2,10 @@
 
 Notable changes to the TTSRoad Android client.
 
-## Unreleased
+## 0.8.0 — 2026-08-03
+
+Signed with the same pinned key as 0.7.0 through 0.7.2, so this installs directly over any of
+them as an ordinary update.
 
 ### Read along while you listen
 

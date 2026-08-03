@@ -15,18 +15,30 @@ server. `CHANGELOG.md` records what shipped in each version.
 ## Commands
 
 ```bash
+./gradlew test                                            # JVM unit tests (the gate)
+./gradlew lint                                            # Android Lint
 ./gradlew assembleDebug                                   # debug APK
 ./gradlew assembleRelease                                 # signed release APK
-./gradlew lint                                            # Android Lint
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-There is no test source set (`app/src/test`, `app/src/androidTest` do not exist) — no tests to run.
+`app/src/test` is a real JVM test source set — 366 tests as of 0.8.0, JUnit + Robolectric +
+MockWebServer, all wired in `app/build.gradle.kts`. **Run `./gradlew test` before claiming a change
+works.** There is still no `app/src/androidTest` (no instrumented tests).
 
 Builds need a JDK and the Android SDK, normally provisioned by Android Studio; the Gradle daemon
 toolchain is pinned to JDK 21 (`gradle/gradle-daemon-jvm.properties`) while compilation targets
 JVM 17. On a machine with no `java` on PATH, Gradle cannot run at all — verify changes by reading,
 not by building, and say so.
+
+Provisioning that toolchain by hand is not hard and is worth it: a JDK 21 tarball plus
+`platform-tools`, `platforms;android-37.0` and `build-tools;37.0.0` via `sdkmanager`, then
+`sdk.dir` in `local.properties`. Reading alone let a stack of four PRs reach `main`-ready with a
+test file that did not compile against a rename made underneath it.
+
+`assembleDebug`/`assembleRelease` additionally need `debug.keystore` in the repo root — both build
+types are signed with it, and `verifyTtsRoadSigningKey` refuses any file whose SHA-256 is not the
+pinned one. `./gradlew test` and `lint` do **not** need it.
 
 Release shrinking is deliberately disabled. Version 0.7.0 was the first minified APK and crashed
 at startup because R8 renamed a Moshi-reflected model outside `data/`. Do not re-enable shrinking
