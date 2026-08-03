@@ -46,11 +46,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Forward5
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Replay30
 import androidx.compose.material.icons.filled.Replay5
@@ -137,6 +141,14 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterView
+import dk.perspektiva.ttsroad.download.ChapterDownload
+import dk.perspektiva.ttsroad.download.ChapterDownloadState
+import dk.perspektiva.ttsroad.download.DownloadBatchSize
+import dk.perspektiva.ttsroad.download.FictionDownloadSummary
+import dk.perspektiva.ttsroad.download.fictionDownloadSummary
+import dk.perspektiva.ttsroad.download.formatStorageSize
+import dk.perspektiva.ttsroad.download.handledChapterIds
+import dk.perspektiva.ttsroad.download.nextChaptersToDownload
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.nav.AppScreen
 import dk.perspektiva.ttsroad.nav.navigateTo
@@ -173,6 +185,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Pick up any download that was still running when the app was last killed. Done from the
+        // activity because the process is in the foreground here, so starting the service is allowed.
+        ServiceLocator.offlineDownloads(this).resumeUnfinished()
         val startOnPlayer = consumeOpenPlayer(intent)
         setContent {
             TtsRoadTheme {
@@ -837,6 +852,9 @@ private fun FictionScreen(
     val cache = remember { ServiceLocator.libraryCache(context) }
     val chapterState by remember(fiction.id) { cache.chapters(fiction.id) }
         .collectAsStateWithLifecycle()
+    val downloads = remember { ServiceLocator.offlineDownloads(context) }
+    val downloadState by downloads.downloads.collectAsStateWithLifecycle()
+    val serverUrl = LocalServerUrl.current
     var error by remember { mutableStateOf<String?>(null) }
     var filter by remember(fiction.id) { mutableStateOf(ChapterFilter.All) }
     var ascending by remember(fiction.id) { mutableStateOf(true) }
@@ -880,6 +898,13 @@ private fun FictionScreen(
             }
             val currentChapterId = playerState.queue.getOrNull(playerState.currentIndex)
                 ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
+            // Where a batch download starts: what is playing, else the furthest-progressed chapter,
+            // else the top of the fiction. Same reasoning as the header's RESUME button.
+            val downloadStartId = currentChapterId ?: remember(chapters) {
+                chapters.filter { it.audio != null && it.resolvedPositionSeconds > 0.0 }
+                    .maxByOrNull { it.resolvedPositionSeconds }
+                    ?.resolvedChapterId
+            }
             // Row index inside [visible]; the header occupies list index 0, so rows are offset by 1.
             val currentRow = remember(visible, currentChapterId) {
                 if (currentChapterId == null) -1 else visible.indexOfFirst { it.resolvedChapterId == currentChapterId }
@@ -920,6 +945,22 @@ private fun FictionScreen(
                                     onOpenPlayer()
                                 }
                             },
+                            downloadSummary = remember(chapters, downloadState) {
+                                fictionDownloadSummary(chapters, downloadState)
+                            },
+                            onDownloadNext = {
+                                // Start where the listener is, not at chapter one — the point of the
+                                // batch is the drive ahead of them.
+                                downloads.download(
+                                    nextChaptersToDownload(
+                                        chapters = chapters,
+                                        alreadyHandled = handledChapterIds(chapters, downloadState),
+                                        limit = DownloadBatchSize,
+                                        startChapterId = downloadStartId,
+                                    ),
+                                    serverUrl,
+                                )
+                            },
                         )
                         error?.let {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -952,6 +993,19 @@ private fun FictionScreen(
                             },
                             onMarkPlayed = { played -> mark(listOf(chapter.resolvedChapterId), played) },
                             onLongPress = { bulkTarget = chapter },
+                            download = downloadState[TtsRoadMediaIds.chapter(chapter.resolvedChapterId)],
+                            onToggleDownload = {
+                                val current = downloadState[
+                                    TtsRoadMediaIds.chapter(chapter.resolvedChapterId),
+                                ]?.state ?: ChapterDownloadState.None
+                                // Anything already on disk or in flight is removed; anything else
+                                // (including a previous failure) is started.
+                                if (current.isAvailableOffline || current.isBusy) {
+                                    downloads.remove(chapter.resolvedChapterId)
+                                } else {
+                                    downloads.download(chapter, serverUrl)
+                                }
+                            },
                         )
                     }
                 }
@@ -1611,7 +1665,13 @@ private fun SettingsScreen(
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
+    val downloads = remember { ServiceLocator.offlineDownloads(context) }
+    val cacheBytes by downloads.cacheBytes.collectAsStateWithLifecycle()
+    var confirmDeleteDownloads by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
+
+    // The cache is only measured on demand: it means walking the cache index off the main thread.
+    LaunchedEffect(Unit) { downloads.refreshCacheBytes() }
 
     // Re-read on resume so returning from system settings reflects the new state.
     var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
@@ -1770,6 +1830,30 @@ private fun SettingsScreen(
             }
         }
 
+        MetaText(text = "// Offline", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                SettingsItem(label = "Storage used", value = formatStorageSize(cacheBytes))
+                MetaText(
+                    text = "Covers both chapters you downloaded and chapters kept from streaming. " +
+                        "Nothing is deleted automatically.",
+                    color = AarisColor.Dim,
+                )
+                OutlinedButton(
+                    onClick = { confirmDeleteDownloads = true },
+                    enabled = cacheBytes > 0,
+                    shape = RectangleShape,
+                ) {
+                    Text("DELETE ALL DOWNLOADS")
+                }
+            }
+        }
+
         MetaText(text = "// App", color = AarisColor.Accent)
         AarisCard {
             Column(
@@ -1806,6 +1890,40 @@ private fun SettingsScreen(
         ) {
             Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
         }
+    }
+
+    if (confirmDeleteDownloads) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteDownloads = false },
+            containerColor = AarisColor.BgRaise,
+            title = { Text("DELETE ALL DOWNLOADS", style = MaterialTheme.typography.titleLarge) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MetaText(text = formatStorageSize(cacheBytes), color = AarisColor.Accent)
+                    Text(
+                        text = "Every downloaded chapter is removed, along with the audio kept " +
+                            "from streaming. Playback progress is stored on the server and is " +
+                            "not affected.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AarisColor.Muted,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmDeleteDownloads = false
+                        downloads.removeAll()
+                    },
+                    shape = RectangleShape,
+                ) {
+                    Text("DELETE")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteDownloads = false }) { Text("CANCEL") }
+            },
+        )
     }
 }
 
@@ -2455,6 +2573,8 @@ private fun ChapterRow(
     onMarkPlayed: ((Boolean) -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
     isCurrent: Boolean = false,
+    download: ChapterDownload? = null,
+    onToggleDownload: (() -> Unit)? = null,
 ) {
     val playable = chapter.audio != null
     val isPlayed = chapter.playback?.isPlayed == true
@@ -2489,16 +2609,36 @@ private fun ChapterRow(
                     chapter.audioDurationLabel,
                     chapter.playback?.remainingLabel?.let { "$it left" }
                         ?: chapter.resumeTimeLabel?.let { "$it in" },
+                    downloadMetaLabel(download),
                 ).joinToString("  ·  ")
                 if (meta.isNotBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
-                    MetaText(text = meta, color = AarisColor.Dim)
+                    MetaText(
+                        text = meta,
+                        color = if (download?.state?.isAvailableOffline == true) {
+                            AarisColor.Ok
+                        } else {
+                            AarisColor.Dim
+                        },
+                    )
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
             if (!playable) {
                 AarisTag(text = chapter.status ?: "pending")
             } else {
+                onToggleDownload?.let { toggle ->
+                    val state = download?.state ?: ChapterDownloadState.None
+                    TransportIconButton(
+                        icon = downloadIcon(state),
+                        contentDescription = downloadAction(state),
+                        enabled = state != ChapterDownloadState.Removing,
+                        size = 36.dp,
+                        filled = state.isAvailableOffline,
+                        onClick = toggle,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
                 onMarkPlayed?.let { mark ->
                     TransportIconButton(
                         icon = Icons.Default.Check,
@@ -2524,6 +2664,33 @@ private fun ChapterRow(
 private fun chapterNumberLabel(chapter: ChapterSummary): String {
     val n = chapter.displayNumber ?: return "—"
     return if (n % 1.0 == 0.0) n.toLong().toString() else n.toString()
+}
+
+/** The row's download button. Its icon is the *action*, not the state — except when there is none. */
+private fun downloadIcon(state: ChapterDownloadState): ImageVector = when (state) {
+    ChapterDownloadState.None -> Icons.Default.Download
+    ChapterDownloadState.Downloaded -> Icons.Default.DownloadDone
+    ChapterDownloadState.Failed -> Icons.Default.Refresh
+    // Queued, Downloading and Removing all resolve to "stop what is happening".
+    else -> Icons.Default.Close
+}
+
+private fun downloadAction(state: ChapterDownloadState): String = when (state) {
+    ChapterDownloadState.None -> "Download for offline"
+    ChapterDownloadState.Downloaded -> "Delete download"
+    ChapterDownloadState.Failed -> "Retry download"
+    ChapterDownloadState.Removing -> "Deleting download"
+    else -> "Cancel download"
+}
+
+/** Download status folded into the row's meta line, so it costs no extra vertical space. */
+private fun downloadMetaLabel(download: ChapterDownload?): String? = when (download?.state) {
+    null, ChapterDownloadState.None -> null
+    ChapterDownloadState.Downloaded -> "Offline"
+    ChapterDownloadState.Queued -> "Queued"
+    ChapterDownloadState.Downloading -> "Downloading ${download.percent}%"
+    ChapterDownloadState.Failed -> "Download failed"
+    ChapterDownloadState.Removing -> "Deleting"
 }
 
 @Composable
@@ -2657,6 +2824,8 @@ private fun FictionDetailHeader(
     fiction: FictionSummary,
     chapters: List<ChapterSummary>,
     onPlay: (ChapterSummary) -> Unit,
+    downloadSummary: FictionDownloadSummary = FictionDownloadSummary(),
+    onDownloadNext: (() -> Unit)? = null,
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
@@ -2705,6 +2874,34 @@ private fun FictionDetailHeader(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+            }
+        }
+
+        onDownloadNext?.let { download ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(
+                    onClick = download,
+                    enabled = downloadSummary.remaining > 0,
+                    shape = RectangleShape,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (downloadSummary.remaining > 0) {
+                            "DOWNLOAD NEXT ${minOf(DownloadBatchSize, downloadSummary.remaining)}"
+                        } else {
+                            "ALL CHAPTERS DOWNLOADED"
+                        },
+                    )
+                }
+                MetaText(
+                    text = buildString {
+                        append("${downloadSummary.downloaded} offline")
+                        if (downloadSummary.inFlight > 0) append("  ·  ${downloadSummary.inFlight} in progress")
+                        append("  ·  ${downloadSummary.remaining} not downloaded")
+                        if (downloadSummary.bytes > 0) append("  ·  ${formatStorageSize(downloadSummary.bytes)}")
+                    },
+                    color = AarisColor.Dim,
+                )
             }
         }
 

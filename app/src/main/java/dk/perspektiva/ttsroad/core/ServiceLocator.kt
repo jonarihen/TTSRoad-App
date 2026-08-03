@@ -5,6 +5,7 @@ import dk.perspektiva.ttsroad.data.LibraryCache
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TokenStore
+import dk.perspektiva.ttsroad.download.OfflineDownloads
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.SleepTimerController
@@ -34,6 +35,9 @@ object ServiceLocator {
 
     @Volatile
     private var updateManager: UpdateManager? = null
+
+    @Volatile
+    private var offlineDownloads: OfflineDownloads? = null
 
     fun init(context: Context) {
         tokenStore(context)
@@ -88,5 +92,19 @@ object ServiceLocator {
     fun updateManager(): UpdateManager =
         updateManager ?: synchronized(this) {
             updateManager ?: UpdateManager().also { updateManager = it }
+        }
+
+    /**
+     * Deliberately not created in [init]: opening the media cache scans its directory, and 0.7.0
+     * taught this app what putting extra work into application startup costs. The playback service,
+     * the download service and the UI all reach it through here, so there is still exactly one
+     * cache and one download index per process — [OfflineDownloads] depends on that.
+     */
+    fun offlineDownloads(context: Context): OfflineDownloads =
+        offlineDownloads ?: synchronized(this) {
+            offlineDownloads ?: OfflineDownloads(
+                context = context.applicationContext,
+                tokenStore = tokenStore(context),
+            ).also { offlineDownloads = it }
         }
 }

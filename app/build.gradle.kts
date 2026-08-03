@@ -123,6 +123,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.media3.common)
+    // Offline downloads: StandaloneDatabaseProvider backs both the media cache index and the
+    // download index, which is what makes a download survive an app restart.
+    implementation(libs.androidx.media3.database)
     implementation(libs.androidx.media3.datasource)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)

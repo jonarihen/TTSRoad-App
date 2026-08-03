@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Offline downloads. Android 14+ requires the type to match what the service does, and
+         saving chapters is a data sync rather than playback. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Volume boost: attaching a LoudnessEnhancer to the player's audio session needs this.
          Normal permission, granted at install, so there is nothing to request at runtime. -->
@@ -61,5 +64,12 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <!-- Not exported: downloads are only ever started by this app's own UI. No RESTART
+             intent-filter because there is no Scheduler — see TtsRoadDownloadService. -->
+        <service
+            android:name=".download.TtsRoadDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
