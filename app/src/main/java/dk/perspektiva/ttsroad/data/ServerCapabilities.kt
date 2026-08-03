@@ -32,6 +32,12 @@ data class CapabilityServerInfo(
 data class ServerCapabilities(
     val serverName: String = "TTSRoad",
     val serverVersion: String? = null,
+    /**
+     * The server's *own* configured `BASE_URL`, which is the only stable identity it has: the
+     * address the phone reached it on changes with the network, but this does not. The download
+     * cache keys on it so two servers cannot share a cache entry — see `DownloadCacheKeys`.
+     */
+    val serverBaseUrl: String? = null,
     val apiVersion: Int = 1,
     val readAlong: Boolean = false,
     val search: Boolean = false,
@@ -51,6 +57,7 @@ data class ServerCapabilities(
             return ServerCapabilities(
                 serverName = response.server?.name ?: "TTSRoad",
                 serverVersion = response.server?.version,
+                serverBaseUrl = response.server?.baseUrl?.takeIf { it.isNotBlank() },
                 apiVersion = response.apiVersion,
                 readAlong = flags.flag("readalong"),
                 search = flags.flag("search"),

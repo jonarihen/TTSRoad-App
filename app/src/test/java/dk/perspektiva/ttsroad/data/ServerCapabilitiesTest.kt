@@ -43,6 +43,24 @@ class ServerCapabilitiesTest {
     }
 
     @Test
+    fun `the server's own base url is carried through, and its absence is null not blank`() {
+        // The download cache keys on this to tell one instance from another, and treats null as
+        // "no identity" — an empty string arriving instead would look like a real one.
+        val reported = ServerCapabilities.from(
+            CapabilitiesResponse(
+                server = CapabilityServerInfo(baseUrl = "https://ttsroad.example.com"),
+            ),
+        )
+        val blank = ServerCapabilities.from(CapabilitiesResponse(server = CapabilityServerInfo(baseUrl = "  ")))
+        val absent = ServerCapabilities.from(CapabilitiesResponse(server = CapabilityServerInfo()))
+
+        assertEquals("https://ttsroad.example.com", reported.serverBaseUrl)
+        assertNull(blank.serverBaseUrl)
+        assertNull(absent.serverBaseUrl)
+        assertNull(ServerCapabilities.Baseline.serverBaseUrl)
+    }
+
+    @Test
     fun `a capability the server does not mention is false`() {
         val capabilities = ServerCapabilities.from(
             CapabilitiesResponse(capabilities = mapOf("readalong" to true)),
