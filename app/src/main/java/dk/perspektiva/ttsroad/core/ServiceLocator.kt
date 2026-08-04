@@ -125,6 +125,9 @@ object ServiceLocator {
             offlineDownloads ?: OfflineDownloads(
                 context = context.applicationContext,
                 tokenStore = tokenStore(context),
+                // The server's own identity, which is what keeps one instance's downloads out of
+                // another's cache entries.
+                capabilities = repository(context).currentCapabilities,
             ).also { offlineDownloads = it }
         }
 }

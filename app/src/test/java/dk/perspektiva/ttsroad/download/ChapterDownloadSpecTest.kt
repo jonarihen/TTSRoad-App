@@ -4,6 +4,7 @@ import dk.perspektiva.ttsroad.data.AudioInfo
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -54,6 +55,25 @@ class ChapterDownloadSpecTest {
 
         assertEquals(overDomain?.cacheKey, overLan?.cacheKey)
         assertEquals(DownloadCacheKeys.forUrl(overDomain!!.url), overDomain.cacheKey)
+    }
+
+    @Test
+    fun `the cache key is scoped to the server when it reports an identity`() {
+        val identity = DownloadCacheKeys.serverIdentity("https://ttsroad.example.com")
+        val spec = chapterDownloadSpec(chapter(), serverUrl, identity)!!
+
+        assertEquals(DownloadCacheKeys.forUrl(spec.url, identity), spec.cacheKey)
+        // Still host-independent within that server — downloading over the LAN and over the domain
+        // is one file, which is the property 0.8.0 was built around.
+        assertEquals(spec.cacheKey, chapterDownloadSpec(chapter(), "http://192.168.1.20:8000/", identity)?.cacheKey)
+    }
+
+    @Test
+    fun `the same chapter on two servers gets two cache keys`() {
+        val mine = chapterDownloadSpec(chapter(), serverUrl, DownloadCacheKeys.serverIdentity("https://a.example"))
+        val theirs = chapterDownloadSpec(chapter(), serverUrl, DownloadCacheKeys.serverIdentity("https://b.example"))
+
+        assertNotEquals(mine?.cacheKey, theirs?.cacheKey)
     }
 
     @Test

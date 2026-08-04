@@ -1,7 +1,10 @@
 package dk.perspektiva.ttsroad.download
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DownloadCacheKeysTest {
@@ -87,5 +90,102 @@ class DownloadCacheKeysTest {
     @Test
     fun `a blank url keys to itself rather than throwing`() {
         assertEquals("", DownloadCacheKeys.forUrl(""))
+    }
+
+    @Test
+    fun `two servers holding the same slug do not share a cache entry`() {
+        // The collision this scoping exists for: a path is only unique per server, so the same
+        // fiction slug on two instances would otherwise be one file.
+        val mine = DownloadCacheKeys.serverIdentity("https://ttsroad.example.com")
+        val theirs = DownloadCacheKeys.serverIdentity("https://ttsroad.other.example")
+
+        assertNotEquals(
+            DownloadCacheKeys.forUrl("https://ttsroad.example.com/audio/f/0001.mp3", mine),
+            DownloadCacheKeys.forUrl("https://ttsroad.example.com/audio/f/0001.mp3", theirs),
+        )
+    }
+
+    @Test
+    fun `scoping still survives a change of server address`() {
+        // The 0.8.0 property has to hold inside the new keyspace too: the identity comes from what
+        // the server says about itself, not from how the phone reached it.
+        val identity = DownloadCacheKeys.serverIdentity("https://ttsroad.example.com")
+
+        assertEquals(
+            DownloadCacheKeys.forUrl("https://ttsroad.example.com/audio/f/0001.mp3", identity),
+            DownloadCacheKeys.forUrl("http://192.168.1.20:8000/audio/f/0001.mp3", identity),
+        )
+    }
+
+    @Test
+    fun `an unknown identity keeps the key that shipped in 0_8_0`() {
+        // Older servers advertise no base_url, and capabilities have not been fetched at all on
+        // first launch. Both must key exactly as before rather than inventing an identity.
+        assertEquals(
+            "/audio/f/0001.mp3",
+            DownloadCacheKeys.forUrl("https://ttsroad.example.com/audio/f/0001.mp3", null),
+        )
+        assertEquals(
+            "/audio/f/0001.mp3",
+            DownloadCacheKeys.forUrl("https://ttsroad.example.com/audio/f/0001.mp3", ""),
+        )
+    }
+
+    @Test
+    fun `putting the server behind TLS does not orphan its downloads`() {
+        // Same instance, same downloads — only the scheme in its configured BASE_URL changed.
+        assertEquals(
+            DownloadCacheKeys.serverIdentity("http://ttsroad.example.com"),
+            DownloadCacheKeys.serverIdentity("https://ttsroad.example.com"),
+        )
+    }
+
+    @Test
+    fun `an identity ignores trailing slashes and letter case`() {
+        val expected = DownloadCacheKeys.serverIdentity("https://ttsroad.example.com")
+
+        assertEquals(expected, DownloadCacheKeys.serverIdentity("https://TTSRoad.Example.com/"))
+        assertEquals(expected, DownloadCacheKeys.serverIdentity("  https://ttsroad.example.com  "))
+    }
+
+    @Test
+    fun `a port and a path prefix are part of the identity`() {
+        // Two instances behind one reverse proxy differ only by port or mount point.
+        assertNotEquals(
+            DownloadCacheKeys.serverIdentity("https://host.example:8000"),
+            DownloadCacheKeys.serverIdentity("https://host.example:8001"),
+        )
+        assertNotEquals(
+            DownloadCacheKeys.serverIdentity("https://host.example/books"),
+            DownloadCacheKeys.serverIdentity("https://host.example/audiobooks"),
+        )
+    }
+
+    @Test
+    fun `a base url with nothing usable in it yields no identity`() {
+        assertNull(DownloadCacheKeys.serverIdentity(null))
+        assertNull(DownloadCacheKeys.serverIdentity(""))
+        assertNull(DownloadCacheKeys.serverIdentity("   "))
+        assertNull(DownloadCacheKeys.serverIdentity("not-a-url"))
+        assertNull(DownloadCacheKeys.serverIdentity("https://"))
+    }
+
+    @Test
+    fun `a scoped key is told apart from a 0_8_0 one`() {
+        // What the re-key migration reads: an entry already naming a server belongs to that server
+        // and must not be moved into another's keyspace.
+        val identity = DownloadCacheKeys.serverIdentity("https://ttsroad.example.com")
+
+        assertTrue(
+            DownloadCacheKeys.isScoped(
+                DownloadCacheKeys.forUrl("https://ttsroad.example.com/audio/f/0001.mp3", identity),
+            ),
+        )
+        assertFalse(
+            DownloadCacheKeys.isScoped(
+                DownloadCacheKeys.forUrl("https://ttsroad.example.com/audio/f/0001.mp3", null),
+            ),
+        )
+        assertFalse(DownloadCacheKeys.isScoped(""))
     }
 }

@@ -35,14 +35,21 @@ data class DownloadIds(val fictionId: Int, val chapterId: Int)
  * The URL is rewritten onto [serverUrl] for the same reason playback does it: the backend builds
  * absolute URLs from its own configured `BASE_URL`, which is routinely not an address the phone can
  * reach. Downloading the raw URL was a real shipped bug for artwork in 0.7.0.
+ *
+ * [serverIdentity] scopes the cache key to the server the chapter came from; null keeps the 0.8.0
+ * key. See [DownloadCacheKeys].
  */
-fun chapterDownloadSpec(chapter: ChapterSummary, serverUrl: String?): ChapterDownloadSpec? {
+fun chapterDownloadSpec(
+    chapter: ChapterSummary,
+    serverUrl: String?,
+    serverIdentity: String? = null,
+): ChapterDownloadSpec? {
     val rawUrl = chapter.audio?.url?.takeIf { it.isNotBlank() } ?: return null
     val url = ServerUrls.rewriteHost(rawUrl.trim(), serverUrl)
     return ChapterDownloadSpec(
         id = TtsRoadMediaIds.chapter(chapter.resolvedChapterId),
         url = url,
-        cacheKey = DownloadCacheKeys.forUrl(url),
+        cacheKey = DownloadCacheKeys.forUrl(url, serverIdentity),
         fictionId = chapter.resolvedFictionId,
         chapterId = chapter.resolvedChapterId,
     )

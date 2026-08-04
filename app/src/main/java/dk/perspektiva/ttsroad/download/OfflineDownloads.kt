@@ -19,7 +19,9 @@ import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
+import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import java.io.File
@@ -27,10 +29,12 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 /**
@@ -54,6 +58,7 @@ import kotlinx.coroutines.launch
 class OfflineDownloads(
     private val context: Context,
     tokenStore: TokenStore,
+    capabilities: Flow<ServerCapabilities> = flowOf(ServerCapabilities.Baseline),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -61,6 +66,17 @@ class OfflineDownloads(
     // and back in does not require rebuilding the cache, the manager or the player.
     @Volatile
     private var authHeader: String? = null
+
+    /** Address the phone signed in on — used to point a re-keyed download at a reachable host. */
+    @Volatile
+    private var serverUrl: String = ""
+
+    /**
+     * Which server the cache entries belong to, once it has said so. Null until capabilities come
+     * back, and on a server too old to report a `base_url` at all — see [DownloadCacheKeys].
+     */
+    @Volatile
+    private var serverIdentity: String? = null
 
     private val _downloads = MutableStateFlow<Map<String, ChapterDownload>>(emptyMap())
 
@@ -88,7 +104,7 @@ class OfflineDownloads(
      * all and the URL is the only thing left to derive one from.
      */
     private val cacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
-        dataSpec.key ?: DownloadCacheKeys.forUrl(dataSpec.uri.toString())
+        dataSpec.key ?: DownloadCacheKeys.forUrl(dataSpec.uri.toString(), serverIdentity)
     }
 
     /** Auth-injecting HTTP source used to fetch bytes the cache does not have. */
@@ -141,7 +157,13 @@ class OfflineDownloads(
 
     init {
         scope.launch {
-            tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
+            tokenStore.session.collectLatest {
+                authHeader = it.authorizationHeader
+                serverUrl = it.serverUrl
+            }
+        }
+        scope.launch {
+            capabilities.collectLatest { adoptServerIdentity(DownloadCacheKeys.serverIdentity(it.serverBaseUrl)) }
         }
         // Touching the manager is what makes it read the persisted index, which is what makes
         // yesterday's downloads show up in the chapter rows again. Done off the main thread because
@@ -168,7 +190,7 @@ class OfflineDownloads(
 
     /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
     fun download(chapter: ChapterSummary, serverUrl: String?) {
-        val spec = chapterDownloadSpec(chapter, serverUrl) ?: return
+        val spec = chapterDownloadSpec(chapter, serverUrl, serverIdentity) ?: return
         send(spec.toDownloadRequest())
     }
 
@@ -243,6 +265,80 @@ class OfflineDownloads(
             request,
             /* foreground= */ false,
         )
+    }
+
+    /**
+     * Adopt [identity] and move anything already on disk into its keyspace.
+     *
+     * 0.8.0 keyed the cache on the bare path, so every download made with it is filed under a key
+     * this build no longer computes. Left alone those entries would be invisible to playback while
+     * still counting as downloaded in the UI, and their bytes would be unreclaimable short of
+     * "delete all downloads" — so each one is removed and queued again under the new key, which
+     * costs a re-download but keeps the rows honest.
+     *
+     * Only ever migrates *towards* an identity. A capabilities refresh that comes back without one
+     * (an unreachable server answering as [ServerCapabilities.Baseline]) must not undo the move and
+     * start the whole library downloading a second time.
+     */
+    private fun adoptServerIdentity(identity: String?) {
+        if (identity == null || identity == serverIdentity) return
+        serverIdentity = identity
+        scope.launch(Dispatchers.IO) {
+            // Only unscoped entries move. One already carrying a different identity belongs to
+            // another server the user also downloaded from, and re-keying it here would hand its
+            // audio to this one — the very collision the identity exists to prevent.
+            val stale = runCatching {
+                downloadManager.downloadIndex.getDownloads().use { cursor ->
+                    buildList {
+                        while (cursor.moveToNext()) {
+                            val request = cursor.download.request
+                            val key = request.customCacheKey ?: continue
+                            if (!DownloadCacheKeys.isScoped(key)) add(request)
+                        }
+                    }
+                }
+            }.getOrDefault(emptyList())
+
+            // Unscoped spans belonging to no download record are what streaming left behind.
+            // Nothing will ever read them again, so they are dropped rather than re-fetched — the
+            // chapter simply streams once more if it is played.
+            val indexed = stale.mapTo(mutableSetOf()) { it.customCacheKey }
+            runCatching {
+                cache.keys.filter { !DownloadCacheKeys.isScoped(it) && it !in indexed }
+                    .forEach(cache::removeResource)
+            }
+
+            // Wrapped like resumeUnfinished: this can run while the process is in the background
+            // (the media service builds this class too) and starting the download service from
+            // there is not always allowed. A row that does not make it keeps the honest state —
+            // not downloaded — rather than taking the process down.
+            runCatching {
+                stale.forEach { request ->
+                    // Removed before it is re-added, so the manager has nothing to merge the new
+                    // key into; both go through the one service queue, so they stay in order.
+                    DownloadService.sendRemoveDownload(
+                        context,
+                        TtsRoadDownloadService::class.java,
+                        request.id,
+                        /* foreground= */ false,
+                    )
+                    // The recorded URL may name an address this phone can no longer reach, so it is
+                    // put back on the one signed in — the rewrite a fresh download would do.
+                    send(
+                        DownloadRequest.Builder(
+                            request.id,
+                            ServerUrls.rewriteHost(request.uri.toString(), serverUrl).toUri(),
+                        )
+                            .setCustomCacheKey(
+                                DownloadCacheKeys.forUrl(request.uri.toString(), identity),
+                            )
+                            .setData(request.data)
+                            .build(),
+                    )
+                }
+            }
+            refreshCacheBytes()
+        }
     }
 
     /** Read every persisted download, including the completed ones the manager does not hold. */
