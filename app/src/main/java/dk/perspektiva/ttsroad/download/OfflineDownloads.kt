@@ -21,6 +21,7 @@ import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.DownloadPrefs
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
@@ -34,8 +35,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Owns the on-disk media cache and the download queue.
@@ -59,6 +63,7 @@ class OfflineDownloads(
     private val context: Context,
     tokenStore: TokenStore,
     capabilities: Flow<ServerCapabilities> = flowOf(ServerCapabilities.Baseline),
+    downloadPrefs: Flow<DownloadPrefs> = flowOf(DownloadPrefs()),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -164,6 +169,19 @@ class OfflineDownloads(
         }
         scope.launch {
             capabilities.collectLatest { adoptServerIdentity(DownloadCacheKeys.serverIdentity(it.serverBaseUrl)) }
+        }
+        // Requirements are enforced by the manager itself, so a queued chapter waits for Wi-Fi
+        // rather than failing — and flipping the switch back on releases whatever was waiting,
+        // with no need to queue it again.
+        scope.launch {
+            downloadPrefs
+                .map { it.wifiOnly }
+                .distinctUntilChanged()
+                .collect { wifiOnly ->
+                    withContext(Dispatchers.IO) {
+                        downloadManager.requirements = downloadRequirements(wifiOnly)
+                    }
+                }
         }
         // Touching the manager is what makes it read the persisted index, which is what makes
         // yesterday's downloads show up in the chapter rows again. Done off the main thread because

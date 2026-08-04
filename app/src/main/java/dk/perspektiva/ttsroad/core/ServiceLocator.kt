@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.core
 
 import android.content.Context
+import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.LibraryCache
 import dk.perspektiva.ttsroad.data.LocalReaderPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
@@ -42,6 +43,9 @@ object ServiceLocator {
 
     @Volatile
     private var updateManager: UpdateManager? = null
+
+    @Volatile
+    private var downloadPreferences: DownloadPreferences? = null
 
     @Volatile
     private var offlineDownloads: OfflineDownloads? = null
@@ -104,6 +108,12 @@ object ServiceLocator {
                 ?: PlaybackPreferences(context.applicationContext).also { playbackPreferences = it }
         }
 
+    fun downloadPreferences(context: Context): DownloadPreferences =
+        downloadPreferences ?: synchronized(this) {
+            downloadPreferences
+                ?: DownloadPreferences(context.applicationContext).also { downloadPreferences = it }
+        }
+
     fun libraryCache(context: Context): LibraryCache =
         libraryCache ?: synchronized(this) {
             libraryCache ?: LibraryCache(repository(context)).also { libraryCache = it }
@@ -128,6 +138,7 @@ object ServiceLocator {
                 // The server's own identity, which is what keeps one instance's downloads out of
                 // another's cache entries.
                 capabilities = repository(context).currentCapabilities,
+                downloadPrefs = downloadPreferences(context).prefs,
             ).also { offlineDownloads = it }
         }
 }
