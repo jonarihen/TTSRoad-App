@@ -32,7 +32,21 @@ android {
         targetSdk = 37
         versionCode = 11
         versionName = "0.9.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+
+    /**
+     * Which variant instrumented tests run against. Defaults to `debug` so the ordinary flow needs
+     * nothing special.
+     *
+     * The reason this is switchable at all: `debug` is not minified, so a smoke test running
+     * against it cannot see an R8 problem — and guarding R8 is the entire point of having one.
+     * `./gradlew connectedAndroidTest -PttsroadTestBuildType=release` runs it against the real
+     * minified, pinned-key-signed release build, which is the configuration that shipped the 0.7.0
+     * startup crash. That needs a device and the keystore, so it stays a local step; CI never sets
+     * this property and never needs the key.
+     */
+    testBuildType = providers.gradleProperty("ttsroadTestBuildType").getOrElse("debug")
 
     buildTypes {
         debug {
@@ -145,4 +159,9 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.robolectric)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.core.ktx)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
