@@ -299,7 +299,7 @@ class OfflineDownloads(
      * start the whole library downloading a second time.
      */
     private fun adoptServerIdentity(identity: String?) {
-        if (identity == null || identity == serverIdentity) return
+        if (!shouldAdoptIdentity(current = serverIdentity, incoming = identity)) return
         serverIdentity = identity
         scope.launch(Dispatchers.IO) {
             // Only unscoped entries move. One already carrying a different identity belongs to
@@ -322,8 +322,7 @@ class OfflineDownloads(
             // chapter simply streams once more if it is played.
             val indexed = stale.mapTo(mutableSetOf()) { it.customCacheKey }
             runCatching {
-                cache.keys.filter { !DownloadCacheKeys.isScoped(it) && it !in indexed }
-                    .forEach(cache::removeResource)
+                orphanedCacheKeys(cache.keys, indexed).forEach(cache::removeResource)
             }
 
             // Wrapped like resumeUnfinished: this can run while the process is in the background
