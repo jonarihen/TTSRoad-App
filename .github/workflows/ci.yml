@@ -1,0 +1,61 @@
+name: CI
+
+# The gate CLAUDE.md describes, enforced rather than remembered. A stack of four PRs once reached
+# "main-ready" carrying a test file that did not compile, because every check was manual and the
+# machine doing the reviewing had no JDK.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A force-push or a quick second commit should cancel the run it superseded rather than queue
+# behind it. Never cancel on main: those runs are the record of what the branch actually did.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: test + lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 21 because gradle/gradle-daemon-jvm.properties pins the daemon toolchain to 21.
+      # Compilation still targets JVM 17 (app/build.gradle.kts) — that is deliberate, not drift.
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-37.0 build-tools;37.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # NOTE: debug.keystore is deliberately absent here. It is gitignored, it is never put in CI
+      # secrets, and releases stay local and manual — that is what keeps the pinned signing lineage
+      # safe. Verified on a clean tree that `clean test lint` configures and runs without it;
+      # verifyTtsRoadSigningKey only gates the assemble tasks, which this job does not run.
+      - name: Run the gate
+        run: ./gradlew --no-daemon test lint
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
