@@ -1,4 +1,7 @@
 import java.security.MessageDigest
+// Imported rather than fully qualified: inside the Kotlin DSL, `java` resolves to the Gradle
+// extension of that name, so `java.util.Properties` does not compile.
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -7,6 +10,25 @@ plugins {
 
 val ttsRoadKeystore = rootProject.file("debug.keystore")
 val ttsRoadKeystoreSha256 = "0f545e04bab055b8fac2a5979be2445cbff54bba2e070fef65f12a187b4ec3d1"
+
+/**
+ * DSN of the self-hosted Sentry to report crashes to, or empty for "do not report anything".
+ *
+ * Read from the gitignored `local.properties` (or `-PttsroadSentryDsn=…`, or the environment) so
+ * the address of a private instance is never committed. **Empty is the default and is a working
+ * configuration**: with no DSN the SDK is never initialised and nothing leaves the device, which is
+ * what every build made without deliberately opting in gets — including anything CI produces.
+ */
+val ttsRoadSentryDsn: String = run {
+    val fromLocalProperties = rootProject.file("local.properties")
+        .takeIf { it.exists() }
+        ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
+        ?.getProperty("ttsroad.sentry.dsn")
+    fromLocalProperties
+        ?: providers.gradleProperty("ttsroadSentryDsn").orNull
+        ?: providers.environmentVariable("TTSROAD_SENTRY_DSN").orNull
+        ?: ""
+}
 
 android {
     namespace = "dk.perspektiva.ttsroad"
@@ -33,6 +55,7 @@ android {
         versionCode = 11
         versionName = "0.9.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "SENTRY_DSN", "\"$ttsRoadSentryDsn\"")
     }
 
     /**
@@ -152,6 +175,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.retrofit)
     implementation(libs.retrofit.moshi)
+    implementation(libs.sentry.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 

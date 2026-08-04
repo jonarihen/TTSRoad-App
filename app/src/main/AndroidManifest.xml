@@ -30,6 +30,13 @@
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
 
+        <!-- Sentry must not start itself. Its ContentProvider would initialise from manifest
+             meta-data before CrashReporter installs the server-address redaction, so the first
+             events of a session would go out unredacted. See core/CrashReporter. -->
+        <meta-data
+            android:name="io.sentry.auto-init"
+            android:value="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
