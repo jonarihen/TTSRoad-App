@@ -1319,23 +1319,26 @@ private fun PlayerScreen(
             ) { playbackController.skipToNextChapter() }
         }
         Spacer(modifier = Modifier.height(8.dp))
-        // Tertiary: playback speed and the chapter list.
-        Row(
+        // Tertiary: playback speed and the chapter list. Both groups flow onto a second line when
+        // they cannot sit side by side — a plain Row handed the right-hand group whatever width was
+        // left over, which on a narrow phone squeezed "CHAPTERS 53/246" down to a single column of
+        // stacked letters.
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
                 // cycle-only button.
                 TextButton(onClick = { showSpeed = true }) {
-                    Text("SPEED ${formatSpeed(playerState.speed)}")
+                    ControlLabel("SPEED ${formatSpeed(playerState.speed)}")
                 }
                 TextButton(
                     onClick = { showSleepTimer = true },
                     enabled = playerState.hasMedia || sleepTimerState.isArmed,
                 ) {
-                    Text(
+                    ControlLabel(
                         text = if (sleepTimerState.isArmed) {
                             "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
                         } else {
@@ -1345,7 +1348,7 @@ private fun PlayerScreen(
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Hidden entirely on a server without read-along, rather than shown and then 404ing.
                 if (capabilities.readAlong && playingChapterId != null) {
                     TextButton(
@@ -1358,17 +1361,17 @@ private fun PlayerScreen(
                             )
                         },
                     ) {
-                        Text("READ")
+                        ControlLabel("READ")
                     }
                 }
                 if (jumpBackOptions.isNotEmpty()) {
                     TextButton(onClick = { showJumpBack = true }) {
-                        Text("JUMP BACK")
+                        ControlLabel("JUMP BACK")
                     }
                 }
                 if (playerState.queue.size > 1) {
                     TextButton(onClick = { showChapters = true }) {
-                        Text("CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}")
+                        ControlLabel("CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}")
                     }
                 }
             }
@@ -2439,6 +2442,17 @@ private fun PlaybackErrorBanner(message: String, onRetry: () -> Unit) {
             TextButton(onClick = onRetry) { Text("RETRY") }
         }
     }
+}
+
+/**
+ * Label for a player control button. These never wrap: a label squeezed below its intrinsic width
+ * used to break between individual letters and render as a vertical column of characters, which is
+ * both unreadable and far taller than the row it lives in. Refusing to wrap makes the label report
+ * its full width, so the enclosing [FlowRow] moves the whole group to the next line instead.
+ */
+@Composable
+private fun ControlLabel(text: String, color: Color = Color.Unspecified) {
+    Text(text = text, color = color, maxLines = 1, softWrap = false)
 }
 
 /** Square AARIS transport control: outlined by default, accent-filled for the primary action. */

@@ -6,6 +6,12 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **The Now Playing controls no longer collapse into a column of stacked letters.** On a narrow
+  phone the chapter button was squeezed to roughly one character wide, so "CHAPTERS 53/246" was
+  spelled out vertically, one letter per line, and the wasted height pushed Speed and Sleep far
+  down the screen. The controls now move onto a second row when they cannot sit side by side, and
+  no label ever breaks between characters.
+  ([#47](https://github.com/jonarihen/TTSRoad-App/issues/47))
 - **Playback no longer runs faster on the phone than in the web console.** Skip silence was on out
   of the box, and the browser's player has nothing like it, so the same chapter at a nominal 1.0x
   got through itself audibly sooner here and the speech ran together. It is now off by default and
