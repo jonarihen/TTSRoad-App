@@ -22,9 +22,22 @@ server. `CHANGELOG.md` records what shipped in each version.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`app/src/test` is a real JVM test source set — 366 tests as of 0.8.0, JUnit + Robolectric +
+`app/src/test` is a real JVM test source set — 394 tests as of 0.9.0, JUnit + Robolectric +
 MockWebServer, all wired in `app/build.gradle.kts`. **Run `./gradlew test` before claiming a change
 works.** There is still no `app/src/androidTest` (no instrumented tests).
+
+CI runs `./gradlew test lint` on every PR and every push to `main` (`.github/workflows/ci.yml`).
+It deliberately has no `debug.keystore` — that file stays gitignored and out of CI secrets, so
+releases remain local and manual. Verified that `clean test lint` both configures and runs without
+it; `verifyTtsRoadSigningKey` only gates the assemble tasks. Do not add signing to CI.
+
+Robolectric tests must carry `@Config(sdk = [34])`: Robolectric 4.16.1 tops out at SDK 36 while
+this app targets 37, and without it the runner fails at initialisation rather than at a test.
+
+Prefer `SimpleBasePlayer` (in `media3-common`) over a hand-written `Player` stub when a test needs
+a player — see `app/src/test/.../player/FakePlayer.kt`. Media3 derives `hasNextMediaItem`,
+`bufferedPercentage` and `currentMediaItem` from the declared state and rejects impossible
+combinations, so a stub would happily assert things the real player never does.
 
 Builds need a JDK and the Android SDK, normally provisioned by Android Studio; the Gradle daemon
 toolchain is pinned to JDK 21 (`gradle/gradle-daemon-jvm.properties`) while compilation targets
