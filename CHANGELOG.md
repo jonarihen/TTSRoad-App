@@ -4,6 +4,19 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+### Fixed
+
+- **Playback no longer runs faster on the phone than in the web console.** Skip silence was on out
+  of the box, and the browser's player has nothing like it, so the same chapter at a nominal 1.0x
+  got through itself audibly sooner here and the speech ran together. It is now off by default and
+  the two match. If you had deliberately switched it on or off, your choice is untouched — only the
+  never-touched case changes. ([#43](https://github.com/jonarihen/TTSRoad-App/issues/43))
+- The speed picker offers **1.25x** where it used to offer 1.2x, so every step now exists in both
+  the app and the web console. A stored 1.2x still plays at 1.2x; it just is not one of the
+  presets any more.
+
+### Changed
+
 - **Downloads are now filed under the server they came from.** Connect this app to a second TTSRoad
   instance holding a fiction with the same name, and the two can no longer be mistaken for each
   other — previously the wrong server's audio could play from the cache. Downloads still survive
@@ -11,6 +24,11 @@ Notable changes to the TTSRoad Android client.
 - Chapters downloaded with 0.8.0 are re-downloaded once, the first time this version reaches a
   server that says what it is. They are re-filed rather than silently kept, so a row that says
   "downloaded" is telling the truth. "Delete all downloads" in Settings still clears everything.
+
+### Changed
+
+- **Skip silence is switchable from the player's speed sheet**, not only from Settings — that is
+  where you look when playback feels wrong.
 
 ## 0.8.0 — 2026-08-03
 
