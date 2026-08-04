@@ -152,6 +152,7 @@ import dk.perspektiva.ttsroad.data.ReaderTheme
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSkipSilence
+import dk.perspektiva.ttsroad.data.DownloadPrefs
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
@@ -1774,6 +1775,9 @@ private fun SettingsScreen(
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     val downloads = remember { ServiceLocator.offlineDownloads(context) }
+    val downloadPreferences = remember { ServiceLocator.downloadPreferences(context) }
+    val downloadPrefs by downloadPreferences.prefs
+        .collectAsStateWithLifecycle(initialValue = DownloadPrefs())
     val cacheBytes by downloads.cacheBytes.collectAsStateWithLifecycle()
     var confirmDeleteDownloads by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
@@ -1948,6 +1952,30 @@ private fun SettingsScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        MetaText(text = "Download on Wi-Fi only")
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(
+                            text = "A chapter is tens of megabytes. Off lets downloads run on " +
+                                "mobile data. Queued chapters wait for a connection either way, " +
+                                "so nothing is lost by leaving this on.",
+                            color = AarisColor.Dim,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = downloadPrefs.wifiOnly,
+                        onCheckedChange = { scope.launch { downloadPreferences.setWifiOnly(it) } },
+                    )
+                }
+
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
                 SettingsItem(label = "Storage used", value = formatStorageSize(cacheBytes))
                 MetaText(
                     text = "Covers both chapters you downloaded and chapters kept from streaming. " +

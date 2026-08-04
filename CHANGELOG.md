@@ -25,6 +25,14 @@ Notable changes to the TTSRoad Android client.
   server that says what it is. They are re-filed rather than silently kept, so a row that says
   "downloaded" is telling the truth. "Delete all downloads" in Settings still clears everything.
 
+### Added
+
+- **Downloads wait for Wi-Fi by default.** A chapter is tens of megabytes and "download next 20" is
+  one tap, so the old behaviour could spend a data plan without being asked. Settings → Offline has
+  the switch if you want downloads on mobile data. Either way a queued chapter waits for a
+  connection rather than failing, so turning it back on releases whatever was waiting — nothing has
+  to be queued twice. ([#14](https://github.com/jonarihen/TTSRoad-App/issues/14))
+
 ### Changed
 
 - **Skip silence is switchable from the player's speed sheet**, not only from Settings — that is
