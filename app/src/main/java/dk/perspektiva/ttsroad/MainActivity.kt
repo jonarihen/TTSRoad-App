@@ -151,6 +151,7 @@ import dk.perspektiva.ttsroad.data.ReaderPrefs
 import dk.perspektiva.ttsroad.data.ReaderTheme
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
+import dk.perspektiva.ttsroad.data.DefaultSkipSilence
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
@@ -1201,6 +1202,10 @@ private fun PlayerScreen(
     val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
     val sleepTimer = remember { ServiceLocator.sleepTimer() }
     val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
+    val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val skipSilence by remember(preferences) {
+        preferences.prefs.map { it.skipSilence }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = DefaultSkipSilence)
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
     var showSleepTimer by remember { mutableStateOf(false) }
@@ -1404,6 +1409,33 @@ private fun PlayerScreen(
                     }
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 }
+            }
+            // Skip silence belongs next to speed, not only in Settings: it changes how fast a
+            // chapter gets through itself, so this is where someone comes looking when playback
+            // feels quicker than the web player's.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Skip silence",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AarisColor.Ink,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    MetaText(
+                        text = "Shortens synthesised pauses. Off matches the web player.",
+                        color = AarisColor.Dim,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(
+                    checked = skipSilence,
+                    onCheckedChange = { scope.launch { preferences.setSkipSilence(it) } },
+                )
             }
             MetaText(
                 text = "// Kept across restarts and reboots",
@@ -1869,7 +1901,9 @@ private fun SettingsScreen(
                         Spacer(modifier = Modifier.height(2.dp))
                         MetaText(
                             text = "Shortens the long pauses synthesised speech leaves around " +
-                                "headings and scene breaks. Turn off to keep dramatic pauses.",
+                                "headings and scene breaks. Off by default, because the web " +
+                                "player has no equivalent and leaving it on makes the same " +
+                                "chapter finish sooner here.",
                             color = AarisColor.Dim,
                         )
                     }

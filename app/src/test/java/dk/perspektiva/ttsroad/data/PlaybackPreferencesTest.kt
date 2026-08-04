@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -128,9 +129,26 @@ class AudioPreferencesTest {
     }
 
     @Test
-    fun `skip silence defaults on, since that is the point for synthesised speech`() {
-        assertTrue(DefaultSkipSilence)
-        assertTrue(PlaybackPrefs().skipSilence)
+    fun `skip silence defaults off, so the app sounds like the web player`() {
+        assertFalse(DefaultSkipSilence)
+        assertFalse(PlaybackPrefs().skipSilence)
+    }
+
+    @Test
+    fun `the speed presets are the ones the web console offers`() {
+        // Not cosmetic: a listener who settled on a speed in the browser has to be able to pick
+        // the same number here, or the two clients disagree by a step.
+        assertEquals(listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f), SpeedPresets)
+    }
+
+    @Test
+    fun `nothing in the defaults alters playback before it is asked for`() {
+        // The regression in #43 was a default that changed how the audio sounds. Pin the whole
+        // set, so the next one has to be deliberate rather than a one-word edit.
+        val defaults = PlaybackPrefs()
+        assertEquals(1.0f, defaults.speed, 0.0001f)
+        assertFalse(defaults.skipSilence)
+        assertEquals(VolumeBoost.Off, defaults.volumeBoost)
     }
 
     @Test
