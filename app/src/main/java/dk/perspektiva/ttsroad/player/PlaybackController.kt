@@ -2,7 +2,6 @@ package dk.perspektiva.ttsroad.player
 
 import android.content.ComponentName
 import android.content.Context
-import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -294,50 +293,17 @@ class PlaybackController(
     }
 
     private fun publishState(player: Player) {
-        val metadata = player.currentMediaItem?.mediaMetadata
-        val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
-        val count = player.mediaItemCount
-        val queueKey = if (count > 0) {
-            "$count:${player.getMediaItemAt(0).mediaId}:${player.getMediaItemAt(count - 1).mediaId}"
-        } else {
-            "0"
-        }
+        // The mapping itself lives in PlayerUiStateMapping so it can be tested against a fake
+        // Player; what stays here is the per-controller cache it reads through.
+        val queueKey = queueKeyOf(player)
         val queue = if (queueKey == cachedQueueKey) {
             cachedQueue
         } else {
-            val built = if (count > 0) {
-                (0 until count).map { i ->
-                    val item = player.getMediaItemAt(i)
-                    QueueItem(
-                        mediaId = item.mediaId,
-                        title = item.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() }
-                            ?: "Chapter ${i + 1}",
-                    )
-                }
-            } else {
-                emptyList()
+            buildQueue(player).also {
+                cachedQueueKey = queueKey
+                cachedQueue = it
             }
-            cachedQueueKey = queueKey
-            cachedQueue = built
-            built
         }
-        _state.value = PlayerUiState(
-            title = metadata?.title?.toString()?.takeIf { it.isNotBlank() } ?: "Nothing playing",
-            fictionTitle = metadata?.albumTitle?.toString(),
-            coverImageUrl = metadata?.artworkUri?.toString(),
-            isPlaying = player.isPlaying,
-            hasMedia = player.currentMediaItem != null,
-            positionMs = player.currentPosition.coerceAtLeast(0L),
-            durationMs = duration,
-            bufferedPercentage = player.bufferedPercentage,
-            speed = player.playbackParameters.speed,
-            queue = queue,
-            currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
-            hasNext = player.hasNextMediaItem(),
-            hasPrevious = player.hasPreviousMediaItem(),
-            // The cause does not survive the binder, so the HTTP status is unavailable here; the
-            // service reads it from the real exception and handles the 401 case there.
-            error = player.playerError?.let { classifyPlaybackError(it.errorCode).message },
-        )
+        _state.value = playerUiStateOf(player, queue)
     }
 }
