@@ -15,8 +15,15 @@ import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.update.UpdateManager
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 object ServiceLocator {
+    /** For one-shot startup work that must not block [init]; see the token re-seal there. */
+    private val initScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     @Volatile
     private var tokenStore: TokenStore? = null
 
@@ -52,6 +59,9 @@ object ServiceLocator {
 
     fun init(context: Context) {
         tokenStore(context)
+        // Off the main thread and fire-and-forget: it touches the keystore and DataStore, and a
+        // token that has not been re-sealed yet still reads fine, so nothing needs to wait on it.
+        initScope.launch { tokenStore(context).encryptStoredTokenIfNeeded() }
         repository(context)
         playbackController(context)
         playbackHistory(context)

@@ -53,7 +53,10 @@ interface SessionStore {
     suspend fun clearToken()
 }
 
-class TokenStore(private val context: Context) : SessionStore {
+class TokenStore(
+    private val context: Context,
+    private val cipher: TokenCipher = KeystoreTokenCipher(),
+) : SessionStore {
     private object Keys {
         val ServerUrl = stringPreferencesKey("server_url")
         val Token = stringPreferencesKey("token")
@@ -75,7 +78,11 @@ class TokenStore(private val context: Context) : SessionStore {
         .map { prefs ->
             SessionState(
                 serverUrl = prefs[Keys.ServerUrl].orEmpty(),
-                token = prefs[Keys.Token],
+                // Reads both shapes: an envelope, and a plaintext token written before encryption
+                // existed. Null here means the stored token could not be opened at all — a key
+                // wiped by a factory reset or a lock-screen change — which surfaces as "signed
+                // out" rather than as a crash on the first frame.
+                token = cipher.open(prefs[Keys.Token]),
                 username = prefs[Keys.Username],
                 isAdmin = prefs[Keys.IsAdmin] ?: false,
                 serverName = prefs[Keys.ServerName] ?: "TTSRoad",
@@ -89,7 +96,10 @@ class TokenStore(private val context: Context) : SessionStore {
     override suspend fun saveLogin(baseUrl: String, response: LoginResponse) {
         context.sessionDataStore.edit { prefs ->
             prefs[Keys.ServerUrl] = normalizeBaseUrl(baseUrl)
-            prefs[Keys.Token] = response.token
+            // Sealing can fail on a device whose keystore refuses to generate a key. Storing the
+            // raw token then is the lesser evil: the alternative is an app that cannot sign in at
+            // all, and this is exactly what every build before 0.9.0 did anyway.
+            prefs[Keys.Token] = cipher.seal(response.token) ?: response.token
             prefs[Keys.Username] = response.user.username
             prefs[Keys.IsAdmin] = response.user.isAdmin
             prefs[Keys.ServerName] = response.server?.name ?: "TTSRoad"
@@ -112,6 +122,24 @@ class TokenStore(private val context: Context) : SessionStore {
 
     suspend fun clearAll() {
         context.sessionDataStore.edit { it.clear() }
+    }
+
+    /**
+     * Re-write a token stored in plaintext by an older build as an envelope.
+     *
+     * Without this the plaintext would sit on disk until the next sign-in, which for a session that
+     * renews on every request could be months — so the upgrade would fix nothing for exactly the
+     * people who already have a token.
+     *
+     * A no-op when there is no token, when it is already sealed, or when sealing fails. Safe to
+     * call on every launch.
+     */
+    suspend fun encryptStoredTokenIfNeeded() {
+        context.sessionDataStore.edit { prefs ->
+            val stored = prefs[Keys.Token] ?: return@edit
+            if (isEncryptedToken(stored)) return@edit
+            cipher.seal(stored)?.let { prefs[Keys.Token] = it }
+        }
     }
 }
 
