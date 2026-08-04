@@ -72,6 +72,22 @@ testing nothing R8-related. CI never sets the property and never needs the keyst
 To turn shrinking back on: set `isMinifyEnabled = true`, run the command above on a real phone, and
 only keep it on if that passes. Until someone has actually done that on a device, leave it off.
 
+**Crash reporting is off unless a DSN is configured, and that is the normal state.** With no DSN
+the Sentry SDK is never initialised and nothing leaves the device — which is what every build made
+without deliberately opting in gets, CI included. To point it at a self-hosted instance, add to the
+gitignored `local.properties`:
+
+```properties
+ttsroad.sentry.dsn=https://<public-key>@sentry.example.com/<project>
+```
+
+(`-PttsroadSentryDsn=…` and `TTSROAD_SENTRY_DSN` also work.) Auto-init is disabled in the manifest
+on purpose: the SDK's ContentProvider would otherwise start before `core/CrashReporter` installs
+the redaction, and the first events of a session would carry the server's address. Do not re-enable
+it. The signed-in server's origin is stripped from messages, exceptions, request URLs and
+breadcrumbs before sending — a self-hosted address is usually a home address, and it is not
+diagnostic data even on your own instance.
+
 Emulator hitting a backend on the same host: `http://10.0.2.2:8000`. Cleartext HTTP is enabled in
 the debug build only (`app/src/debug/`).
 

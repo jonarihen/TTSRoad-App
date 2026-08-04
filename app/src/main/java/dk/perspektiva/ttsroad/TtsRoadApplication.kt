@@ -3,8 +3,10 @@ package dk.perspektiva.ttsroad
 import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import dk.perspektiva.ttsroad.core.CrashReporter
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -13,6 +15,9 @@ class TtsRoadApplication : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         ServiceLocator.init(this)
+        // After the locator, because the redaction reads the signed-in server through it. Does
+        // nothing at all unless a DSN was configured — see CrashReporting.
+        CrashReporter.start(this, ServiceLocator.tokenStore(this).session.map { it.serverUrl })
     }
 
     /**
