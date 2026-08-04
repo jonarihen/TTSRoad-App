@@ -1319,17 +1319,19 @@ private fun PlayerScreen(
             ) { playbackController.skipToNextChapter() }
         }
         Spacer(modifier = Modifier.height(8.dp))
-        // Tertiary: playback speed and the chapter list.
-        Row(
+        // Tertiary: playback speed and the chapter list. FlowRow, not Row: on a narrow phone the
+        // two groups don't fit side by side, and a Row squeezed "CHAPTERS 53/246" down to a column
+        // one character wide. Wrapping happens between buttons; never inside a label.
+        FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
                 // cycle-only button.
                 TextButton(onClick = { showSpeed = true }) {
-                    Text("SPEED ${formatSpeed(playerState.speed)}")
+                    Text("SPEED ${formatSpeed(playerState.speed)}", maxLines = 1, softWrap = false)
                 }
                 TextButton(
                     onClick = { showSleepTimer = true },
@@ -1342,10 +1344,12 @@ private fun PlayerScreen(
                             "SLEEP"
                         },
                         color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
+                        maxLines = 1,
+                        softWrap = false,
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Hidden entirely on a server without read-along, rather than shown and then 404ing.
                 if (capabilities.readAlong && playingChapterId != null) {
                     TextButton(
@@ -1358,17 +1362,21 @@ private fun PlayerScreen(
                             )
                         },
                     ) {
-                        Text("READ")
+                        Text("READ", maxLines = 1, softWrap = false)
                     }
                 }
                 if (jumpBackOptions.isNotEmpty()) {
                     TextButton(onClick = { showJumpBack = true }) {
-                        Text("JUMP BACK")
+                        Text("JUMP BACK", maxLines = 1, softWrap = false)
                     }
                 }
                 if (playerState.queue.size > 1) {
                     TextButton(onClick = { showChapters = true }) {
-                        Text("CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}")
+                        Text(
+                            text = "CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}",
+                            maxLines = 1,
+                            softWrap = false,
+                        )
                     }
                 }
             }
