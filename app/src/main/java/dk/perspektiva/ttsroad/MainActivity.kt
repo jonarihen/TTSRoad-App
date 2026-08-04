@@ -1201,6 +1201,11 @@ private fun PlayerScreen(
     val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
     val sleepTimer = remember { ServiceLocator.sleepTimer() }
     val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
+    // The speed sheet is where someone goes when playback feels too fast, and skip silence is the
+    // other setting that changes how quickly a chapter reads — so it belongs next to the presets
+    // rather than only in Settings, which is not where anyone looks mid-chapter.
+    val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
     var showSleepTimer by remember { mutableStateOf(false) }
@@ -1404,6 +1409,27 @@ private fun PlayerScreen(
                     }
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    MetaText(text = "Skip silence")
+                    Spacer(modifier = Modifier.height(2.dp))
+                    MetaText(
+                        text = "Shortens the pauses synthesised speech leaves between sentences. " +
+                            "Off by default, so a chapter reads at the same pace as the web player.",
+                        color = AarisColor.Dim,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(
+                    checked = prefs.skipSilence,
+                    onCheckedChange = { scope.launch { preferences.setSkipSilence(it) } },
+                )
             }
             MetaText(
                 text = "// Kept across restarts and reboots",

@@ -34,7 +34,7 @@ data class PlaybackPrefs(
 )
 
 /** The speeds offered in the player's speed picker. */
-val SpeedPresets: List<Float> = listOf(0.8f, 1.0f, 1.2f, 1.5f, 1.75f, 2.0f)
+val SpeedPresets: List<Float> = listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
 
 /**
  * Skip amounts offered in Settings. 30s suits a dozed-off rewind, 10-15s suits "what did that
@@ -46,11 +46,20 @@ const val DefaultSpeed: Float = 1.0f
 const val DefaultSkipIntervalMs: Long = 30_000L
 
 /**
- * On by default: synthesised speech carries pauses around headings, scene breaks and sentence
- * boundaries that are longer than a human narrator's, and over an eight-hour night that is a lot of
- * dead air. It stays switchable because it can clip a deliberate dramatic pause.
+ * Off by default, deliberately.
+ *
+ * Skipping silence is genuinely useful — synthesised speech carries pauses around headings, scene
+ * breaks and sentence boundaries that are longer than a human narrator's, and over an eight-hour
+ * night that is a lot of dead air. But as a *default* it made the app sound faster than the web
+ * console on the identical MP3 at the same nominal 1.0x, because the web player has no equivalent
+ * and plays every pause in full. Two clients, one file, audibly different reads is a bug even when
+ * the processing is a feature.
+ *
+ * So it stays one toggle away rather than on: the two players agree until the listener asks for
+ * something else. Anyone who has already flipped the switch has a stored value and keeps it — only
+ * the never-touched case changes.
  */
-const val DefaultSkipSilence: Boolean = true
+const val DefaultSkipSilence: Boolean = false
 
 /**
  * How much to lift quiet chapters.

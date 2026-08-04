@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -60,6 +61,25 @@ class PlaybackPreferencesTest {
     @Test
     fun `the default speed is one of the offered presets`() {
         assertTrue(SpeedPresets.any { kotlin.math.abs(it - DefaultSpeed) < 0.0001f })
+    }
+
+    /**
+     * These are the web console's steps, and they have to stay the web console's steps: the two
+     * clients play the same files against the same progress state, so "the speed I listen at" must
+     * be literally selectable in both. The app used to offer 1.2x where the web offers 1.25x, which
+     * meant one of the two could not be matched from the other.
+     */
+    @Test
+    fun `the presets match the steps the web console offers`() {
+        assertEquals(listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f), SpeedPresets)
+    }
+
+    @Test
+    fun `every preset is inside the range sanitising allows`() {
+        // A preset the sanitiser would clamp is a preset the picker cannot actually select.
+        for (preset in SpeedPresets) {
+            assertEquals(preset, sanitizeSpeed(preset), 0.0001f)
+        }
     }
 
     @Test
@@ -127,10 +147,15 @@ class AudioPreferencesTest {
         assertEquals(VolumeBoost.Off, volumeBoostOf("low"))
     }
 
+    /**
+     * On by default made the app sound faster than the web console on the identical file at the
+     * same nominal 1.0x, because the web player has no equivalent and plays every pause in full.
+     * The processing stays available; it just isn't applied to someone who never asked for it.
+     */
     @Test
-    fun `skip silence defaults on, since that is the point for synthesised speech`() {
-        assertTrue(DefaultSkipSilence)
-        assertTrue(PlaybackPrefs().skipSilence)
+    fun `skip silence defaults off, so the app and the web console read at the same pace`() {
+        assertFalse(DefaultSkipSilence)
+        assertFalse(PlaybackPrefs().skipSilence)
     }
 
     @Test
