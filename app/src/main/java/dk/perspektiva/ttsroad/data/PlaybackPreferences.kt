@@ -33,8 +33,13 @@ data class PlaybackPrefs(
     val volumeBoost: VolumeBoost = VolumeBoost.Off,
 )
 
-/** The speeds offered in the player's speed picker. */
-val SpeedPresets: List<Float> = listOf(0.8f, 1.0f, 1.2f, 1.5f, 1.75f, 2.0f)
+/**
+ * The speeds offered in the player's speed picker.
+ *
+ * Deliberately the same six steps as the web console's `<select>`, so "the speed I listen at" is
+ * selectable on both surfaces rather than only nearly so.
+ */
+val SpeedPresets: List<Float> = listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
 
 /**
  * Skip amounts offered in Settings. 30s suits a dozed-off rewind, 10-15s suits "what did that
@@ -46,11 +51,16 @@ const val DefaultSpeed: Float = 1.0f
 const val DefaultSkipIntervalMs: Long = 30_000L
 
 /**
- * On by default: synthesised speech carries pauses around headings, scene breaks and sentence
- * boundaries that are longer than a human narrator's, and over an eight-hour night that is a lot of
- * dead air. It stays switchable because it can clip a deliberate dramatic pause.
+ * Off by default, so the app sounds like the web console on the same chapter.
+ *
+ * Silence skipping is genuinely useful for synthesised speech — edge-tts leaves pauses around
+ * headings, scene breaks and sentence boundaries that are longer than a human narrator's, and over
+ * an eight-hour night that is a lot of dead air. But `HTMLMediaElement` has no equivalent, so the
+ * web player always plays those pauses in full. Having it on here by default made the phone
+ * audibly quicker than the browser at a nominal 1.0x, which reads as a bug rather than a feature
+ * you were given (#43). It is one switch away in the player's speed sheet for anyone who wants it.
  */
-const val DefaultSkipSilence: Boolean = true
+const val DefaultSkipSilence: Boolean = false
 
 /**
  * How much to lift quiet chapters.
