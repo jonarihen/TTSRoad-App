@@ -54,9 +54,23 @@ types are signed with it, and `verifyTtsRoadSigningKey` refuses any file whose S
 pinned one. `./gradlew test` and `lint` do **not** need it.
 
 Release shrinking is deliberately disabled. Version 0.7.0 was the first minified APK and crashed
-at startup because R8 renamed a Moshi-reflected model outside `data/`. Do not re-enable shrinking
-until there is an on-device startup smoke test; keep every reflectively serialized model explicit
-in `proguard-rules.pro`.
+at startup because R8 renamed a Moshi-reflected model outside `data/`. Keep every reflectively
+serialized model explicit in `proguard-rules.pro` — `data.**` is kept wholesale, and
+`player.HistorySnapshot`, `UpdateManager$GithubRelease` and `UpdateManager$GithubAsset` each have
+their own line because they live outside that package.
+
+The on-device smoke test that guards this now exists (`app/src/androidTest`), but **it only proves
+anything when run against the minified build**:
+
+```bash
+./gradlew connectedAndroidTest -PttsroadTestBuildType=release   # needs a device + debug.keystore
+```
+
+`testBuildType` defaults to `debug`, which is not minified — the same tests pass there while
+testing nothing R8-related. CI never sets the property and never needs the keystore.
+
+To turn shrinking back on: set `isMinifyEnabled = true`, run the command above on a real phone, and
+only keep it on if that passes. Until someone has actually done that on a device, leave it off.
 
 Emulator hitting a backend on the same host: `http://10.0.2.2:8000`. Cleartext HTTP is enabled in
 the debug build only (`app/src/debug/`).
@@ -144,3 +158,9 @@ backup and confirm it with `sha256sum --check debug.keystore.sha256` before buil
   verify `app-release.apk` with `apksigner`, commit with the version in the subject, tag `vX.Y.Z`,
   push the commit and tag, and publish a GitHub release with the signed APK attached. The attached
   APK is what the in-app updater installs.
+- Verify the signing certificate against the *previous* release, not just against the keystore
+  checksum: `apksigner verify --print-certs` on both APKs must report the same SHA-256 digest
+  (`0a2c1997…5f24` since 0.7.0). That digest matching is what lets the in-app updater install over
+  the existing build instead of demanding an uninstall — the keystore check alone does not prove it.
+- Once shrinking is re-enabled, `./gradlew connectedAndroidTest -PttsroadTestBuildType=release` on a
+  real device joins this list, before the tag.
