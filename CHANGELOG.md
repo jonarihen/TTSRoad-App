@@ -2,7 +2,10 @@
 
 Notable changes to the TTSRoad Android client.
 
-## Unreleased
+## 0.9.0 — 2026-08-04
+
+Signed with the same pinned key as 0.7.0 through 0.8.0, so this installs directly over any of them
+as an ordinary update.
 
 ### Fixed
 
@@ -21,16 +24,6 @@ Notable changes to the TTSRoad Android client.
   the app and the web console. A stored 1.2x still plays at 1.2x; it just is not one of the
   presets any more.
 
-### Changed
-
-- **Downloads are now filed under the server they came from.** Connect this app to a second TTSRoad
-  instance holding a fiction with the same name, and the two can no longer be mistaken for each
-  other — previously the wrong server's audio could play from the cache. Downloads still survive
-  signing in over a different address for the same server, which is the point of having them.
-- Chapters downloaded with 0.8.0 are re-downloaded once, the first time this version reaches a
-  server that says what it is. They are re-filed rather than silently kept, so a row that says
-  "downloaded" is telling the truth. "Delete all downloads" in Settings still clears everything.
-
 ### Added
 
 - **Downloads wait for Wi-Fi by default.** A chapter is tens of megabytes and "download next 20" is
@@ -43,6 +36,13 @@ Notable changes to the TTSRoad Android client.
 
 - **Skip silence is switchable from the player's speed sheet**, not only from Settings — that is
   where you look when playback feels wrong.
+- **Downloads are now filed under the server they came from.** Connect this app to a second TTSRoad
+  instance holding a fiction with the same name, and the two can no longer be mistaken for each
+  other — previously the wrong server's audio could play from the cache. Downloads still survive
+  signing in over a different address for the same server, which is the point of having them.
+- Chapters downloaded with 0.8.0 are re-downloaded once, the first time this version reaches a
+  server that says what it is. They are re-filed rather than silently kept, so a row that says
+  "downloaded" is telling the truth. "Delete all downloads" in Settings still clears everything.
 
 ## 0.8.0 — 2026-08-03
 
