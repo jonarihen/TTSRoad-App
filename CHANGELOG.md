@@ -2,7 +2,10 @@
 
 Notable changes to the TTSRoad Android client.
 
-## Unreleased
+## 0.10.0 — 2026-08-08
+
+Signed with the same pinned key as 0.7.0 through 0.9.0, so this installs directly over any of them
+as an ordinary update. **You will not be signed out** — see the token note below.
 
 ### Changed
 
@@ -18,6 +21,30 @@ Notable changes to the TTSRoad Android client.
   chapters for no visible reason would read as missing chapters.
 - This is still a setting on this phone. The web's **Hide played** is an account preference, and the
   two do not yet agree with each other — the app has no preferences client at all.
+
+### Security
+
+- **Your sign-in token is now encrypted on the device.** It previously sat in plain text for the
+  ~90 days it stays valid. Backups were already blocked, so the real exposure was a lost, stolen or
+  rooted phone. It is now sealed with AES-256-GCM under a key the Android Keystore will not hand
+  out, even to this app.
+- **The upgrade is silent.** A token written by an older build is still read, then re-sealed in the
+  background shortly after launch, so nobody is signed out and no plaintext lingers waiting for the
+  next sign-in — which, on a session that renews with every request, could have been months.
+- If sealing fails the app stores the token as before rather than making sign-in impossible, and an
+  envelope it cannot open reads as "signed out" instead of crashing on every launch. Losing access
+  to your library is a worse outcome than the thing being defended against.
+
+### Added
+
+- **Optional crash reporting, off unless you turn it on.** There was previously no logging or crash
+  reporting of any kind, so a failure on the phone produced no signal at all. Reports go to a Sentry
+  instance *you* host, configured through a local build setting that is never committed. With none
+  set — the default, and the state of this release's APK — the SDK is never started and nothing
+  leaves the device.
+- When it is enabled, **your server's address is stripped** from messages, exceptions, request URLs
+  and breadcrumbs before anything is sent. Someone self-hosting is usually hosting at home, and that
+  address is not diagnostic data even on their own instance.
 
 ## 0.9.0 — 2026-08-04
 
