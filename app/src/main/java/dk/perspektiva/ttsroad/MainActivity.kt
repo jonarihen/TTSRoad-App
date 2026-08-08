@@ -899,7 +899,12 @@ private fun FictionScreen(
     val downloadState by downloads.downloads.collectAsStateWithLifecycle()
     val serverUrl = LocalServerUrl.current
     var error by remember { mutableStateOf<String?>(null) }
-    var filter by remember(fiction.id) { mutableStateOf(ChapterFilter.All) }
+    // Not keyed on fiction.id, unlike everything around it: the filter is a library-wide setting
+    // that outlives this screen. It used to reset to All on every open, so anyone working through
+    // a series in order re-picked "Unplayed" on each book, every time.
+    val chapterListPrefs = remember { ServiceLocator.chapterListPreferences(context) }
+    val filter by chapterListPrefs.filter
+        .collectAsStateWithLifecycle(initialValue = ChapterFilter.All)
     var ascending by remember(fiction.id) { mutableStateOf(true) }
     var bulkTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
     var didAutoScroll by remember(fiction.id) { mutableStateOf(false) }
@@ -1015,7 +1020,7 @@ private fun FictionScreen(
                             filter = filter,
                             ascending = ascending,
                             showJumpToCurrent = currentOffScreen,
-                            onFilter = { filter = it },
+                            onFilter = { scope.launch { chapterListPrefs.setFilter(it) } },
                             onToggleSort = { ascending = !ascending },
                             onJumpToCurrent = {
                                 scope.launch { listState.animateScrollToItem(currentRow + 1) }
