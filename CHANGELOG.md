@@ -2,6 +2,23 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Changed
+
+- **The chapter filter is remembered.** Picking **Unplayed** used to last exactly as long as the
+  screen did: every fiction opened on **All**, so anyone working through a series in order re-chose
+  the same filter on every book, every time. It now persists across fictions and across restarts.
+  It is one setting for the whole library rather than one per book, because wanting played chapters
+  out of the way is a way of reading, not an opinion about a particular fiction. Sort direction
+  still resets per fiction.
+- The stored value is the filter's internal name rather than its button label, so rewording a chip
+  cannot silently reset everyone's choice on upgrade. A value this build does not recognise falls
+  back to showing everything: hiding rows is the surprising direction, and a filter that hid
+  chapters for no visible reason would read as missing chapters.
+- This is still a setting on this phone. The web's **Hide played** is an account preference, and the
+  two do not yet agree with each other — the app has no preferences client at all.
+
 ## 0.9.0 — 2026-08-04
 
 Signed with the same pinned key as 0.7.0 through 0.8.0, so this installs directly over any of them

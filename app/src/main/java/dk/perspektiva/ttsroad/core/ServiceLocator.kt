@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.core
 
 import android.content.Context
+import dk.perspektiva.ttsroad.data.ChapterListPreferences
 import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.LibraryCache
 import dk.perspektiva.ttsroad.data.LocalReaderPreferences
@@ -53,6 +54,9 @@ object ServiceLocator {
 
     @Volatile
     private var downloadPreferences: DownloadPreferences? = null
+
+    @Volatile
+    private var chapterListPreferences: ChapterListPreferences? = null
 
     @Volatile
     private var offlineDownloads: OfflineDownloads? = null
@@ -122,6 +126,14 @@ object ServiceLocator {
         downloadPreferences ?: synchronized(this) {
             downloadPreferences
                 ?: DownloadPreferences(context.applicationContext).also { downloadPreferences = it }
+        }
+
+    fun chapterListPreferences(context: Context): ChapterListPreferences =
+        chapterListPreferences ?: synchronized(this) {
+            chapterListPreferences
+                ?: ChapterListPreferences(context.applicationContext).also {
+                    chapterListPreferences = it
+                }
         }
 
     fun libraryCache(context: Context): LibraryCache =
