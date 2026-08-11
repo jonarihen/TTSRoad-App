@@ -149,6 +149,9 @@ import dk.perspektiva.ttsroad.data.ReadAlongHighlight
 import dk.perspektiva.ttsroad.data.ReaderFontScales
 import dk.perspektiva.ttsroad.data.ReaderPrefs
 import dk.perspektiva.ttsroad.data.ReaderTheme
+import dk.perspektiva.ttsroad.data.SearchGroup
+import dk.perspektiva.ttsroad.data.SearchHit
+import dk.perspektiva.ttsroad.data.SearchResponse
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSkipSilence
@@ -642,7 +645,9 @@ private fun MainScaffold(
 
                 AppScreen.Fictions -> FictionsScreen(
                     padding = padding,
+                    repository = repository,
                     onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
+                    onOpenReader = { onScreenChange(it) },
                 )
 
                 is AppScreen.Fiction -> FictionScreen(
@@ -2858,11 +2863,20 @@ private fun downloadMetaLabel(download: ChapterDownload?): String? = when (downl
 @Composable
 private fun FictionsScreen(
     padding: PaddingValues,
+    repository: TtsRoadRepository,
     onOpenFiction: (FictionSummary) -> Unit,
+    onOpenReader: (AppScreen.Reader) -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val cache = remember { ServiceLocator.libraryCache(context) }
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     val state by cache.library.collectAsStateWithLifecycle()
+    // Server search is a *second* path, never a replacement. The local filter below is instant and
+    // works offline; this one can match narration text, which the local filter structurally cannot.
+    var serverResults by remember { mutableStateOf<SearchResponse?>(null) }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<String?>(null) }
     // Saveable so the browse position and filter survive a trip into a fiction and back.
     var query by rememberSaveable { mutableStateOf("") }
     // Hoisted so the browse position survives the round trip into a fiction, alongside the
@@ -2902,13 +2916,57 @@ private fun FictionsScreen(
                 Column(modifier = Modifier.fillMaxSize()) {
                     OutlinedTextField(
                         value = query,
-                        onValueChange = { query = it },
+                        onValueChange = {
+                            query = it
+                            // Typing starts a new question; last answer's results would be stale.
+                            serverResults = null
+                            searchError = null
+                        },
                         label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(16.dp),
                     )
+                    if (capabilities.search) {
+                        ServerSearchSection(
+                            query = query,
+                            results = serverResults,
+                            isSearching = isSearching,
+                            error = searchError,
+                            onSearch = {
+                                scope.launch {
+                                    isSearching = true
+                                    searchError = null
+                                    runCatching { repository.search(query) }
+                                        .onSuccess { serverResults = it }
+                                        .onFailure {
+                                            searchError = it.message ?: "Search failed"
+                                        }
+                                    isSearching = false
+                                }
+                            },
+                            onOpenFiction = { fictionId ->
+                                fictions.firstOrNull { it.id == fictionId }?.let(onOpenFiction)
+                            },
+                            // A text hit's whole point is the passage, so it opens the reader —
+                            // where read-along already lands.
+                            onOpenChapter = if (capabilities.readAlong) {
+                                { hit ->
+                                    hit.chapterId?.let { chapterId ->
+                                        onOpenReader(
+                                            AppScreen.Reader(
+                                                chapterId = chapterId,
+                                                title = hit.resolvedTitle,
+                                            ),
+                                        )
+                                    }
+                                }
+                            } else {
+                                null
+                            },
+                        )
+                    }
                     if (filtered.isEmpty()) {
                         Box(modifier = Modifier.padding(16.dp)) {
                             EmptyCard(
@@ -2932,6 +2990,117 @@ private fun FictionsScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Server-side search, offered alongside the local filter rather than instead of it.
+ *
+ * The local filter above is instant, works offline, and matches what is already loaded. This one
+ * costs a round trip but can match chapter titles and the narration text itself — "which chapter
+ * was the bit about the lighthouse in" is a question with an answer on the server and none in the
+ * app. Making it an explicit action keeps the offline case from silently becoming useless.
+ */
+@Composable
+private fun ServerSearchSection(
+    query: String,
+    results: SearchResponse?,
+    isSearching: Boolean,
+    error: String?,
+    onSearch: () -> Unit,
+    onOpenFiction: (Int) -> Unit,
+    /** Null when the server has no read-along, which is where a text hit would otherwise land. */
+    onOpenChapter: ((SearchHit) -> Unit)?,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedButton(
+            onClick = onSearch,
+            enabled = query.isNotBlank() && !isSearching,
+            shape = RectangleShape,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (isSearching) "SEARCHING" else "SEARCH CHAPTERS AND TEXT ON THE SERVER")
+        }
+        error?.let { MetaText(text = it, color = AarisColor.Danger) }
+
+        results?.let { found ->
+            if (found.total == 0) {
+                MetaText(text = "// Nothing on the server for \"${found.query}\"", color = AarisColor.Muted)
+            } else {
+                // Group order is rank order: fictions, then chapter titles, then narration text.
+                SearchHitGroup(
+                    title = "Fictions",
+                    group = found.fictions,
+                    onOpen = { hit -> hit.fictionId?.let(onOpenFiction) },
+                )
+                SearchHitGroup(
+                    title = "Chapter titles",
+                    group = found.chapters,
+                    onOpen = onOpenChapter,
+                )
+                SearchHitGroup(
+                    title = "In the text",
+                    group = found.text,
+                    onOpen = onOpenChapter,
+                )
+                if (!found.indexed) {
+                    // Worth saying rather than quietly returning less than the server could.
+                    MetaText(
+                        text = "// The full-text index is unavailable, so text matches may be incomplete",
+                        color = AarisColor.Dim,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchHitGroup(
+    title: String,
+    group: SearchGroup,
+    onOpen: ((SearchHit) -> Unit)?,
+) {
+    if (group.items.isEmpty()) return
+    MetaText(
+        // `total` stops counting at the server's cap, so say "20+" rather than an exact-looking 20.
+        text = "// $title (${group.total}${if (group.capped) "+" else ""})",
+        color = AarisColor.Accent,
+    )
+    group.items.forEach { hit ->
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (onOpen != null) Modifier.clickable { onOpen(hit) } else Modifier,
+                    )
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = hit.resolvedTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AarisColor.Ink,
+                )
+                hit.fictionTitle
+                    ?.takeIf { it != hit.resolvedTitle }
+                    ?.let { MetaText(text = it, color = AarisColor.Muted) }
+                // The matching passage is the answer for a text hit, so it is the row's substance
+                // rather than a decoration.
+                hit.snippet?.takeIf { it.isNotBlank() }?.let {
+                    MetaText(text = it, color = AarisColor.Dim)
+                }
+            }
+        }
+    }
+    if (group.hasMore) {
+        MetaText(text = "// More matches on the server — narrow the search", color = AarisColor.Dim)
     }
 }
 

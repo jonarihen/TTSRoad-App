@@ -2,6 +2,20 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- **Search the text of your chapters, not just the titles you have loaded.** The search box filtered
+  whatever the app had already fetched and could not match chapter text at all. A new **Search
+  chapters and text on the server** action finds fictions, chapter titles and the narration itself —
+  so "which chapter was the bit about the lighthouse in" now has an answer.
+- Results are grouped by what matched, with the passage shown, and tapping a text result opens the
+  reader at that chapter.
+- **The instant filter is unchanged and still first.** It works offline and has no lag; server
+  search is a second, explicit action rather than a replacement, so searching still works with no
+  connection. Servers without search show only the local filter.
+
 ## 0.10.0 — 2026-08-08
 
 Signed with the same pinned key as 0.7.0 through 0.9.0, so this installs directly over any of them

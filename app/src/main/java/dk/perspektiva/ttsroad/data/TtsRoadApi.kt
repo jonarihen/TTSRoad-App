@@ -72,5 +72,19 @@ interface TtsRoadApi {
 
     @POST("api/mobile/playback/mark")
     suspend fun markPlayback(@Body request: PlaybackMarkRequest): PlaybackMarkResponse
+
+    /**
+     * Server-side search across fiction metadata, chapter titles and the narration text itself.
+     *
+     * The last of those is the reason this exists: the app's local filter can only match what it
+     * has already loaded, and cannot match chapter text at all. [fictionId] narrows the same query
+     * to one book.
+     */
+    @GET("api/mobile/search")
+    suspend fun search(
+        @Query("q") query: String,
+        @Query("fiction_id") fictionId: Int? = null,
+        @Query("limit") limit: Int? = null,
+    ): SearchResponse
 }
 

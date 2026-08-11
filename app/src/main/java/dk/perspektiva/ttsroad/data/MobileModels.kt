@@ -195,3 +195,64 @@ data class PlaybackMarkResponse(
     val count: Int = 0,
 )
 
+
+/**
+ * `GET /api/mobile/search?q=`.
+ *
+ * Grouped rather than flat, and the groups are always present even when empty — fictions, then
+ * chapter titles, then narration text. The group order *is* the rank order; `score` says the same
+ * thing numerically for a client that would rather have one list.
+ */
+data class SearchResponse(
+    val query: String = "",
+    val fictions: SearchGroup = SearchGroup(),
+    val chapters: SearchGroup = SearchGroup(),
+    val text: SearchGroup = SearchGroup(),
+    /**
+     * Whether the full-text index was available. False means the narration-text group fell back to
+     * a slower or narrower match, which is worth saying rather than silently returning less.
+     */
+    val indexed: Boolean = false,
+    val total: Int = 0,
+)
+
+data class SearchGroup(
+    val items: List<SearchHit> = emptyList(),
+    val total: Int = 0,
+    /** The server stops counting at a cap; render "500+" rather than "500" when this is set. */
+    val capped: Boolean = false,
+    @param:Json(name = "has_more") val hasMore: Boolean = false,
+)
+
+/**
+ * One hit. The same shape in all three groups, so a fiction hit simply has no chapter.
+ *
+ * Everything but `kind` is optional on purpose: a fiction hit carries no chapter id or snippet, and
+ * a text hit carries no tags, and one strict field would fail the whole response.
+ */
+data class SearchHit(
+    /** `fiction`, `chapter` or `text`. */
+    val kind: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    @param:Json(name = "chapter_id") val chapterId: Int? = null,
+    @param:Json(name = "chapter_title") val chapterTitle: String? = null,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
+    val author: String? = null,
+    @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
+    /** The matching passage, for chapter-title and narration-text hits. */
+    val snippet: String? = null,
+    val playable: Boolean = false,
+) {
+    /** Never blank, so every row has something to show. */
+    val resolvedTitle: String
+        get() = when {
+            !chapterTitle.isNullOrBlank() -> chapterTitle
+            !fictionTitle.isNullOrBlank() -> fictionTitle
+            else -> "Untitled"
+        }
+}
+
+const val SearchKindFiction: String = "fiction"
+const val SearchKindChapter: String = "chapter"
+const val SearchKindText: String = "text"
