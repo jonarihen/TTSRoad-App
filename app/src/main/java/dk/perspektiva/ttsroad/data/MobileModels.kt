@@ -71,6 +71,13 @@ data class ServerInfo(
 
 data class LibraryResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
+    /**
+     * `followed` or `all`, echoed back by the server. Read rather than assumed: a server without
+     * per-user libraries answers `followed` whatever was asked for, and the browse screen needs to
+     * know it is looking at the shared list rather than a shelf.
+     */
+    val scope: String = LibraryScopeFollowed,
+    @param:Json(name = "following_ids") val followingIds: List<Int> = emptyList(),
     val fictions: List<FictionSummary> = emptyList(),
     @param:Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
     @param:Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
@@ -98,6 +105,14 @@ data class FictionSummary(
     @param:Json(name = "pending_chapters") val pendingChapters: Int = 0,
     @param:Json(name = "error_chapters") val errorChapters: Int = 0,
     @param:Json(name = "processing_chapters") val processingChapters: Int = 0,
+    /**
+     * Whether this fiction is on the caller's shelf.
+     *
+     * Absent on a server without per-user libraries, where every fiction is effectively followed —
+     * hence the default. The follow control is gated on the capability, not on this, so the default
+     * is never read on a server that cannot honour it.
+     */
+    val following: Boolean = true,
 ) {
     /** Fraction of chapters with audio ready, for progress indicators. */
     val readyFraction: Float
@@ -195,3 +210,21 @@ data class PlaybackMarkResponse(
     val count: Int = 0,
 )
 
+
+/**
+ * The two `scope` values `/api/mobile/library` accepts.
+ *
+ * `followed` is the default and is what a client that has never heard of follows gets. That is safe
+ * because the backend's upgrade backfills a follow of every fiction for every existing account, so
+ * an older app sees exactly what it saw before rather than an empty shelf.
+ */
+const val LibraryScopeFollowed: String = "followed"
+const val LibraryScopeAll: String = "all"
+
+/** `POST`/`DELETE /api/mobile/fictions/{id}/follow`. Both answer the resulting state. */
+data class FollowResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    val following: Boolean = false,
+)

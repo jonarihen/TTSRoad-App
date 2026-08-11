@@ -2,6 +2,19 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- **Your library is now yours.** The app showed whatever the server held and called that "my
+  library", while the web showed a followed subset — so the two disagreed about what the library
+  even was. A **FOLLOW / FOLLOWING** toggle on the fiction screen now puts a book on your shelf or
+  takes it off, and the home screen shows the shelf.
+- **All fictions browses the whole server**, which is where you follow something from. Unfollowing
+  leaves the fiction on the server; it stays reachable from there.
+- Servers whose library is still one shared list show none of this, rather than a toggle they
+  cannot honour.
+
 ## 0.10.0 — 2026-08-08
 
 Signed with the same pinned key as 0.7.0 through 0.9.0, so this installs directly over any of them

@@ -43,8 +43,15 @@ interface TtsRoadApi {
     @POST("api/mobile/devices/revoke-others")
     suspend fun revokeOtherDevices()
 
+    /**
+     * [scope] is `followed` (the caller's shelf) or `all` (everything on the server, for browsing
+     * and following from). A server without per-user libraries ignores it and answers the whole
+     * shared list either way, which is why the response echoes the scope it actually applied.
+     */
     @GET("api/mobile/library")
-    suspend fun library(): LibraryResponse
+    suspend fun library(
+        @Query("scope") scope: String = LibraryScopeFollowed,
+    ): LibraryResponse
 
     @GET("api/mobile/fictions/{fiction_id}/chapters")
     suspend fun chapters(
@@ -72,5 +79,13 @@ interface TtsRoadApi {
 
     @POST("api/mobile/playback/mark")
     suspend fun markPlayback(@Body request: PlaybackMarkRequest): PlaybackMarkResponse
+
+    /** Put a fiction on this account's shelf. 404 when the fiction does not exist. */
+    @POST("api/mobile/fictions/{fiction_id}/follow")
+    suspend fun followFiction(@Path("fiction_id") fictionId: Int): FollowResponse
+
+    /** Take it off. The fiction stays on the server, reachable through `scope=all`. */
+    @DELETE("api/mobile/fictions/{fiction_id}/follow")
+    suspend fun unfollowFiction(@Path("fiction_id") fictionId: Int): FollowResponse
 }
 

@@ -642,6 +642,7 @@ private fun MainScaffold(
 
                 AppScreen.Fictions -> FictionsScreen(
                     padding = padding,
+                    repository = repository,
                     onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                 )
 
@@ -907,6 +908,17 @@ private fun FictionScreen(
         .collectAsStateWithLifecycle(initialValue = ChapterFilter.All)
     var ascending by remember(fiction.id) { mutableStateOf(true) }
     var bulkTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
+    var isFollowBusy by remember(fiction.id) { mutableStateOf(false) }
+    // The shelf is the server's answer, so the toggle reads from the loaded library rather than
+    // from the FictionSummary handed over by navigation, which may be a browse-screen row that has
+    // been followed since.
+    val libraryState by cache.library.collectAsStateWithLifecycle()
+    val browseState by cache.browseAll.collectAsStateWithLifecycle()
+    val isFollowing = remember(libraryState, browseState, fiction.id) {
+        browseState.value?.fictions?.firstOrNull { it.id == fiction.id }?.following
+            ?: libraryState.value?.followingIds?.contains(fiction.id)
+            ?: fiction.following
+    }
     var didAutoScroll by remember(fiction.id) { mutableStateOf(false) }
     // Held here so an in-place row update cannot scroll a 500-row list back to the top.
     val listState = rememberLazyListState()
@@ -992,6 +1004,31 @@ private fun FictionScreen(
                                     playbackController.playQueue(chapters, chapter.resolvedChapterId, fiction)
                                     onOpenPlayer()
                                 }
+                            },
+                            isFollowing = isFollowing,
+                            isFollowBusy = isFollowBusy,
+                            // Hidden entirely on a server whose library is still the whole shared
+                            // list: there is no shelf for a follow to mean anything against.
+                            onSetFollowing = if (capabilities.follows) {
+                                { wanted ->
+                                    scope.launch {
+                                        isFollowBusy = true
+                                        error = null
+                                        runCatching { repository.setFollowing(fiction.id, wanted) }
+                                            .onSuccess { result ->
+                                                // Trust the server's answer, not the request: a
+                                                // fiction deleted since the screen loaded comes
+                                                // back as not followed rather than as an error.
+                                                result?.let { cache.applyFollowing(fiction.id, it) }
+                                            }
+                                            .onFailure {
+                                                error = it.message ?: "Could not update your library"
+                                            }
+                                        isFollowBusy = false
+                                    }
+                                }
+                            } else {
+                                null
                             },
                             downloadSummary = remember(chapters, downloadState) {
                                 fictionDownloadSummary(chapters, downloadState)
@@ -2858,18 +2895,28 @@ private fun downloadMetaLabel(download: ChapterDownload?): String? = when (downl
 @Composable
 private fun FictionsScreen(
     padding: PaddingValues,
+    repository: TtsRoadRepository,
     onOpenFiction: (FictionSummary) -> Unit,
 ) {
     val context = LocalContext.current
     val cache = remember { ServiceLocator.libraryCache(context) }
-    val state by cache.library.collectAsStateWithLifecycle()
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    // Browse means *everything on the server* once the server has per-user libraries — that is what
+    // makes this the screen a fiction gets followed from. Without them there is only one list, and
+    // browsing the shelf is browsing the server.
+    val browseAll = capabilities.follows
+    val state by (if (browseAll) cache.browseAll else cache.library)
+        .collectAsStateWithLifecycle()
     // Saveable so the browse position and filter survive a trip into a fiction and back.
     var query by rememberSaveable { mutableStateOf("") }
     // Hoisted so the browse position survives the round trip into a fiction, alongside the
     // SaveableStateProvider keyed per back-stack entry.
     val gridState = rememberLazyGridState()
 
-    LaunchedEffect(Unit) { cache.ensureLibrary() }
+    LaunchedEffect(browseAll) {
+        if (browseAll) cache.ensureBrowseAll() else cache.ensureLibrary()
+    }
+    val refresh: () -> Unit = if (browseAll) cache::refreshBrowseAll else cache::refreshLibrary
 
     val fictions = state.value?.fictions
     when {
@@ -2877,7 +2924,7 @@ private fun FictionsScreen(
         fictions == null -> ErrorPane(
             padding = padding,
             message = state.error ?: "Could not load fictions",
-            onRetry = cache::refreshLibrary,
+            onRetry = refresh,
         )
 
         else -> {
@@ -2897,7 +2944,7 @@ private fun FictionsScreen(
                 padding = padding,
                 isRefreshing = state.isRefreshing,
                 error = state.error,
-                onRefresh = cache::refreshLibrary,
+                onRefresh = refresh,
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     OutlinedTextField(
@@ -2988,6 +3035,10 @@ private fun FictionDetailHeader(
     onPlay: (ChapterSummary) -> Unit,
     downloadSummary: FictionDownloadSummary = FictionDownloadSummary(),
     onDownloadNext: (() -> Unit)? = null,
+    /** Null on a server without per-user libraries, where there is no shelf to be on. */
+    onSetFollowing: ((Boolean) -> Unit)? = null,
+    isFollowing: Boolean = true,
+    isFollowBusy: Boolean = false,
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
@@ -3037,6 +3088,34 @@ private fun FictionDetailHeader(
             ) {
                 Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
             }
+        }
+
+        onSetFollowing?.let { setFollowing ->
+            OutlinedButton(
+                onClick = { setFollowing(!isFollowing) },
+                enabled = !isFollowBusy,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isFollowing) AarisColor.Accent else AarisColor.Muted,
+                ),
+            ) {
+                Text(
+                    when {
+                        isFollowBusy -> "WORKING"
+                        isFollowing -> "FOLLOWING"
+                        else -> "FOLLOW"
+                    },
+                )
+            }
+            MetaText(
+                text = if (isFollowing) {
+                    "On your library. Unfollowing leaves it on the server."
+                } else {
+                    "Not on your library. Follow it to see it on the home screen."
+                },
+                color = AarisColor.Dim,
+            )
         }
 
         onDownloadNext?.let { download ->

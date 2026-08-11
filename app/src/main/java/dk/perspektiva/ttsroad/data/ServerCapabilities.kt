@@ -46,6 +46,11 @@ data class ServerCapabilities(
     val batchProgress: Boolean = false,
     val audioContentHash: Boolean = false,
     val deviceManagement: Boolean = false,
+    /**
+     * Per-user libraries. When false, `/api/mobile/library` is still the whole shared list and the
+     * app must not offer a follow control it cannot honour.
+     */
+    val follows: Boolean = false,
     val maxChaptersPerPage: Int? = null,
 ) {
     companion object {
@@ -66,6 +71,7 @@ data class ServerCapabilities(
                 batchProgress = flags.flag("batch_progress"),
                 audioContentHash = flags.flag("audio_content_hash"),
                 deviceManagement = flags.flag("device_management"),
+                follows = flags.flag("follows"),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             )
         }
