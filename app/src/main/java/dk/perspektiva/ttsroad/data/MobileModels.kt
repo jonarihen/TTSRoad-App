@@ -195,3 +195,14 @@ data class PlaybackMarkResponse(
     val count: Int = 0,
 )
 
+
+/**
+ * `GET`/`PATCH /api/me/preferences`.
+ *
+ * A loose map for the same reason [CapabilitiesResponse] uses one: the server owns the vocabulary
+ * and adds to it on its own schedule, so a strict model would fail to parse the whole blob over one
+ * key this build has never heard of. The typed reads live in `AccountPreferences.kt`.
+ */
+data class AccountPreferencesResponse(
+    val preferences: Map<String, Any?> = emptyMap(),
+)

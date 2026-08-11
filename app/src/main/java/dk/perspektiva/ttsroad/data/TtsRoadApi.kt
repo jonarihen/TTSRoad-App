@@ -6,6 +6,7 @@ import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.Headers
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -72,5 +73,24 @@ interface TtsRoadApi {
 
     @POST("api/mobile/playback/mark")
     suspend fun markPlayback(@Body request: PlaybackMarkRequest): PlaybackMarkResponse
+
+    /**
+     * Account preferences. Note the path: these are `/api/me/...`, not `/api/mobile/...` — the same
+     * rows the web console reads, which is the point of syncing them. The global auth middleware
+     * resolves a bearer token before falling back to the session cookie, so the mobile token
+     * authenticates here exactly as it does on the mobile routes.
+     */
+    @GET("api/me/preferences")
+    suspend fun accountPreferences(): AccountPreferencesResponse
+
+    /**
+     * Only the keys being changed. The server merges the body into the stored blob and echoes the
+     * result, so sending a full snapshot would let this phone's stale copy of a setting overwrite
+     * one changed elsewhere.
+     */
+    @PATCH("api/me/preferences")
+    suspend fun updateAccountPreferences(
+        @Body changes: Map<String, @JvmSuppressWildcards Any?>,
+    ): AccountPreferencesResponse
 }
 

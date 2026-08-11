@@ -2,6 +2,29 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- **Reader appearance and Hide played now follow your account.** Text size, page colour and how
+  much is highlighted were settings on this phone; so was the chapter filter, which is the web's
+  **Hide played** under another name. The 0.10.0 notes flagged that the two disagreed with each
+  other. They no longer do.
+- **A sleep timer default.** Pick a duration in Settings → Playback and the player's sleep sheet
+  marks it. The app had no concept of one before; the account has always had somewhere to keep it.
+- Everything still works with no network and on a server too old to hold account preferences —
+  the phone's own copy is what the app reads, and syncing improves on it rather than replacing it.
+
+### Changed
+
+- **Speed, skip interval, skip silence and volume boost stay on this phone deliberately.** A phone
+  on earbuds and a laptop on speakers want different values, and signing out should not reset them.
+  This matches the desktop client's reasoning.
+- A setting changed in the browser wins here only when it is genuinely different. The app has four
+  highlight modes to the web's three and its own **Night** page, so "the same setting" is not always
+  the same value — the phone keeps the more specific choice rather than being flattened to the
+  nearest web equivalent.
+
 ## 0.10.0 — 2026-08-08
 
 Signed with the same pinned key as 0.7.0 through 0.9.0, so this installs directly over any of them
