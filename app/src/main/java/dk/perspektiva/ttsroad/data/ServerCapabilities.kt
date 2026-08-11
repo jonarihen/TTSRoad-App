@@ -46,6 +46,13 @@ data class ServerCapabilities(
     val batchProgress: Boolean = false,
     val audioContentHash: Boolean = false,
     val deviceManagement: Boolean = false,
+    /**
+     * A server-side cross-library queue the app can read and mutate.
+     *
+     * Its own flag rather than folded into another: a client that builds its own queue keeps
+     * working, and the Android Auto "Up Next" node is only offered when the server can back it.
+     */
+    val queue: Boolean = false,
     val maxChaptersPerPage: Int? = null,
 ) {
     companion object {
@@ -66,6 +73,7 @@ data class ServerCapabilities(
                 batchProgress = flags.flag("batch_progress"),
                 audioContentHash = flags.flag("audio_content_hash"),
                 deviceManagement = flags.flag("device_management"),
+                queue = flags.flag("queue"),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
             )
         }

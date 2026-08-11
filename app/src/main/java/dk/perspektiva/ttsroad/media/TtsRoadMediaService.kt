@@ -36,6 +36,7 @@ import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
+import dk.perspektiva.ttsroad.data.QueueStatusPlaying
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
@@ -121,7 +122,13 @@ class TtsRoadMediaService : MediaLibraryService() {
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
-                        serviceScope.launch { saveCurrentProgress(forcePlayed = true) }
+                        serviceScope.launch {
+                            saveCurrentProgress(forcePlayed = true)
+                            // STATE_ENDED means the whole loaded queue is done, not one chapter,
+                            // so this is the end of the book. Only now does the server queue get
+                            // a say — everything before this point is the local queue, untouched.
+                            advanceServerQueue()
+                        }
                     }
                     // Playing again means whatever broke has healed, so the next failure starts
                     // its backoff from the top rather than inheriting an exhausted counter.
@@ -428,6 +435,36 @@ class TtsRoadMediaService : MediaLibraryService() {
         }
     }
 
+    /**
+     * At the end of the loaded queue, ask the server what should play next.
+     *
+     * Deliberately the *only* place the server queue touches playback. Everything up to here is the
+     * local per-fiction queue behaving exactly as it always has — tap a chapter, get the whole book
+     * in order, auto-advance within it. This runs once that book is finished, which is the moment
+     * the app previously just stopped.
+     *
+     * The decision is the server's rather than this client's: `advance` pops the queue head, and
+     * when the queue is empty it consults the account's `queue_when_empty` — `continue` gives the
+     * oldest unplayed chapter in the library, `stop` gives nothing. Deciding locally would make the
+     * phone and the browser disagree about what comes after a book.
+     *
+     * Silent on every failure. A server with no queue, an unreachable one, or an empty answer all
+     * mean the same thing here: stop, which is what would have happened anyway.
+     */
+    private suspend fun advanceServerQueue() {
+        val response = runCatching { repository.advanceQueue() }.getOrNull() ?: return
+        if (response.status != QueueStatusPlaying) return
+        val next = response.item ?: return
+        val item = TtsRoadMediaItems.queueItem(next, serverUrl()) ?: return
+
+        player.setMediaItem(item)
+        next.positionSeconds
+            .takeIf { it > 0.0 }
+            ?.let { player.seekTo((it * 1000).toLong()) }
+        player.prepare()
+        player.play()
+    }
+
     private suspend fun serverUrl(): String = tokenStore.current().serverUrl
 
     private suspend fun library(): LibraryResponse? {
@@ -689,6 +726,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     parentId == TtsRoadMediaIds.Continue -> continueItems()
                     parentId == TtsRoadMediaIds.Fictions -> fictionFolders()
                     parentId == TtsRoadMediaIds.Recent -> recentItems()
+                    parentId == TtsRoadMediaIds.Queue -> queueItems()
                     parentId.startsWith(TtsRoadMediaIds.FictionPrefix) -> fictionChildren(parentId)
                     else -> emptyList()
                 }
@@ -712,7 +750,17 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .build()
         }
 
-        private fun rootChildren(): List<MediaItem> = listOf(
+        /**
+         * Up Next is offered only when the server can actually back it — the reason the capability
+         * has its own flag. A node that was always present would be an empty dead end in the car
+         * on every server that has no cross-library queue.
+         */
+        private suspend fun rootChildren(): List<MediaItem> = listOfNotNull(
+            TtsRoadMediaItems.folder(
+                mediaId = TtsRoadMediaIds.Queue,
+                title = "Up Next",
+                subtitle = "Your queue, across books",
+            ).takeIf { service.repository.currentCapabilities.value.queue },
             TtsRoadMediaItems.folder(
                 mediaId = TtsRoadMediaIds.Continue,
                 title = "Continue Listening",
@@ -729,6 +777,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 subtitle = "Latest ready chapters",
             ),
         )
+
+        private suspend fun queueItems(): List<MediaItem> {
+            val queue = runCatching { service.repository.queue() }.getOrNull() ?: return emptyList()
+            val serverUrl = service.serverUrl()
+            return queue.items.mapNotNull { TtsRoadMediaItems.queueItem(it, serverUrl) }
+        }
 
         private suspend fun continueItems(): List<MediaItem> {
             val library = service.library() ?: return emptyList()

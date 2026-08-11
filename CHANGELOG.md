@@ -2,6 +2,24 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- **An Up Next queue that spans books.** Long-press any chapter for **Play next** or **Add to
+  queue**. It is the same queue the browser drives, so a chapter lined up on the phone is there in
+  the browser too.
+- **Android Auto gets an "Up Next" browse node**, listing the queue across fictions with each
+  entry's book as its subtitle. The node appears only on servers that can back it.
+- **A book no longer just stops at the end.** When the last chapter finishes, the server decides
+  what follows: the head of your queue, or — if your account is set to keep going — the oldest
+  unplayed chapter in your library. Set it to stop and nothing changes.
+
+### Changed
+
+- Playing a fiction is unchanged: tapping a chapter still queues the whole book in order and
+  auto-advances within it. The server queue only gets a say once that book is finished.
+
 ## 0.10.0 — 2026-08-08
 
 Signed with the same pinned key as 0.7.0 through 0.9.0, so this installs directly over any of them
