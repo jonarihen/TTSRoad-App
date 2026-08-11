@@ -339,6 +339,59 @@ class TtsRoadRepository(
             )
         }
 
+    /**
+     * The account's bookmarks, or null on a server without the `bookmarks` capability.
+     *
+     * Null and empty mean different things and the caller must keep them apart: null is "this
+     * server cannot do bookmarks", which hides the UI; empty is "you have not made any yet".
+     */
+    suspend fun bookmarks(fictionId: Int? = null, chapterId: Int? = null): List<Bookmark>? {
+        if (!_currentCapabilities.value.bookmarks) return null
+        return withAuthorizedApi {
+            it.bookmarks(fictionId = fictionId, chapterId = chapterId)
+        }.bookmarks
+    }
+
+    /** The created bookmark, or null when the server cannot hold one. Throws on a real failure. */
+    suspend fun createBookmark(
+        chapterId: Int,
+        positionSeconds: Double,
+        label: String? = null,
+        note: String? = null,
+    ): Bookmark? {
+        if (!_currentCapabilities.value.bookmarks) return null
+        return withAuthorizedApi {
+            it.createBookmark(
+                CreateBookmarkRequest(
+                    chapterId = chapterId,
+                    positionSeconds = positionSeconds.coerceAtLeast(0.0),
+                    label = label?.trim()?.takeIf { text -> text.isNotEmpty() },
+                    note = note?.trim()?.takeIf { text -> text.isNotEmpty() },
+                ),
+            )
+        }.bookmark
+    }
+
+    suspend fun updateBookmark(bookmarkId: Int, label: String?, note: String?): Bookmark? {
+        if (!_currentCapabilities.value.bookmarks) return null
+        return withAuthorizedApi {
+            it.updateBookmark(bookmarkId, UpdateBookmarkRequest(label = label, note = note))
+        }.bookmark
+    }
+
+    /** True when the bookmark is gone. A 404 counts: it is already not there. */
+    suspend fun deleteBookmark(bookmarkId: Int): Boolean {
+        if (!_currentCapabilities.value.bookmarks) return false
+        return try {
+            withAuthorizedApi { it.deleteBookmark(bookmarkId) }
+            true
+        } catch (e: HttpException) {
+            // Deleting something already deleted — from the browser, or a double tap — is the
+            // outcome the caller wanted, not an error to put on screen.
+            if (e.code() == 404) true else throw e
+        }
+    }
+
     /** Every mobile session on this account, or null on a server that has no devices endpoint. */
     suspend fun devices(): List<DeviceSession>? = ifDevicesSupported { it.devices() }?.devices
 
