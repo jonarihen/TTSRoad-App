@@ -20,6 +20,14 @@ import retrofit2.converter.moshi.MoshiConverterFactory
  */
 private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
 
+/**
+ * Batch size to use when the server advertises `batch_progress` but names no limit.
+ *
+ * Deliberately well under the 500 the backend actually enforces: guessing high costs a whole flush
+ * to a 400, while guessing low costs one extra round trip in a case that is already rare.
+ */
+const val DefaultPlaybackSyncBatchLimit: Int = 100
+
 /** Outcome of a mobile login attempt. */
 sealed interface LoginResult {
     data object Success : LoginResult
@@ -338,6 +346,21 @@ class TtsRoadRepository(
                 ),
             )
         }
+
+    /**
+     * Batched, timestamped progress. Answers null when the server has no `batch_progress` support,
+     * which is the caller's signal to fall back to the single-item endpoint.
+     */
+    suspend fun syncProgress(items: List<PlaybackSyncItem>): PlaybackSyncResponse? {
+        if (items.isEmpty()) return null
+        if (!_currentCapabilities.value.batchProgress) return null
+        return withAuthorizedApi { it.syncProgress(PlaybackSyncRequest(items = items)) }
+    }
+
+    /** How many items one `/playback/sync` call may carry against the current server. */
+    fun playbackSyncBatchLimit(): Int =
+        _currentCapabilities.value.maxPlaybackSyncItems?.takeIf { it > 0 }
+            ?: DefaultPlaybackSyncBatchLimit
 
     /** Every mobile session on this account, or null on a server that has no devices endpoint. */
     suspend fun devices(): List<DeviceSession>? = ifDevicesSupported { it.devices() }?.devices
