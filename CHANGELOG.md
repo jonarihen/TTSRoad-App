@@ -19,6 +19,9 @@ Notable changes to the TTSRoad Android client.
   entries rather than two thousand.
 - On a server without batched progress the old single-chapter endpoint is still used — unchanged,
   and still unordered — but a position recorded offline is now retried instead of dropped.
+- Positions are stamped to the millisecond rather than the second. The browser stamps that finely,
+  and the server keeps whichever is newer, so a rounded-down stamp from the phone could lose to a
+  browser write from earlier in the same second and roll your place back.
 
 ## 0.10.0 — 2026-08-08
 
