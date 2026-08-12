@@ -182,8 +182,14 @@ import dk.perspektiva.ttsroad.nav.navigateTo
 import dk.perspektiva.ttsroad.nav.popScreen
 import dk.perspektiva.ttsroad.nav.rootBackStack
 import dk.perspektiva.ttsroad.nav.saveKey
+import dk.perspektiva.ttsroad.player.FictionListeningSummary
+import dk.perspektiva.ttsroad.player.fictionListeningSummary
+import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.lastHeardSnapshot
+import dk.perspektiva.ttsroad.player.listeningSpanAtSpeed
+import dk.perspektiva.ttsroad.player.remainingMs
+import dk.perspektiva.ttsroad.player.remainingMsAtSpeed
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
 import dk.perspektiva.ttsroad.player.SleepTimerController
@@ -996,6 +1002,10 @@ private fun FictionScreen(
                             downloadSummary = remember(chapters, downloadState) {
                                 fictionDownloadSummary(chapters, downloadState)
                             },
+                            listeningSummary = remember(chapters) {
+                                fictionListeningSummary(chapters)
+                            },
+                            playbackSpeed = playerState.speed,
                             onDownloadNext = {
                                 // Start where the listener is, not at chapter one — the point of the
                                 // batch is the drive ahead of them.
@@ -1276,7 +1286,33 @@ private fun PlayerScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             MetaText(text = formatDuration(dragMs?.toLong() ?: playerState.positionMs))
-            MetaText(text = formatDuration(playerState.durationMs))
+            // Time left beats total duration here: the scrubber already shows how far in this is,
+            // and "how much longer" is the thing being asked. At anything but 1x the wall-clock
+            // answer differs from the audio one, so say both rather than the misleading one.
+            if (playerState.durationMs > 0L) {
+                val position = dragMs?.toLong() ?: playerState.positionMs
+                MetaText(
+                    text = buildString {
+                        append("-")
+                        append(formatDuration(remainingMs(position, playerState.durationMs)))
+                        if (playerState.speed != 1f) {
+                            append("  ·  ")
+                            append(
+                                formatDuration(
+                                    remainingMsAtSpeed(
+                                        position,
+                                        playerState.durationMs,
+                                        playerState.speed,
+                                    ),
+                                ),
+                            )
+                            append(" at ${formatSpeed(playerState.speed)}")
+                        }
+                    },
+                )
+            } else {
+                MetaText(text = formatDuration(playerState.durationMs))
+            }
         }
         Spacer(modifier = Modifier.height(12.dp))
         LinearProgressIndicator(
@@ -2988,6 +3024,8 @@ private fun FictionDetailHeader(
     onPlay: (ChapterSummary) -> Unit,
     downloadSummary: FictionDownloadSummary = FictionDownloadSummary(),
     onDownloadNext: (() -> Unit)? = null,
+    listeningSummary: FictionListeningSummary = FictionListeningSummary(),
+    playbackSpeed: Float = 1f,
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
@@ -3036,6 +3074,35 @@ private fun FictionDetailHeader(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+            }
+        }
+
+        if (listeningSummary.playable > 0) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (listeningSummary.hasRemaining) {
+                    Text(
+                        text = "${formatListeningSpan(listeningSummary.remainingSeconds)} remaining",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                MetaText(
+                    text = buildString {
+                        append("${listeningSummary.played}/${listeningSummary.playable} played")
+                        if (listeningSummary.unplayed > 0) {
+                            append("  ·  ${listeningSummary.unplayed} left")
+                        }
+                        // Only worth saying when it changes the answer; at 1x it is the same number
+                        // twice, which reads as a bug rather than as extra information.
+                        if (listeningSummary.hasRemaining && playbackSpeed != 1f) {
+                            val atSpeed = listeningSpanAtSpeed(
+                                listeningSummary.remainingSeconds,
+                                playbackSpeed,
+                            )
+                            append("  ·  ${formatListeningSpan(atSpeed)} at ${formatSpeed(playbackSpeed)}")
+                        }
+                    },
+                    color = AarisColor.Dim,
+                )
             }
         }
 

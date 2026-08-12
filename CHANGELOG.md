@@ -2,6 +2,26 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- **The fiction screen says how much listening is left.** It previously answered only the storage
+  question — "0 offline · 73 not downloaded" — which is not the one you ask before starting a
+  400-chapter serial. It now leads with total remaining time, a played count, and how many chapters
+  are left, matching what the web card shows.
+- A chapter you marked played counts as finished even if you never pressed play on it. Trusting the
+  saved position instead would report a book you deliberately finished as entirely unheard.
+- When no chapter reports a duration, the remaining line is left out rather than shown as "0m".
+  A confident zero is worse than saying nothing.
+- **The player shows time left in the chapter** where it used to repeat the total duration. The
+  scrubber already shows how far in you are; how much longer is the thing being asked.
+- **At any speed other than 1x, both numbers appear** — the audio time and what it actually takes
+  at that speed. Remaining alone stops answering "will I finish this on the drive" as soon as you
+  listen at 1.75x.
+
+No new requests: every figure is a sum over the chapter list the screen has already loaded.
+
 ## 0.10.0 — 2026-08-08
 
 Signed with the same pinned key as 0.7.0 through 0.9.0, so this installs directly over any of them

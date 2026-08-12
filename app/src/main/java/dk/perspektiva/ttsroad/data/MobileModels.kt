@@ -154,6 +154,24 @@ data class ChapterSummary(
 
     val resolvedCoverUrl: String?
         get() = fiction?.coverImageUrl ?: coverImageUrl
+
+    val resolvedIsPlayed: Boolean
+        get() = playback?.isPlayed ?: false
+
+    /**
+     * Seconds left in this chapter, or null when nothing in the payload can answer that.
+     *
+     * The server computes `max(0, duration - position)` and sends it as `remaining_seconds`, but not
+     * on every endpoint and not on every version, so fall back to the same arithmetic locally.
+     * Null rather than 0.0 when neither is available: a total built from chapters that never
+     * reported a duration should read as "unknown", not as "nothing left to listen to".
+     */
+    val resolvedRemainingSeconds: Double?
+        get() {
+            playback?.remainingSeconds?.let { return it.coerceAtLeast(0.0) }
+            val duration = audioDuration ?: return null
+            return (duration - resolvedPositionSeconds).coerceIn(0.0, duration)
+        }
 }
 
 data class AudioInfo(
