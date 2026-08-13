@@ -11,6 +11,16 @@ Notable changes to the TTSRoad Android client.
 - **They are the same bookmarks the browser shows.** Not a copy — the same records, so one made on
   the phone appears in the web bookmarks page and deleting it in either place removes it from both.
 - Servers without bookmark support show none of this, rather than offering a button that fails.
+- **Jump back reaches across devices.** The player's jump-back sheet used to list only moments this
+  phone recorded. It now also shows where the account was listening in the browser or on another
+  device, so "where was I at 23:49" is answerable on the device you happen to be holding.
+- The phone keeps its own full-resolution trail exactly as before — that is still the deepest
+  jump-back reach of the three clients, and it works with no server and no network. What is new is a
+  much coarser five-minute trail written to the account and merged into the same sheet. Where a
+  moment was recorded both ways, the local copy is the one shown.
+- The shared trail is kept bounded on purpose. Bookmarks and breadcrumbs share one budget on the
+  server, so a client writing breadcrumbs without limit would eventually spend the whole allowance
+  and start refusing to save the marks you made deliberately.
 
 ## 0.10.0 — 2026-08-08
 

@@ -184,6 +184,8 @@ import dk.perspektiva.ttsroad.nav.popScreen
 import dk.perspektiva.ttsroad.nav.rootBackStack
 import dk.perspektiva.ttsroad.nav.saveKey
 import dk.perspektiva.ttsroad.player.HistorySnapshot
+import dk.perspektiva.ttsroad.player.breadcrumbSnapshot
+import dk.perspektiva.ttsroad.player.mergeBreadcrumbs
 import dk.perspektiva.ttsroad.player.lastHeardSnapshot
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
@@ -1214,7 +1216,13 @@ private fun PlayerScreen(
         ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val history by historyStore.snapshots.collectAsStateWithLifecycle()
-    val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
+    // Breadcrumbs the account recorded elsewhere — the browser, or another phone. Fetched when the
+    // sheet is opened rather than on every player composition: it is a request, and it is only ever
+    // read by that sheet. A failure leaves the local trail on its own, which is what this always was.
+    var remoteBreadcrumbs by remember { mutableStateOf<List<HistorySnapshot>>(emptyList()) }
+    val jumpBackOptions = remember(history, remoteBreadcrumbs) {
+        jumpBackOptions(mergeBreadcrumbs(history, remoteBreadcrumbs), System.currentTimeMillis())
+    }
     val sleepTimer = remember { ServiceLocator.sleepTimer() }
     val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
@@ -1223,6 +1231,12 @@ private fun PlayerScreen(
     }.collectAsStateWithLifecycle(initialValue = DefaultSkipSilence)
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
+    LaunchedEffect(showJumpBack) {
+        if (!showJumpBack) return@LaunchedEffect
+        remoteBreadcrumbs = runCatching {
+            repository.breadcrumbs().orEmpty().mapNotNull { breadcrumbSnapshot(it) }
+        }.getOrDefault(emptyList())
+    }
     var showSleepTimer by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
     // Confirmation for the bookmark button. A mark made while listening gives no other sign that

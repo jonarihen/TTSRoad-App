@@ -352,12 +352,25 @@ class TtsRoadRepository(
         }.bookmarks
     }
 
+    /**
+     * The account's jump-back breadcrumbs, or null on a server without the `bookmarks` capability.
+     *
+     * Separate from [bookmarks] rather than a parameter on it so the two can never be confused at a
+     * call site: this list is machine-written and can run to hundreds of rows, and rendering it
+     * where the user's own marks belong is the bug this filter exists to prevent.
+     */
+    suspend fun breadcrumbs(): List<Bookmark>? {
+        if (!_currentCapabilities.value.bookmarks) return null
+        return withAuthorizedApi { it.bookmarks(kind = BookmarkKindAuto) }.bookmarks
+    }
+
     /** The created bookmark, or null when the server cannot hold one. Throws on a real failure. */
     suspend fun createBookmark(
         chapterId: Int,
         positionSeconds: Double,
         label: String? = null,
         note: String? = null,
+        kind: String = BookmarkKindManual,
     ): Bookmark? {
         if (!_currentCapabilities.value.bookmarks) return null
         return withAuthorizedApi {
@@ -367,6 +380,7 @@ class TtsRoadRepository(
                     positionSeconds = positionSeconds.coerceAtLeast(0.0),
                     label = label?.trim()?.takeIf { text -> text.isNotEmpty() },
                     note = note?.trim()?.takeIf { text -> text.isNotEmpty() },
+                    kind = kind,
                 ),
             )
         }.bookmark
