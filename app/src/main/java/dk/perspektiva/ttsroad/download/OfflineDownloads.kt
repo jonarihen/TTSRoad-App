@@ -207,14 +207,73 @@ class OfflineDownloads(
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
     /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
-    fun download(chapter: ChapterSummary, serverUrl: String?) {
-        val spec = chapterDownloadSpec(chapter, serverUrl, serverIdentity) ?: return
+    fun download(
+        chapter: ChapterSummary,
+        serverUrl: String?,
+        origin: DownloadOrigin = DownloadOrigin.Manual,
+    ) {
+        val spec = chapterDownloadSpec(chapter, serverUrl, serverIdentity, origin) ?: return
         send(spec.toDownloadRequest())
     }
 
     /** Queue several chapters in one go — the fiction header's "download next N". */
-    fun download(chapters: List<ChapterSummary>, serverUrl: String?) {
-        chapters.forEach { download(it, serverUrl) }
+    fun download(
+        chapters: List<ChapterSummary>,
+        serverUrl: String?,
+        origin: DownloadOrigin = DownloadOrigin.Manual,
+    ) {
+        chapters.forEach { download(it, serverUrl, origin) }
+    }
+
+    /**
+     * Move the keep-ahead window to [currentChapterId] within [chapters].
+     *
+     * Called from the media service when the chapter changes. Everything it decides lives in
+     * [autoDownloadPlan]; this only supplies the state that plan needs and posts the result to the
+     * download service.
+     *
+     * A chapter already downloaded by hand inside the window is left exactly as it is — it is
+     * counted as handled, so it is not re-queued, and its manual origin is not overwritten. That
+     * matters on the way out: the window moving past it must not delete it.
+     */
+    fun applyKeepAhead(
+        chapters: List<ChapterSummary>,
+        currentChapterId: Int?,
+        keepAhead: Int,
+        fictionId: Int,
+        serverUrl: String?,
+    ) {
+        val known = _downloads.value
+        // A failed download is not "handled" — leaving it out is what lets the window retry it.
+        // A failed *manual* one is left alone even so: re-queuing it here would rewrite its record
+        // as an automatic download, and the window would then be entitled to delete something the
+        // user asked for by name. Retrying it stays the chapter row's job.
+        val handled = known
+            .filterValues { it.state != ChapterDownloadState.Failed || it.origin == DownloadOrigin.Manual }
+            .keys
+            .mapNotNullTo(mutableSetOf()) { TtsRoadMediaIds.chapterId(it) }
+        val autoDownloaded = known
+            .filterValues { it.origin == DownloadOrigin.Auto && it.fictionId == fictionId }
+            .keys
+            .mapNotNullTo(mutableSetOf()) { TtsRoadMediaIds.chapterId(it) }
+
+        val plan = autoDownloadPlan(
+            chapters = chapters,
+            currentChapterId = currentChapterId,
+            keepAhead = keepAhead,
+            handled = handled,
+            autoDownloaded = autoDownloaded,
+        )
+        if (plan.isEmpty) return
+
+        // Wrapped for the same reason resumeUnfinished is: this runs from the media service, which
+        // is often in the background, and starting the download service from there is not always
+        // allowed. A refused start leaves the honest state — not downloaded — rather than killing
+        // playback, which is the thing the user actually asked for.
+        runCatching {
+            download(plan.download, serverUrl, DownloadOrigin.Auto)
+            plan.release.forEach(::remove)
+        }
     }
 
     /** Delete a chapter's audio, or cancel it if it is still downloading. */
@@ -383,11 +442,16 @@ class OfflineDownloads(
         refreshCacheBytes()
     }
 
-    private fun Download.toChapterDownload() = ChapterDownload(
-        state = chapterDownloadState(state),
-        percent = downloadPercent(percentDownloaded),
-        bytesDownloaded = bytesDownloaded,
-    )
+    private fun Download.toChapterDownload(): ChapterDownload {
+        val ids = decodeDownloadIds(request.data)
+        return ChapterDownload(
+            state = chapterDownloadState(state),
+            percent = downloadPercent(percentDownloaded),
+            bytesDownloaded = bytesDownloaded,
+            origin = ids?.origin ?: DownloadOrigin.Manual,
+            fictionId = ids?.fictionId ?: 0,
+        )
+    }
 
     private companion object {
         const val CacheDirName = "media_downloads"

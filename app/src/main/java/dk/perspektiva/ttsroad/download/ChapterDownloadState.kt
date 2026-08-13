@@ -46,6 +46,16 @@ data class ChapterDownload(
     val state: ChapterDownloadState,
     val percent: Int = 0,
     val bytesDownloaded: Long = 0L,
+    /**
+     * Who asked for it, and which fiction it belongs to — read off the record's data blob.
+     *
+     * Not drawn by any row. Keep-ahead needs both to work out which of its own downloads the window
+     * has moved past, and this map is the only place the persisted index is already in memory.
+     * Defaults are the safe reading: a record whose blob will not parse is somebody's manual
+     * download belonging to no fiction keep-ahead is managing, so it is left alone.
+     */
+    val origin: DownloadOrigin = DownloadOrigin.Manual,
+    val fictionId: Int = 0,
 )
 
 /**

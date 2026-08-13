@@ -35,6 +35,7 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
+import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
@@ -70,6 +71,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var tokenStore: TokenStore
     private lateinit var repository: TtsRoadRepository
     private lateinit var preferences: PlaybackPreferences
+    private lateinit var downloadPreferences: DownloadPreferences
     private lateinit var player: ExoPlayer
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private lateinit var session: MediaLibrarySession
@@ -81,6 +83,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     // outage later in the night gets a fresh set of attempts rather than giving up immediately.
     private var retryJob: Job? = null
     private var retryAttempt = 0
+
+    // The chapter the keep-ahead window was last planned around; see moveKeepAheadWindow.
+    private var lastKeepAheadChapterId: Int? = null
 
     @Volatile
     private var authHeader: String? = null
@@ -97,6 +102,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         repository = ServiceLocator.repository(this)
         sleepTimer = ServiceLocator.sleepTimer()
         preferences = ServiceLocator.playbackPreferences(this)
+        downloadPreferences = ServiceLocator.downloadPreferences(this)
         serviceScope.launch {
             tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
         }
@@ -426,6 +432,42 @@ class TtsRoadMediaService : MediaLibraryService() {
                 isPlayed = forcePlayed || nearComplete,
             )
         }
+
+        moveKeepAheadWindow(fictionId = fictionId, chapterId = chapterId)
+    }
+
+    /**
+     * Keep the next few chapters on disk, so losing signal mid-book is not the end of playback.
+     *
+     * Hung off the progress save rather than a listener because this is exactly the set of moments
+     * that matter — the 15s tick, a pause, and the end of a chapter — and it needs the same
+     * fiction/chapter ids that call has already dug out of the item's extras.
+     *
+     * Only acts when the chapter changes. The window cannot move within a chapter, so re-planning
+     * every 15s would spend a request per tick to reach the same answer.
+     *
+     * Every failure is swallowed for the reason the whole method is optional: the caller's real job
+     * is saving the listening position, and a phone with no signal must not lose that because a
+     * chapter listing could not be fetched.
+     */
+    private suspend fun moveKeepAheadWindow(fictionId: Int, chapterId: Int) {
+        if (chapterId == lastKeepAheadChapterId) return
+        val keepAhead = runCatching { downloadPreferences.current().keepAheadChapters }
+            .getOrDefault(0)
+        // Claimed even when the feature is off, so switching it on mid-chapter still takes effect at
+        // the next chapter rather than never — and so an off setting costs one preference read per
+        // chapter rather than one per tick.
+        lastKeepAheadChapterId = chapterId
+        if (keepAhead <= 0) return
+
+        val chapters = fictionChapters(fictionId)?.second ?: return
+        ServiceLocator.offlineDownloads(this).applyKeepAhead(
+            chapters = chapters,
+            currentChapterId = chapterId,
+            keepAhead = keepAhead,
+            fictionId = fictionId,
+            serverUrl = serverUrl(),
+        )
     }
 
     private suspend fun serverUrl(): String = tokenStore.current().serverUrl

@@ -11,6 +11,21 @@ import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
  * decisions worth testing — which id, which host, which cache key — are made here and the request
  * is assembled from this in [OfflineDownloads].
  */
+/**
+ * Who asked for a download — the one thing that decides whether it may be deleted automatically.
+ *
+ * Keep-ahead maintains a sliding window and has to clean up behind itself, but the class comment on
+ * [OfflineDownloads] promises that nothing the user downloaded disappears behind their back. Both
+ * hold only if the two can be told apart on disk, across restarts.
+ */
+enum class DownloadOrigin {
+    /** The user asked for this chapter by name. Never removed except by hand. */
+    Manual,
+
+    /** Queued by keep-ahead, and removable by it once the window has moved on. */
+    Auto,
+}
+
 data class ChapterDownloadSpec(
     /** Same string as the chapter's media id, so a row can look its own download up. */
     val id: String,
@@ -20,13 +35,29 @@ data class ChapterDownloadSpec(
     val cacheKey: String,
     val fictionId: Int,
     val chapterId: Int,
+    val origin: DownloadOrigin = DownloadOrigin.Manual,
 ) {
-    /** The ids as Media3 stores them alongside the download. See [decodeDownloadIds]. */
-    fun encodedIds(): ByteArray = "$fictionId:$chapterId".toByteArray(Charsets.UTF_8)
+    /**
+     * The ids as Media3 stores them alongside the download. See [decodeDownloadIds].
+     *
+     * A manual download encodes to exactly the bytes 0.9.0 wrote, so upgrading re-reads every
+     * existing record as manual rather than orphaning it — and "manual" is the reading that cannot
+     * cause a deletion.
+     */
+    fun encodedIds(): ByteArray = when (origin) {
+        DownloadOrigin.Manual -> "$fictionId:$chapterId"
+        DownloadOrigin.Auto -> "$fictionId:$chapterId:$AutoMarker"
+    }.toByteArray(Charsets.UTF_8)
 }
 
 /** The identity carried on a download record, recovered after a restart. */
-data class DownloadIds(val fictionId: Int, val chapterId: Int)
+data class DownloadIds(
+    val fictionId: Int,
+    val chapterId: Int,
+    val origin: DownloadOrigin = DownloadOrigin.Manual,
+)
+
+private const val AutoMarker = "auto"
 
 /**
  * Build the download for [chapter], or null when there is nothing to download yet — a chapter still
@@ -43,6 +74,7 @@ fun chapterDownloadSpec(
     chapter: ChapterSummary,
     serverUrl: String?,
     serverIdentity: String? = null,
+    origin: DownloadOrigin = DownloadOrigin.Manual,
 ): ChapterDownloadSpec? {
     val rawUrl = chapter.audio?.url?.takeIf { it.isNotBlank() } ?: return null
     val url = ServerUrls.rewriteHost(rawUrl.trim(), serverUrl)
@@ -52,6 +84,7 @@ fun chapterDownloadSpec(
         cacheKey = DownloadCacheKeys.forUrl(url, serverIdentity),
         fictionId = chapter.resolvedFictionId,
         chapterId = chapter.resolvedChapterId,
+        origin = origin,
     )
 }
 
@@ -59,14 +92,19 @@ fun chapterDownloadSpec(
  * Read the ids back off a download record. Returns null for anything unparseable, so a record
  * written by an older build degrades to "unknown" instead of to fiction 0, chapter 0 — which would
  * look like a real chapter to every caller downstream.
+ *
+ * Two fields is the 0.9.0 record and reads as [DownloadOrigin.Manual]. A third field is the origin
+ * marker; anything in it other than `auto` also reads as manual, because the question this answers
+ * is "may keep-ahead delete this", and an unrecognised record has not earned a yes.
  */
 fun decodeDownloadIds(data: ByteArray?): DownloadIds? {
     val parts = data?.takeIf { it.isNotEmpty() }
         ?.toString(Charsets.UTF_8)
         ?.split(':')
-        ?.takeIf { it.size == 2 }
+        ?.takeIf { it.size == 2 || it.size == 3 }
         ?: return null
     val fictionId = parts[0].toIntOrNull() ?: return null
     val chapterId = parts[1].toIntOrNull() ?: return null
-    return DownloadIds(fictionId, chapterId)
+    val origin = if (parts.getOrNull(2) == AutoMarker) DownloadOrigin.Auto else DownloadOrigin.Manual
+    return DownloadIds(fictionId, chapterId, origin)
 }
