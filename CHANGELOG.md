@@ -24,6 +24,14 @@ Notable changes to the TTSRoad Android client.
   highlight modes to the web's three and its own **Night** page, so "the same setting" is not always
   the same value — the phone keeps the more specific choice rather than being flattened to the
   nearest web equivalent.
+- **The speed picker goes up to 3.0x.** The clamps always allowed 0.5–3.0, but the sheet only
+  offers presets, so the list itself was the real ceiling and it stopped at 2.0x. It now offers the
+  same nine steps as the desktop client, spanning the whole range the server's `playback_speed`
+  spec accepts.
+- 0.8x is no longer one of the presets. Anyone listening at it keeps it: the sheet adds whatever
+  speed is actually set to the list when it is not a preset, so the current speed stays visible and
+  reachable rather than being snapped to 0.75x silently. Same mechanism will cover a speed that
+  arrives from the account once preferences sync.
 
 ## 0.10.0 — 2026-08-08
 

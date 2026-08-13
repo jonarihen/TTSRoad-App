@@ -45,10 +45,38 @@ data class PlaybackPrefs(
 /**
  * The speeds offered in the player's speed picker.
  *
- * Deliberately the same six steps as the web console's `<select>`, so "the speed I listen at" is
- * selectable on both surfaces rather than only nearly so.
+ * The same nine steps as the desktop client, spanning the full range the backend's `playback_speed`
+ * spec accepts (0.5–3.0). The list used to stop at 2.0x, which made that the effective ceiling even
+ * though [sanitizeSpeed] has always allowed 3.0x — the picker offers presets and nothing else, so a
+ * speed absent from this list could not be reached from the UI at all.
+ *
+ * 0.8x was in the old list and is not in this one. Rather than snap those listeners to 0.75x behind
+ * their back, [speedOptions] keeps whatever speed is actually set selectable; see there.
  */
-val SpeedPresets: List<Float> = listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+val SpeedPresets: List<Float> =
+    listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f)
+
+/**
+ * [SpeedPresets] plus [current], if the speed in force is not one of the presets.
+ *
+ * Two cases reach this. A listener who settled on 0.8x under a build whose presets included it
+ * would otherwise open the sheet, see no row marked "Current", and have no way back to the speed
+ * they were already listening at. And once preferences follow the account (#62), a speed set by
+ * another client can be any value the server's 0.5–3.0 range permits, not just one of these nine.
+ *
+ * Sorted, so the inserted row lands between its neighbours instead of at the end.
+ */
+fun speedOptions(current: Float): List<Float> {
+    val sanitized = sanitizeSpeed(current)
+    val alreadyOffered = SpeedPresets.any { kotlin.math.abs(it - sanitized) < SpeedEpsilon }
+    return if (alreadyOffered) SpeedPresets else (SpeedPresets + sanitized).sorted()
+}
+
+/**
+ * Float comparison tolerance for "is this the same speed". Presets are a tenth apart at the closest,
+ * so anything this small only ever collapses genuine rounding drift.
+ */
+const val SpeedEpsilon: Float = 0.001f
 
 /**
  * Skip amounts offered in Settings. 30s suits a dozed-off rewind, 10-15s suits "what did that
