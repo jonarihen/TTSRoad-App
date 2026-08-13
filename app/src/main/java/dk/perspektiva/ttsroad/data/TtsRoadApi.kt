@@ -70,6 +70,14 @@ interface TtsRoadApi {
     @POST("api/mobile/playback/progress")
     suspend fun saveProgress(@Body request: PlaybackProgressRequest): PlaybackProgressResponse
 
+    /**
+     * Batched, timestamped progress — the endpoint that can be *ordered* against writes from other
+     * clients. Preferred over [saveProgress] whenever the server advertises `batch_progress`; see
+     * `PendingProgressStore` for why the app queues positions rather than posting them directly.
+     */
+    @POST("api/mobile/playback/sync")
+    suspend fun syncProgress(@Body request: PlaybackSyncRequest): PlaybackSyncResponse
+
     @POST("api/mobile/playback/mark")
     suspend fun markPlayback(@Body request: PlaybackMarkRequest): PlaybackMarkResponse
 }
