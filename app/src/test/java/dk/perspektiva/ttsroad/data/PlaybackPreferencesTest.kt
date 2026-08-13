@@ -135,10 +135,63 @@ class AudioPreferencesTest {
     }
 
     @Test
-    fun `the speed presets are the ones the web console offers`() {
+    fun `the speed presets are the ones the other clients offer`() {
         // Not cosmetic: a listener who settled on a speed in the browser has to be able to pick
         // the same number here, or the two clients disagree by a step.
-        assertEquals(listOf(0.8f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f), SpeedPresets)
+        assertEquals(
+            listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f),
+            SpeedPresets,
+        )
+    }
+
+    @Test
+    fun `the presets span the full range the server accepts`() {
+        // The clamps allowed 0.5-3.0 long before the picker offered it, so the list was the real
+        // ceiling. Pin both ends against a future edit that narrows it again.
+        assertEquals(0.5f, SpeedPresets.min(), 0.0001f)
+        assertEquals(3.0f, SpeedPresets.max(), 0.0001f)
+        for (preset in SpeedPresets) {
+            assertEquals(preset, sanitizeSpeed(preset), 0.0001f)
+        }
+    }
+
+    @Test
+    fun `presets are offered in ascending order without duplicates`() {
+        assertEquals(SpeedPresets.sorted(), SpeedPresets)
+        assertEquals(SpeedPresets.distinct().size, SpeedPresets.size)
+    }
+
+    @Test
+    fun `a speed that is already a preset adds nothing to the picker`() {
+        assertEquals(SpeedPresets, speedOptions(1.5f))
+        assertEquals(SpeedPresets, speedOptions(3.0f))
+    }
+
+    @Test
+    fun `a speed set under the old presets stays selectable`() {
+        // 0.8x was a preset before the list was widened to match desktop. Dropping it from the
+        // picker must not strand someone who is listening at it: the sheet marks the current speed
+        // with "Current", and a value absent from the list can never be marked or returned to.
+        val options = speedOptions(0.8f)
+        assertTrue(options.any { kotlin.math.abs(it - 0.8f) < 0.0001f })
+        assertEquals(SpeedPresets.size + 1, options.size)
+        assertTrue(options.containsAll(SpeedPresets))
+    }
+
+    @Test
+    fun `an inserted speed sorts between its neighbours`() {
+        val options = speedOptions(0.8f)
+        assertEquals(options.sorted(), options)
+        assertEquals(0.75f, options[options.indexOfFirst { it > 0.79f && it < 0.81f } - 1], 0.0001f)
+    }
+
+    @Test
+    fun `a speed arriving from the account is clamped before it is offered`() {
+        // Once preferences follow the account the value can come from another client, so the
+        // picker must not offer something the player would refuse to play at.
+        assertEquals(SpeedPresets, speedOptions(9.0f))
+        assertEquals(SpeedPresets, speedOptions(Float.NaN))
+        assertTrue(speedOptions(0.6f).all { it in 0.5f..3.0f })
     }
 
     @Test

@@ -156,7 +156,7 @@ import dk.perspektiva.ttsroad.data.DownloadPrefs
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
-import dk.perspektiva.ttsroad.data.SpeedPresets
+import dk.perspektiva.ttsroad.data.speedOptions
 import dk.perspektiva.ttsroad.data.TextSpan
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.formatReaderFontScale
@@ -1435,7 +1435,7 @@ private fun PlayerScreen(
                 color = AarisColor.Accent,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
             )
-            SpeedPresets.forEach { preset ->
+            speedOptions(playerState.speed).forEach { preset ->
                 val selected = kotlin.math.abs(preset - playerState.speed) < 0.01f
                 Column {
                     Row(

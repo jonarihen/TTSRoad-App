@@ -15,6 +15,17 @@ Notable changes to the TTSRoad Android client.
 - Servers whose library is still one shared list show none of this, rather than a toggle they
   cannot honour.
 
+### Changed
+
+- **The speed picker goes up to 3.0x.** The clamps always allowed 0.5–3.0, but the sheet only
+  offers presets, so the list itself was the real ceiling and it stopped at 2.0x. It now offers the
+  same nine steps as the desktop client, spanning the whole range the server's `playback_speed`
+  spec accepts.
+- 0.8x is no longer one of the presets. Anyone listening at it keeps it: the sheet adds whatever
+  speed is actually set to the list when it is not a preset, so the current speed stays visible and
+  reachable rather than being snapped to 0.75x silently. Same mechanism will cover a speed that
+  arrives from the account once preferences sync.
+
 ## 0.10.0 — 2026-08-08
 
 Signed with the same pinned key as 0.7.0 through 0.9.0, so this installs directly over any of them
