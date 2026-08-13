@@ -105,6 +105,43 @@ class PendingProgressStoreTest {
     }
 
     @Test
+    fun `stamps carry at most three fractional-second digits`() {
+        // The trap in issue #72. `datetime.fromisoformat` before Python 3.11 accepts only 3 or 6
+        // fractional digits, and the backend's floor is 3.10; `Instant.now().toString()` emits as
+        // many as the clock has, which on Android is frequently 9. A stamp the server cannot parse
+        // is rejected as `invalid_client_updated_at`, and a rejected item is dropped rather than
+        // retried — a silently lost position, which is what /playback/sync exists to prevent.
+        //
+        // It would also not fail against a 3.11+ deployment, so this is pinned here rather than
+        // discovered in the field.
+        assertEquals("2023-11-14T22:13:20.123Z", iso8601Utc(1_700_000_000_123L))
+        assertEquals("2023-11-14T22:13:20.100Z", iso8601Utc(1_700_000_000_100L))
+    }
+
+    @Test
+    fun `the real clock never produces an unparseable stamp`() {
+        // Over repeated calls, because the digit count varies with what the clock happens to read
+        // and a single sample can pass by luck. The desktop client pins the same shape.
+        val parseable = Regex("""^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$""")
+        repeat(200) {
+            val stamp = iso8601Utc(System.currentTimeMillis())
+            assertTrue("unparseable stamp: $stamp", parseable.matches(stamp))
+        }
+    }
+
+    @Test
+    fun `a recorded entry's stamp keeps sub-second ordering`() {
+        // Seconds precision would round two positions in the same second to a tie. The server
+        // applies last-write-wins on this field, and the web client stamps in milliseconds, so a
+        // phone truncating to seconds could stamp a genuinely newer position as older than a
+        // browser write from earlier in the same second and lose to it.
+        val store = store { 1_700_000_000_900L }
+        val entry = store.record(1, 7, 10.0, false)
+
+        assertEquals("2023-11-14T22:13:20.900Z", entry.clientUpdatedAt)
+    }
+
+    @Test
     fun `the queue is capped, dropping the oldest first`() {
         val store = store()
         for (chapter in 1..(MaxPendingProgress + 10)) {

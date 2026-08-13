@@ -6,8 +6,7 @@ import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
 import java.time.Instant
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 
 /**
  * One recorded playback position, waiting to reach the server.
@@ -22,17 +21,32 @@ data class PendingProgress(
     val chapterId: Int,
     val positionSeconds: Double,
     val isPlayed: Boolean,
-    /** ISO-8601 UTC, e.g. `2026-08-11T09:41:07Z` — the format the backend parses. */
+    /** ISO-8601 UTC, e.g. `2026-08-11T09:41:07.412Z` — see [iso8601Utc] for why the precision. */
     val clientUpdatedAt: String,
     /** Epoch millis of the same moment, kept so entries can be ordered without reparsing. */
     val recordedAtMillis: Long,
 )
 
-/** The server's format for `client_updated_at`. Seconds precision, explicit Z, never a local zone. */
-private val Iso8601Utc: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC)
-
-fun iso8601Utc(epochMillis: Long): String = Iso8601Utc.format(Instant.ofEpochMilli(epochMillis))
+/**
+ * The server's format for `client_updated_at`: ISO-8601 UTC with an explicit `Z` and **at most
+ * three** fractional-second digits.
+ *
+ * The digit count is the part that matters, and it is a trap rather than a preference. The backend
+ * hands the string to Python's `datetime.fromisoformat`, which before 3.11 accepts only 3 or 6
+ * fractional digits — and the backend's stated floor is 3.10. The obvious way to write this,
+ * `Instant.now().toString()`, emits as many digits as the platform clock has, which on Android is
+ * frequently **9**. A stamp the server cannot parse comes back as `invalid_client_updated_at`, and
+ * a rejected item is dropped rather than retried, so the failure is a silently lost listening
+ * position — the exact thing `/playback/sync` exists to prevent. Worse, it would not show up when
+ * testing against a 3.11+ deployment. See issue #72.
+ *
+ * Taking epoch **millis** is what enforces the bound structurally rather than by convention:
+ * [Instant.ofEpochMilli] can only carry millisecond precision, and [Instant.toString] emits
+ * fractional digits in groups of three, so the result always has either 0 or 3 of them. Both parse
+ * everywhere. A future refactor would have to change this signature to reintroduce the bug.
+ */
+fun iso8601Utc(epochMillis: Long): String =
+    Instant.ofEpochMilli(epochMillis).truncatedTo(ChronoUnit.MILLIS).toString()
 
 /**
  * How many chapters can be waiting to sync before the oldest are dropped.
