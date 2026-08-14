@@ -1872,7 +1872,7 @@ private fun PlayerScreen(
                             sleepTimeInput = it
                             sleepTimeError = null
                         },
-                        placeholder = { Text("23:49") },
+                        placeholder = { Text("2349") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(1f),
@@ -1883,7 +1883,7 @@ private fun PlayerScreen(
                             val target = parsed?.let { (h, m) -> resolveSleepTimestamp(h, m, now) }
                             val nearest = target?.let { t -> history.minByOrNull { kotlin.math.abs(it.timestamp - t) } }
                             when {
-                                parsed == null -> sleepTimeError = "Use 24h HH:MM, e.g. 23:49"
+                                parsed == null -> sleepTimeError = "Use 24h time, e.g. 2349 or 23:49"
                                 nearest == null -> sleepTimeError = "No playback history to match"
                                 else -> {
                                     scope.launch {
@@ -4569,11 +4569,21 @@ private fun relativeAgo(deltaMs: Long): String {
 private fun formatClockTime(context: android.content.Context, epochMillis: Long): String =
     android.text.format.DateFormat.getTimeFormat(context).format(Date(epochMillis))
 
-/** Parses a "HH:MM" (24h) clock time typed by the user, e.g. from a health app's sleep log. */
-private fun parseClockTime(input: String): Pair<Int, Int>? {
-    val match = Regex("""^\s*(\d{1,2}):(\d{2})\s*$""").matchEntire(input) ?: return null
-    val hour = match.groupValues[1].toIntOrNull() ?: return null
-    val minute = match.groupValues[2].toIntOrNull() ?: return null
+/**
+ * Parses a 24-hour clock time typed from a health app's sleep log.
+ *
+ * The field deliberately keeps the numeric keyboard: every Android number pad can enter `2349`,
+ * while many provide no colon at all. The colon form remains valid for pasted values and hardware
+ * keyboards so this change does not reject input the sheet accepted before.
+ */
+internal fun parseClockTime(input: String): Pair<Int, Int>? {
+    val value = input.trim()
+    val compact = Regex("""^(\d{2})(\d{2})$""").matchEntire(value)
+    val separated = Regex("""^(\d{1,2}):(\d{2})$""").matchEntire(value)
+    val hour = (compact?.groupValues?.get(1) ?: separated?.groupValues?.get(1))
+        ?.toIntOrNull() ?: return null
+    val minute = (compact?.groupValues?.get(2) ?: separated?.groupValues?.get(2))
+        ?.toIntOrNull() ?: return null
     if (hour !in 0..23 || minute !in 0..59) return null
     return hour to minute
 }
