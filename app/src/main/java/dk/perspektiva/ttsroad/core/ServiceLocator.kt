@@ -12,8 +12,10 @@ import dk.perspektiva.ttsroad.data.ReaderPreferenceStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.download.OfflineDownloads
+import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
+import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.update.UpdateManager
 import java.io.File
@@ -64,6 +66,12 @@ object ServiceLocator {
 
     @Volatile
     private var accountPreferenceSync: AccountPreferenceSync? = null
+
+    @Volatile
+    private var pendingProgress: PendingProgressStore? = null
+
+    @Volatile
+    private var progressSync: ProgressSync? = null
 
     fun init(context: Context) {
         tokenStore(context)
@@ -148,6 +156,26 @@ object ServiceLocator {
                 readerPreferences = readerPreferences(context),
                 chapterListPreferences = chapterListPreferences(context),
             ).also { accountPreferenceSync = it }
+        }
+
+    /**
+     * Positions recorded on this device that the server has not accepted yet.
+     *
+     * One per process, like everything else here: the media service records into it and flushes it,
+     * and two instances would each hold half the backlog and overwrite the other's file.
+     */
+    fun pendingProgress(context: Context): PendingProgressStore =
+        pendingProgress ?: synchronized(this) {
+            pendingProgress
+                ?: PendingProgressStore(context.applicationContext).also { pendingProgress = it }
+        }
+
+    fun progressSync(context: Context): ProgressSync =
+        progressSync ?: synchronized(this) {
+            progressSync ?: ProgressSync(
+                repository = repository(context),
+                store = pendingProgress(context),
+            ).also { progressSync = it }
         }
 
     fun libraryCache(context: Context): LibraryCache =

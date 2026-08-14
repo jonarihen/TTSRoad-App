@@ -31,6 +31,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.data.BookmarkKindAuto
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
@@ -40,11 +41,17 @@ import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.parseSessionEnd
+import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
+import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.PlaybackFailure
+import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.ShakeDetector
 import dk.perspektiva.ttsroad.player.SleepTimerAction
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
+import dk.perspektiva.ttsroad.player.ServerBreadcrumbIntervalMs
+import dk.perspektiva.ttsroad.player.breadcrumbsToPrune
+import dk.perspektiva.ttsroad.player.shouldWriteBreadcrumb
 import dk.perspektiva.ttsroad.player.classifyPlaybackError
 import dk.perspektiva.ttsroad.player.retryDelayMs
 import dk.perspektiva.ttsroad.player.skipTargetMs
@@ -74,6 +81,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private lateinit var session: MediaLibrarySession
     private lateinit var sleepTimer: SleepTimerController
+    private lateinit var pendingProgress: PendingProgressStore
+    private lateinit var progressSync: ProgressSync
     private var shakeDetector: ShakeDetector? = null
     private var lastLibrary: LibraryResponse? = null
 
@@ -81,6 +90,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     // outage later in the night gets a fresh set of attempts rather than giving up immediately.
     private var retryJob: Job? = null
     private var retryAttempt = 0
+
+    // Throttles for the server-side jump-back trail; see player/PlaybackBreadcrumbs.kt.
+    private var lastBreadcrumbAt: Long? = null
+    private var lastBreadcrumbPruneAt: Long? = null
 
     @Volatile
     private var authHeader: String? = null
@@ -97,6 +110,11 @@ class TtsRoadMediaService : MediaLibraryService() {
         repository = ServiceLocator.repository(this)
         sleepTimer = ServiceLocator.sleepTimer()
         preferences = ServiceLocator.playbackPreferences(this)
+        pendingProgress = ServiceLocator.pendingProgress(this)
+        progressSync = ServiceLocator.progressSync(this)
+        // Anything recorded while the last session was offline is still waiting. Flush it before
+        // playback adds to it, so a reconnect settles the backlog rather than deepening it.
+        serviceScope.launch { progressSync.flush() }
         serviceScope.launch {
             tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
         }
@@ -418,13 +436,55 @@ class TtsRoadMediaService : MediaLibraryService() {
             position >= total - 20_000L || position.toDouble() / total.toDouble() >= 0.96
         } ?: false
 
-        runCatching {
-            repository.saveProgress(
-                fictionId = fictionId,
+        // Queue first, then try to send. The write used to be a bare `runCatching` around the post,
+        // so a position recorded with no connection was simply lost — and the next successful write
+        // carried an unstamped position the server could not order against one reached in the
+        // browser meanwhile, and so overwrote it. The queue is what makes the position survive
+        // being offline, and the stamp is what lets the server decide who is actually newer.
+        pendingProgress.record(
+            fictionId = fictionId,
+            chapterId = chapterId,
+            positionSeconds = position / 1000.0,
+            isPlayed = forcePlayed || nearComplete,
+        )
+        progressSync.flush()
+
+        writeBreadcrumb(chapterId = chapterId, positionMs = position)
+    }
+
+    /**
+     * Drop a coarse jump-back breadcrumb on the server, so the moment is findable from the browser
+     * and from any other device on this account.
+     *
+     * Deliberately much rarer than the local snapshot above — see [ServerBreadcrumbIntervalMs]. The
+     * local store keeps its full-resolution trail either way; this is the cross-device overlay.
+     *
+     * Every failure here is swallowed. A breadcrumb is a convenience, and the caller's real job is
+     * saving the listening position — an offline phone must not lose that to a failed extra write.
+     */
+    private suspend fun writeBreadcrumb(chapterId: Int, positionMs: Long) {
+        val now = System.currentTimeMillis()
+        if (!shouldWriteBreadcrumb(lastBreadcrumbAt, now)) return
+        // Claimed before the call rather than after it, so a slow or hanging write cannot let the
+        // next tick queue a second one behind it.
+        lastBreadcrumbAt = now
+
+        val written = runCatching {
+            repository.createBookmark(
                 chapterId = chapterId,
-                positionSeconds = position / 1000.0,
-                isPlayed = forcePlayed || nearComplete,
+                positionSeconds = positionMs / 1000.0,
+                kind = BookmarkKindAuto,
             )
+        }.getOrNull()
+        // Null means this server has no bookmarks capability at all. Stop reaching for it: there is
+        // nothing to prune either, and the next tick would only repeat the same failed call.
+        if (written == null) return
+
+        if (!shouldWriteBreadcrumb(lastBreadcrumbPruneAt, now, BreadcrumbPruneIntervalMs)) return
+        lastBreadcrumbPruneAt = now
+        runCatching {
+            val stale = breadcrumbsToPrune(repository.breadcrumbs().orEmpty())
+            for (id in stale) repository.deleteBookmark(id)
         }
     }
 
