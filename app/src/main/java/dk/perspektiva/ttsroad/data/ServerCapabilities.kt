@@ -69,6 +69,16 @@ data class ServerCapabilities(
      * actually hold these settings.
      */
     val playerPreferences: Boolean = false,
+
+    /**
+     * Adding, editing and deleting fictions over `/api/mobile/fictions`.
+     *
+     * The same handlers the web console uses, behind the mobile door so the add-fields-don't-rename
+     * guarantee and the mobile contract test cover them. The routes are admin-gated server-side; the
+     * flag says the server *has* them, not that this account may use them — see [SessionState.isAdmin]
+     * for that half.
+     */
+    val fictionManagement: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch. Null on a server that does not say, in
@@ -98,6 +108,7 @@ data class ServerCapabilities(
                 queue = flags.flag("queue"),
                 follows = flags.flag("follows"),
                 playerPreferences = flags.flag("player_preferences"),
+                fictionManagement = flags.flag("fiction_management"),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
                 maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             )
