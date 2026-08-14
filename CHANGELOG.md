@@ -2,7 +2,10 @@
 
 Notable changes to the TTSRoad Android client.
 
-## Unreleased
+## 0.11.0 — 2026-08-14
+
+Signed with the same pinned key as 0.7.0 through 0.10.0, so this installs directly over any of them
+as an ordinary update.
 
 ### Added
 
@@ -30,6 +33,11 @@ Notable changes to the TTSRoad Android client.
 - **A book no longer just stops at the end.** When the last chapter finishes, the server decides
   what follows: the head of your queue, or — if your account is set to keep going — the oldest
   unplayed chapter in your library. Set it to stop and nothing changes.
+- **Admins can add and delete fictions from the phone.** Paste a Royal Road URL or ID into **All
+  fictions** to start tracking it. The fiction screen can remove a fiction and its chapters, audio,
+  saved positions and bookmarks after an explicit destructive confirmation.
+- Both controls appear only for an admin connected to a server that advertises fiction management;
+  the server still enforces every write and older servers keep the controls hidden.
 
 ### Changed
 
@@ -110,6 +118,11 @@ No new requests: every figure is a sum over the chapter list the screen has alre
   arrives from the account once preferences sync.
 
 ### Fixed
+
+- **The sleep wind-back field now works with the numeric phone keyboard.** Enter a four-digit
+  24-hour time such as `2349` or `0945`; pasted and hardware-keyboard values such as `23:49` remain
+  valid. The old numeric keypad often had no colon key, making the only accepted format impossible
+  to type. ([#85](https://github.com/jonarihen/TTSRoad-App/issues/85))
 
 - **Listening offline no longer loses your place, and no longer overwrites a newer one.** A position
   recorded with no connection used to be discarded outright, and the next write that did get through
