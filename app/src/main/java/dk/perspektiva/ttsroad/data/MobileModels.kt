@@ -538,3 +538,34 @@ data class PlaybackSyncResponse(
     val rejected: List<PlaybackSyncRejected> = emptyList(),
     @param:Json(name = "server_state") val serverState: List<PlaybackSyncState> = emptyList(),
 )
+
+/**
+ * `POST /api/mobile/fictions` — track a new fiction by URL or bare Royal Road id.
+ *
+ * Only `fiction_url` is sent. Voice, rate and the sync window all have server-side defaults, and a
+ * phone is the wrong place to be choosing a TTS voice for a whole serial — the fiction screen and
+ * the web console are both better homes for that than a paste-a-URL box.
+ */
+data class AddFictionRequest(
+    @param:Json(name = "fiction_url") val fictionUrl: String,
+)
+
+/** What `POST` answers: the newly tracked row under `fiction`. */
+data class FictionWriteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    val fiction: FictionSummary? = null,
+)
+
+/**
+ * `DELETE /api/mobile/fictions/{id}`.
+ *
+ * The mobile route answers with a body where the web route answers `204`, precisely so a phone on a
+ * flaky connection can tell "deleted" from "the request never arrived".
+ */
+data class FictionDeleteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    val deleted: Boolean = false,
+)
