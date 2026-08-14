@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.data
 
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,14 @@ import retrofit2.converter.moshi.MoshiConverterFactory
  * upgrade the same day without making discovery a per-screen cost.
  */
 private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
+
+/**
+ * Batch size to use when the server advertises `batch_progress` but names no limit.
+ *
+ * Deliberately well under the 500 the backend actually enforces: guessing high costs a whole flush
+ * to a 400, while guessing low costs one extra round trip in a case that is already rare.
+ */
+const val DefaultPlaybackSyncBatchLimit: Int = 100
 
 /** Outcome of a mobile login attempt. */
 sealed interface LoginResult {
@@ -239,7 +248,32 @@ class TtsRoadRepository(
         synchronized(capabilityCache) { capabilityCache.remove(normalized) }
     }
 
-    suspend fun library(): LibraryResponse = withAuthorizedApi { it.library() }
+    /**
+     * The caller's shelf, or the whole catalogue with [scope] = [LibraryScopeAll].
+     *
+     * The parameter is always sent. A server without per-user libraries ignores it and answers the
+     * shared list either way, and the response says which scope it actually applied.
+     */
+    suspend fun library(scope: String = LibraryScopeFollowed): LibraryResponse =
+        withAuthorizedApi { it.library(scope) }
+
+    /**
+     * Follow or unfollow a fiction. Answers the resulting state, or null when the server has no
+     * per-user libraries and the control should not have been offered.
+     *
+     * A 404 means the fiction is gone from the server — not a failure to report as one, but it
+     * cannot be followed either, so the caller is told what is true: it is not followed.
+     */
+    suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? {
+        if (!_currentCapabilities.value.follows) return null
+        return try {
+            withAuthorizedApi {
+                if (following) it.followFiction(fictionId) else it.unfollowFiction(fictionId)
+            }.following
+        } catch (e: HttpException) {
+            if (e.code() == 404) false else throw e
+        }
+    }
 
     suspend fun chapters(
         fictionId: Int,
@@ -351,6 +385,127 @@ class TtsRoadRepository(
         if (!_currentCapabilities.value.search) return null
         return withAuthorizedApi { it.search(query = trimmed, fictionId = fictionId) }
     }
+
+    /**
+     * The account's stored preference blob, or null when this server cannot hold one.
+     *
+     * Gated on the discovered `player_preferences` capability rather than on a 404: an older server
+     * answers `/api/me/preferences` perfectly well and simply drops every key it does not know, so
+     * probing the endpoint would report success while the settings quietly went nowhere.
+     */
+    suspend fun accountPreferences(): Map<String, Any?>? {
+        if (!_currentCapabilities.value.playerPreferences) return null
+        return ifPreferencesSupported { it.accountPreferences() }?.preferences
+    }
+
+    /**
+     * PATCHes [changes] and answers the echoed blob, or null when the server cannot hold it.
+     *
+     * [changes] must carry only the keys being changed — see `chapterFilterPatch` and friends.
+     */
+    suspend fun updateAccountPreferences(changes: Map<String, Any?>): Map<String, Any?>? {
+        if (changes.isEmpty()) return null
+        if (!_currentCapabilities.value.playerPreferences) return null
+        return ifPreferencesSupported { it.updateAccountPreferences(changes) }?.preferences
+    }
+
+    /**
+     * Preference calls must never take a screen down with them.
+     *
+     * Every caller has a working local value already — the account copy is an improvement on it,
+     * not a prerequisite — so a server that has the capability but fails the call anyway (offline,
+     * mid-restart, a 404 from a version skew the flag did not predict) answers null and the phone
+     * keeps what it has. A 401 still propagates through [authorized] and signs the session out.
+     */
+    private suspend fun <T> ifPreferencesSupported(block: suspend (TtsRoadApi) -> T): T? = try {
+        withAuthorizedApi(block)
+    } catch (e: HttpException) {
+        if (e.code() == 401) throw e else null
+    } catch (e: IOException) {
+        null
+    }
+
+    /**
+     * The account's bookmarks, or null on a server without the `bookmarks` capability.
+     *
+     * Null and empty mean different things and the caller must keep them apart: null is "this
+     * server cannot do bookmarks", which hides the UI; empty is "you have not made any yet".
+     */
+    suspend fun bookmarks(fictionId: Int? = null, chapterId: Int? = null): List<Bookmark>? {
+        if (!_currentCapabilities.value.bookmarks) return null
+        return withAuthorizedApi {
+            it.bookmarks(fictionId = fictionId, chapterId = chapterId)
+        }.bookmarks
+    }
+
+    /**
+     * The account's jump-back breadcrumbs, or null on a server without the `bookmarks` capability.
+     *
+     * Separate from [bookmarks] rather than a parameter on it so the two can never be confused at a
+     * call site: this list is machine-written and can run to hundreds of rows, and rendering it
+     * where the user's own marks belong is the bug this filter exists to prevent.
+     */
+    suspend fun breadcrumbs(): List<Bookmark>? {
+        if (!_currentCapabilities.value.bookmarks) return null
+        return withAuthorizedApi { it.bookmarks(kind = BookmarkKindAuto) }.bookmarks
+    }
+
+    /** The created bookmark, or null when the server cannot hold one. Throws on a real failure. */
+    suspend fun createBookmark(
+        chapterId: Int,
+        positionSeconds: Double,
+        label: String? = null,
+        note: String? = null,
+        kind: String = BookmarkKindManual,
+    ): Bookmark? {
+        if (!_currentCapabilities.value.bookmarks) return null
+        return withAuthorizedApi {
+            it.createBookmark(
+                CreateBookmarkRequest(
+                    chapterId = chapterId,
+                    positionSeconds = positionSeconds.coerceAtLeast(0.0),
+                    label = label?.trim()?.takeIf { text -> text.isNotEmpty() },
+                    note = note?.trim()?.takeIf { text -> text.isNotEmpty() },
+                    kind = kind,
+                ),
+            )
+        }.bookmark
+    }
+
+    suspend fun updateBookmark(bookmarkId: Int, label: String?, note: String?): Bookmark? {
+        if (!_currentCapabilities.value.bookmarks) return null
+        return withAuthorizedApi {
+            it.updateBookmark(bookmarkId, UpdateBookmarkRequest(label = label, note = note))
+        }.bookmark
+    }
+
+    /** True when the bookmark is gone. A 404 counts: it is already not there. */
+    suspend fun deleteBookmark(bookmarkId: Int): Boolean {
+        if (!_currentCapabilities.value.bookmarks) return false
+        return try {
+            withAuthorizedApi { it.deleteBookmark(bookmarkId) }
+            true
+        } catch (e: HttpException) {
+            // Deleting something already deleted — from the browser, or a double tap — is the
+            // outcome the caller wanted, not an error to put on screen.
+            if (e.code() == 404) true else throw e
+        }
+    }
+
+    /**
+     * Batched, timestamped progress. Answers null when the server has no `batch_progress` support,
+     * which is the caller's signal to fall back to the single-item endpoint.
+     */
+    suspend fun syncProgress(items: List<PlaybackSyncItem>): PlaybackSyncResponse? {
+        if (items.isEmpty()) return null
+        if (!_currentCapabilities.value.batchProgress) return null
+        return withAuthorizedApi { it.syncProgress(PlaybackSyncRequest(items = items)) }
+    }
+
+    /** How many items one `/playback/sync` call may carry against the current server. */
+    fun playbackSyncBatchLimit(): Int =
+        _currentCapabilities.value.maxPlaybackSyncItems?.takeIf { it > 0 }
+            ?: DefaultPlaybackSyncBatchLimit
 
     /** Every mobile session on this account, or null on a server that has no devices endpoint. */
     suspend fun devices(): List<DeviceSession>? = ifDevicesSupported { it.devices() }?.devices
