@@ -27,6 +27,9 @@ sealed interface AppScreen {
 
     /** The account's other mobile sign-ins, reached from Settings. */
     data object Devices : AppScreen
+
+    /** Every bookmark on the account, newest first. Reached from Settings and from the player. */
+    data object Bookmarks : AppScreen
 }
 
 /** Stable key for per-entry saved UI state (scroll offsets, search text). */
@@ -41,6 +44,7 @@ val AppScreen.saveKey: String
         is AppScreen.Reader -> "Reader:$chapterId"
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Devices"
+        AppScreen.Bookmarks -> "Bookmarks"
     }
 
 /** The stack every session starts from. */

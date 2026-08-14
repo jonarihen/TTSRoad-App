@@ -137,6 +137,7 @@ import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterFilter
+import dk.perspektiva.ttsroad.data.Bookmark
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.DeviceSession
 import dk.perspektiva.ttsroad.data.FictionSummary
@@ -579,6 +580,7 @@ private fun MainScaffold(
         is AppScreen.Reader -> screen.title
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Device sessions"
+        AppScreen.Bookmarks -> "Bookmarks"
     }
 
     Scaffold(
@@ -681,12 +683,19 @@ private fun MainScaffold(
                     session = session,
                     repository = repository,
                     onOpenDevices = { onScreenChange(AppScreen.Devices) },
+                    onOpenBookmarks = { onScreenChange(AppScreen.Bookmarks) },
                 )
 
                 AppScreen.Devices -> DevicesScreen(
                     padding = padding,
                     session = session,
                     repository = repository,
+                )
+
+                AppScreen.Bookmarks -> BookmarksScreen(
+                    padding = padding,
+                    repository = repository,
+                    onOpenReader = { onScreenChange(it) },
                 )
             }
         }
@@ -1226,6 +1235,16 @@ private fun PlayerScreen(
     var showJumpBack by remember { mutableStateOf(false) }
     var showSleepTimer by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
+    // Confirmation for the bookmark button. A mark made while listening gives no other sign that
+    // anything happened, and the alternative — opening the list — is the thing this avoids.
+    var bookmarkFeedback by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(bookmarkFeedback) {
+        // Clears itself: it is a confirmation, not a state the screen should settle into.
+        if (bookmarkFeedback != null) {
+            delay(4_000)
+            bookmarkFeedback = null
+        }
+    }
     // Track the drag locally and only seek on release, so scrubbing doesn't spam the player.
     var dragMs by remember { mutableStateOf<Float?>(null) }
 
@@ -1240,6 +1259,13 @@ private fun PlayerScreen(
         playerState.error?.let { message ->
             Spacer(modifier = Modifier.height(12.dp))
             PlaybackErrorBanner(message = message, onRetry = playbackController::retry)
+        }
+        bookmarkFeedback?.let { message ->
+            MetaText(
+                text = "// $message",
+                color = AarisColor.Accent,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
         BoxWithConstraints(
             modifier = Modifier
@@ -1404,6 +1430,30 @@ private fun PlayerScreen(
                         },
                     ) {
                         Text("READ", maxLines = 1, softWrap = false)
+                    }
+                }
+                // Same gating as READ: hidden outright on a server without bookmarks, rather than
+                // offered and then failing.
+                if (capabilities.bookmarks && playingChapterId != null) {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                // Deliberately does not touch playback: marking a line worth
+                                // keeping is something you do *while* listening.
+                                bookmarkFeedback = runCatching {
+                                    repository.createBookmark(
+                                        chapterId = playingChapterId,
+                                        positionSeconds = playerState.positionMs / 1000.0,
+                                        label = playerState.title.takeIf { it.isNotBlank() },
+                                    )
+                                }.fold(
+                                    onSuccess = { "Bookmarked at ${formatDuration(playerState.positionMs)}" },
+                                    onFailure = { "Could not save the bookmark" },
+                                )
+                            }
+                        },
+                    ) {
+                        Text("BOOKMARK", maxLines = 1, softWrap = false)
                     }
                 }
                 if (jumpBackOptions.isNotEmpty()) {
@@ -1816,11 +1866,13 @@ private fun SettingsScreen(
     session: SessionState,
     repository: TtsRoadRepository,
     onOpenDevices: () -> Unit,
+    onOpenBookmarks: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     val downloads = remember { ServiceLocator.offlineDownloads(context) }
@@ -1869,6 +1921,17 @@ private fun SettingsScreen(
                 )
                 OutlinedButton(onClick = onOpenDevices, shape = RectangleShape) {
                     Text("DEVICE SESSIONS")
+                }
+                // Hidden on a server without bookmarks, rather than opening a screen that 404s.
+                if (capabilities.bookmarks) {
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    MetaText(
+                        text = "Marks you made in the player. The same ones the browser shows.",
+                        color = AarisColor.Dim,
+                    )
+                    OutlinedButton(onClick = onOpenBookmarks, shape = RectangleShape) {
+                        Text("BOOKMARKS")
+                    }
                 }
             }
         }
@@ -2111,6 +2174,166 @@ private fun SettingsScreen(
                 TextButton(onClick = { confirmDeleteDownloads = false }) { Text("CANCEL") }
             },
         )
+    }
+}
+
+/**
+ * Every bookmark on the account, newest first.
+ *
+ * Loaded on entry rather than cached, for the same reason the devices list is: it is only ever
+ * opened deliberately, and it is shared with the browser, so a stale copy would be showing marks
+ * that may have been edited or deleted somewhere else.
+ *
+ * Only `manual` marks are listed. The `auto` rows in the same table are the jump-back breadcrumbs
+ * the web player writes, and a list of chosen marks drowned in them would be useless.
+ */
+@Composable
+private fun BookmarksScreen(
+    padding: PaddingValues,
+    repository: TtsRoadRepository,
+    onOpenReader: (AppScreen.Reader) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    var bookmarks by remember { mutableStateOf<List<Bookmark>?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isBusy by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf<Bookmark?>(null) }
+
+    fun load() {
+        scope.launch {
+            isLoading = true
+            error = null
+            runCatching { repository.bookmarks() }
+                // Null means the server cannot do bookmarks at all, which the capability gate
+                // should already have caught; empty means none have been made yet.
+                .onSuccess { bookmarks = it.orEmpty() }
+                .onFailure { error = it.message ?: "Could not load bookmarks" }
+            isLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    val loaded = bookmarks
+    when {
+        isLoading && loaded == null && error == null -> LoadingPane(padding)
+        loaded == null -> ErrorPane(
+            padding = padding,
+            message = error ?: "Could not load bookmarks",
+            onRetry = ::load,
+        )
+
+        else -> Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            if (isLoading) {
+                ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+            }
+            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+
+            if (loaded.isEmpty()) {
+                MetaText(text = "// No bookmarks", color = AarisColor.Accent)
+                EmptyCard(
+                    "Tap BOOKMARK in the player to mark where you are. Marks made here show up " +
+                        "in the browser too.",
+                )
+            } else {
+                MetaText(text = "// ${loaded.size} bookmarks", color = AarisColor.Accent)
+                loaded.forEach { bookmark ->
+                    BookmarkCard(
+                        bookmark = bookmark,
+                        // Read-along is where a bookmark actually leads: the point of marking a
+                        // line is going back to read it.
+                        onOpen = if (capabilities.readAlong && bookmark.chapterId > 0) {
+                            {
+                                onOpenReader(
+                                    AppScreen.Reader(
+                                        chapterId = bookmark.chapterId,
+                                        title = bookmark.chapterTitle ?: bookmark.resolvedLabel,
+                                    ),
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        onDelete = { confirmDelete = bookmark }.takeIf { !isBusy },
+                    )
+                }
+            }
+
+            OutlinedButton(
+                onClick = ::load,
+                enabled = !isLoading && !isBusy,
+                shape = RectangleShape,
+            ) {
+                Text("REFRESH")
+            }
+        }
+    }
+
+    confirmDelete?.let { bookmark ->
+        ConfirmDialog(
+            title = "DELETE BOOKMARK",
+            body = "\"${bookmark.resolvedLabel}\" will be removed here and in the browser.",
+            confirmLabel = "DELETE IT",
+            onConfirm = {
+                confirmDelete = null
+                scope.launch {
+                    isBusy = true
+                    error = null
+                    runCatching { repository.deleteBookmark(bookmark.id) }
+                        .onFailure { error = it.message ?: "Could not delete the bookmark" }
+                    isBusy = false
+                    // Reload rather than removing locally: the server owns the list, and it is
+                    // shared with the browser.
+                    load()
+                }
+            },
+            onDismiss = { confirmDelete = null },
+        )
+    }
+}
+
+@Composable
+private fun BookmarkCard(
+    bookmark: Bookmark,
+    onOpen: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+) {
+    AarisCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (onOpen != null) Modifier.clickable(onClick = onOpen) else Modifier)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = bookmark.resolvedLabel,
+                style = MaterialTheme.typography.titleMedium,
+                color = AarisColor.Ink,
+            )
+            // The payload carries the fiction and chapter titles precisely so a list like this
+            // needs no extra request per row.
+            bookmark.fictionTitle?.let { MetaText(text = it, color = AarisColor.Muted) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                bookmark.positionLabel?.let { AarisTag(text = it) }
+                bookmark.chapterNumber?.let { AarisTag(text = "CH ${chapterNumberLabel(it)}") }
+            }
+            bookmark.note?.let { MetaText(text = it, color = AarisColor.Dim) }
+            if (onDelete != null) {
+                TextButton(onClick = onDelete) {
+                    Text("DELETE", color = AarisColor.Danger)
+                }
+            }
+        }
     }
 }
 
@@ -2859,10 +3082,12 @@ private fun ChapterRow(
     }
 }
 
-private fun chapterNumberLabel(chapter: ChapterSummary): String {
-    val n = chapter.displayNumber ?: return "—"
-    return if (n % 1.0 == 0.0) n.toLong().toString() else n.toString()
-}
+private fun chapterNumberLabel(chapter: ChapterSummary): String =
+    chapter.displayNumber?.let(::chapterNumberLabel) ?: "—"
+
+/** "12" rather than "12.0", but "12.5" kept — chapter numbers are not always whole. */
+private fun chapterNumberLabel(number: Double): String =
+    if (number % 1.0 == 0.0) number.toLong().toString() else number.toString()
 
 /** The row's download button. Its icon is the *action*, not the state — except when there is none. */
 private fun downloadIcon(state: ChapterDownloadState): ImageVector = when (state) {

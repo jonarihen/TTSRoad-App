@@ -213,3 +213,139 @@ data class PlaybackMarkResponse(
     val count: Int = 0,
 )
 
+
+/**
+ * One bookmark, exactly as `/api/bookmarks` and `/api/mobile/bookmarks` both return it.
+ *
+ * Chapter and fiction titles ride along in the payload precisely so an account-wide list can be
+ * rendered without a second request per row — use them rather than looking the chapter up.
+ *
+ * Everything but the id is optional: the server returns nulls for a bookmark whose chapter has been
+ * removed, and a list that failed to parse over one such row would be worse than one that shows it.
+ */
+data class Bookmark(
+    val id: Int = 0,
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "position_label") val positionLabel: String? = null,
+    val label: String? = null,
+    val note: String? = null,
+    val color: String? = null,
+    /** `manual` for a mark the user made; `auto` is the jump-back breadcrumb, filtered out by default. */
+    val kind: String = BookmarkKindManual,
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    @param:Json(name = "chapter_title") val chapterTitle: String? = null,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+) {
+    /** Never blank, so an unlabelled mark still has something to show in the list. */
+    val resolvedLabel: String
+        get() = label?.trim()?.takeIf { it.isNotEmpty() }
+            ?: chapterTitle?.trim()?.takeIf { it.isNotEmpty() }
+            ?: "Bookmark"
+}
+
+const val BookmarkKindManual: String = "manual"
+
+data class BookmarksResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    val bookmarks: List<Bookmark> = emptyList(),
+    val deleted: List<Int> = emptyList(),
+)
+
+/** POST and PATCH both answer the single written row under `bookmark`. */
+data class BookmarkWriteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val bookmark: Bookmark? = null,
+)
+
+data class BookmarkDeleteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    val id: Int = 0,
+)
+
+/**
+ * A new bookmark. Only `chapter_id` is required by the server; the rest default.
+ *
+ * `kind` is sent explicitly rather than left to the server's default so that a mark made from the
+ * player is always a `manual` one, and can never be mistaken for a jump-back breadcrumb.
+ */
+data class CreateBookmarkRequest(
+    @param:Json(name = "chapter_id") val chapterId: Int,
+    @param:Json(name = "position_seconds") val positionSeconds: Double,
+    val label: String? = null,
+    val note: String? = null,
+    val kind: String = BookmarkKindManual,
+)
+
+/**
+ * A partial update.
+ *
+ * The server checks key *presence* — a key that is absent leaves the stored value alone. Moshi omits
+ * null fields when serialising, so a null here means "do not touch this field", which lines the two
+ * halves up exactly. To *clear* a value, send an empty string: the server trims it and stores null.
+ */
+data class UpdateBookmarkRequest(
+    val label: String? = null,
+    val note: String? = null,
+)
+
+/**
+ * One item of `POST /api/mobile/playback/sync`.
+ *
+ * [clientUpdatedAt] is what makes the batch endpoint different from `/playback/progress`: the
+ * server applies an item only if this stamp is *strictly newer* than what it already holds. Equal
+ * loses, so two devices re-posting the same synced state do not take turns clobbering each other,
+ * and a missing or unparseable stamp loses rather than being guessed at.
+ */
+data class PlaybackSyncItem(
+    @param:Json(name = "chapter_id") val chapterId: Int,
+    @param:Json(name = "position_seconds") val positionSeconds: Double,
+    @param:Json(name = "is_played") val isPlayed: Boolean,
+    @param:Json(name = "client_updated_at") val clientUpdatedAt: String,
+)
+
+data class PlaybackSyncRequest(
+    val items: List<PlaybackSyncItem>,
+)
+
+/** What the server actually holds for a chapter after the batch was applied. */
+data class PlaybackSyncState(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "is_played") val isPlayed: Boolean = false,
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    @param:Json(name = "client_updated_at") val clientUpdatedAt: String? = null,
+)
+
+data class PlaybackSyncAccepted(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "is_played") val isPlayed: Boolean = false,
+)
+
+/**
+ * A rejected item, with the reason and the watermark that beat it.
+ *
+ * `reason` is one of `not_found`, `missing_client_updated_at`, `invalid_client_updated_at`, `empty`
+ * or `stale`. Only `stale` means "someone else was newer"; the rest mean this client sent something
+ * the server could not use, and retrying it unchanged would fail identically.
+ */
+data class PlaybackSyncRejected(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    val reason: String = "",
+    @param:Json(name = "server_updated_at") val serverUpdatedAt: String? = null,
+)
+
+data class PlaybackSyncResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    val accepted: List<PlaybackSyncAccepted> = emptyList(),
+    val rejected: List<PlaybackSyncRejected> = emptyList(),
+    @param:Json(name = "server_state") val serverState: List<PlaybackSyncState> = emptyList(),
+)

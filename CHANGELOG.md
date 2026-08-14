@@ -6,6 +6,11 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **Bookmarks.** Tap **BOOKMARK** in the player to mark where you are, without stopping playback.
+  Marks are listed under Settings → Bookmarks, and tapping one opens the reader at that chapter.
+- **They are the same bookmarks the browser shows.** Not a copy — the same records, so one made on
+  the phone appears in the web bookmarks page and deleting it in either place removes it from both.
+- Servers without bookmark support show none of this, rather than offering a button that fails.
 - **The fiction screen says how much listening is left.** It previously answered only the storage
   question — "0 offline · 73 not downloaded" — which is not the one you ask before starting a
   400-chapter serial. It now leads with total remaining time, a played count, and how many chapters
@@ -32,6 +37,25 @@ No new requests: every figure is a sum over the chapter list the screen has alre
   speed is actually set to the list when it is not a preset, so the current speed stays visible and
   reachable rather than being snapped to 0.75x silently. Same mechanism will cover a speed that
   arrives from the account once preferences sync.
+
+### Fixed
+
+- **Listening offline no longer loses your place, and no longer overwrites a newer one.** A position
+  recorded with no connection used to be discarded outright, and the next write that did get through
+  carried no timestamp — so a phone reconnecting after a long offline stretch could silently roll
+  back a position you had reached in the browser since. Positions are now queued on the device with
+  the wall-clock moment they were recorded and sent to the server's timestamped batch endpoint,
+  which applies only the genuinely newer one.
+- When your phone's position does lose to a newer one, it is dropped rather than retried forever,
+  and the app takes the server's position instead of holding one that no longer exists.
+- The queue survives the app being killed, which is the normal case for a phone that goes offline
+  and stays offline. It keeps one position per chapter, so an eight-hour night is a handful of
+  entries rather than two thousand.
+- On a server without batched progress the old single-chapter endpoint is still used — unchanged,
+  and still unordered — but a position recorded offline is now retried instead of dropped.
+- Positions are stamped to the millisecond rather than the second. The browser stamps that finely,
+  and the server keeps whichever is newer, so a rounded-down stamp from the phone could lose to a
+  browser write from earlier in the same second and roll your place back.
 
 ## 0.10.0 — 2026-08-08
 
