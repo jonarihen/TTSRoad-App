@@ -29,6 +29,21 @@ private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
  */
 const val DefaultPlaybackSyncBatchLimit: Int = 100
 
+/**
+ * Outcome of tracking a new fiction.
+ *
+ * A sealed result rather than an exception because every failure here is one the user can act on by
+ * editing what they pasted, and a thrown [HttpException] would lose the server's explanation of
+ * *which* sites it accepts — which is the only thing that makes the error useful.
+ */
+sealed interface FictionAddResult {
+    data class Added(val fiction: FictionSummary?) : FictionAddResult
+    /** The server said no, with its own words: an unsupported host, or a fiction already tracked. */
+    data class Refused(val message: String) : FictionAddResult
+    /** This server has no fiction management. The control should not have been shown. */
+    data object Unsupported : FictionAddResult
+}
+
 /** Outcome of a mobile login attempt. */
 sealed interface LoginResult {
     data object Success : LoginResult
@@ -272,6 +287,51 @@ class TtsRoadRepository(
             }.following
         } catch (e: HttpException) {
             if (e.code() == 404) false else throw e
+        }
+    }
+
+    /**
+     * Track a new fiction, or report why the server would not.
+     *
+     * Unlike most of this class, a failure here is *not* swallowed: the user typed something and is
+     * waiting to hear whether it worked, so the server's own explanation — which URLs it accepts, or
+     * that this fiction is already tracked — is the whole value of the response. [FictionAddResult]
+     * carries that message rather than throwing, because none of these are exceptional conditions.
+     *
+     * Adding is admin-only server-side. The UI hides the control for a non-admin account, so a
+     * [FictionAddResult.Refused] here means the session lost admin since it signed in.
+     */
+    suspend fun addFiction(url: String): FictionAddResult {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return FictionAddResult.Refused("Paste a fiction URL first.")
+        if (!_currentCapabilities.value.fictionManagement) {
+            return FictionAddResult.Unsupported
+        }
+        return try {
+            val added = withAuthorizedApi { it.addFiction(AddFictionRequest(fictionUrl = trimmed)) }
+            FictionAddResult.Added(added.fiction)
+        } catch (e: HttpException) {
+            if (e.code() == 401) throw e
+            FictionAddResult.Refused(
+                detailMessage(e.response()?.errorBody()?.string())
+                    ?: "The server would not add that fiction.",
+            )
+        }
+    }
+
+    /**
+     * Delete a fiction, its chapters and its audio. True when it is gone.
+     *
+     * A 404 counts as gone: deleting something already deleted — from the browser, or a second tap
+     * on a stale list — is the outcome the caller wanted. Null means this server has no fiction
+     * management at all, which is a different answer from "the delete failed".
+     */
+    suspend fun deleteFiction(fictionId: Int): Boolean? {
+        if (!_currentCapabilities.value.fictionManagement) return null
+        return try {
+            withAuthorizedApi { it.deleteFiction(fictionId) }.deleted
+        } catch (e: HttpException) {
+            if (e.code() == 404) true else throw e
         }
     }
 

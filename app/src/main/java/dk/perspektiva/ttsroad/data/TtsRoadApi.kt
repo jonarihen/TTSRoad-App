@@ -111,6 +111,21 @@ interface TtsRoadApi {
         @Query("limit") limit: Int? = null,
     ): SearchResponse
 
+    /**
+     * Fiction management. Admin-only server-side, and mirrored onto the mobile surface rather than
+     * called across on `/api/fictions` so the add-fields-don't-rename guarantee and the mobile
+     * contract test both cover it.
+     *
+     * A rejected URL comes back 400 and a fiction already tracked comes back 409, both with a
+     * `detail` the caller should show rather than replace — the server knows which sites it accepts.
+     */
+    @POST("api/mobile/fictions")
+    suspend fun addFiction(@Body request: AddFictionRequest): FictionWriteResponse
+
+    /** Destroys the fiction, its chapters and its audio, for every account on the server. */
+    @DELETE("api/mobile/fictions/{fiction_id}")
+    suspend fun deleteFiction(@Path("fiction_id") fictionId: Int): FictionDeleteResponse
+
     /** Put a fiction on this account's shelf. 404 when the fiction does not exist. */
     @POST("api/mobile/fictions/{fiction_id}/follow")
     suspend fun followFiction(@Path("fiction_id") fictionId: Int): FollowResponse
@@ -164,4 +179,3 @@ interface TtsRoadApi {
     @DELETE("api/mobile/bookmarks/{bookmark_id}")
     suspend fun deleteBookmark(@Path("bookmark_id") bookmarkId: Int): BookmarkDeleteResponse
 }
-

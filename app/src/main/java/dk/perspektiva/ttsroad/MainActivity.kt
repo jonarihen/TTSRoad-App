@@ -140,6 +140,7 @@ import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.Bookmark
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.DeviceSession
+import dk.perspektiva.ttsroad.data.FictionAddResult
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.HighlightGranularity
 import dk.perspektiva.ttsroad.data.formatExpiresIn
@@ -663,6 +664,9 @@ private fun MainScaffold(
                 AppScreen.Fictions -> FictionsScreen(
                     padding = padding,
                     repository = repository,
+                    // Presentation only. The server enforces admin on every one of these routes;
+                    // hiding the control just stops offering a button that would 403.
+                    isAdmin = session.isAdmin,
                     onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                     onOpenReader = { onScreenChange(it) },
                 )
@@ -672,8 +676,11 @@ private fun MainScaffold(
                     fiction = screen.fiction,
                     repository = repository,
                     playbackController = playbackController,
+                    isAdmin = session.isAdmin,
                     onOpenPlayer = { onScreenChange(AppScreen.Player) },
                     onOpenReader = { onScreenChange(it) },
+                    // The screen is about a fiction that no longer exists, so it cannot stay open.
+                    onDeleted = popBackStack,
                 )
 
                 AppScreen.Player -> PlayerScreen(
@@ -915,8 +922,10 @@ private fun FictionScreen(
     fiction: FictionSummary,
     repository: TtsRoadRepository,
     playbackController: PlaybackController,
+    isAdmin: Boolean = false,
     onOpenPlayer: () -> Unit,
     onOpenReader: (AppScreen.Reader) -> Unit,
+    onDeleted: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -939,6 +948,8 @@ private fun FictionScreen(
         .collectAsStateWithLifecycle(initialValue = ChapterFilter.All)
     var ascending by remember(fiction.id) { mutableStateOf(true) }
     var bulkTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
+    var confirmDelete by remember(fiction.id) { mutableStateOf(false) }
+    var isDeleting by remember(fiction.id) { mutableStateOf(false) }
     var isFollowBusy by remember(fiction.id) { mutableStateOf(false) }
     // The shelf is the server's answer, so the toggle reads from the loaded library rather than
     // from the FictionSummary handed over by navigation, which may be a browse-screen row that has
@@ -1068,6 +1079,15 @@ private fun FictionScreen(
                                 fictionListeningSummary(chapters)
                             },
                             playbackSpeed = playerState.speed,
+                            // Two gates, both needed: the server has to have the routes, and this
+                            // account has to be the admin they are restricted to. The server does
+                            // the enforcing either way — hiding it just avoids offering a 403.
+                            onDelete = if (capabilities.fictionManagement && isAdmin) {
+                                { confirmDelete = true }
+                            } else {
+                                null
+                            },
+                            isDeleting = isDeleting,
                             onDownloadNext = {
                                 // Start where the listener is, not at chapter one — the point of the
                                 // batch is the drive ahead of them.
@@ -1174,6 +1194,43 @@ private fun FictionScreen(
                         }
                     } else {
                         null
+                    },
+                )
+            }
+
+            if (confirmDelete) {
+                ConfirmDialog(
+                    title = "DELETE ${fiction.title.uppercase()}?",
+                    // Deliberately specific rather than a generic "are you sure". Deleting a fiction
+                    // is not scoped to this account: it destroys the audio and every listener's
+                    // saved position, and there is no undo.
+                    body = "This deletes the fiction, all ${fiction.totalChapters} chapters and " +
+                        "their audio from the server, for everyone — including saved positions and " +
+                        "bookmarks on other accounts. It cannot be undone.",
+                    confirmLabel = "DELETE",
+                    onDismiss = { confirmDelete = false },
+                    onConfirm = {
+                        confirmDelete = false
+                        scope.launch {
+                            isDeleting = true
+                            error = null
+                            runCatching { repository.deleteFiction(fiction.id) }
+                                .onSuccess { deleted ->
+                                    if (deleted == true) {
+                                        // Both lists held it, and neither can be patched in place
+                                        // to represent something that no longer exists.
+                                        cache.refreshLibrary()
+                                        cache.refreshBrowseAll()
+                                        onDeleted()
+                                    } else {
+                                        error = "This server cannot delete fictions."
+                                    }
+                                }
+                                .onFailure {
+                                    error = it.message ?: "Could not delete this fiction"
+                                }
+                            isDeleting = false
+                        }
                     },
                 )
             }
@@ -3300,6 +3357,7 @@ private fun downloadMetaLabel(download: ChapterDownload?): String? = when (downl
 private fun FictionsScreen(
     padding: PaddingValues,
     repository: TtsRoadRepository,
+    isAdmin: Boolean = false,
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenReader: (AppScreen.Reader) -> Unit,
 ) {
@@ -3358,6 +3416,15 @@ private fun FictionsScreen(
                 onRefresh = refresh,
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
+                    // Adding lives on the browse screen rather than the shelf because this is the
+                    // screen that already answers "what is on this server", and a fiction has to
+                    // exist here before it can be followed onto a shelf.
+                    if (capabilities.fictionManagement && isAdmin) {
+                        AddFictionSection(
+                            onAdd = { url -> repository.addFiction(url) },
+                            onAdded = refresh,
+                        )
+                    }
                     OutlinedTextField(
                         value = query,
                         onValueChange = {
@@ -3433,6 +3500,97 @@ private fun FictionsScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Paste a fiction URL and track it. Admin-only, and hidden entirely on a server without
+ * `fiction_management`.
+ *
+ * A single field is the whole interaction on purpose. The URL is usually already in the clipboard
+ * from browsing on the phone, and everything else the create endpoint accepts — voice, rate, the
+ * sync window — has a server-side default and is a poor thing to be choosing on a phone.
+ *
+ * The server's refusal is shown verbatim rather than replaced with a generic failure: it is the half
+ * that knows which sites have adapters, and "Fiction already tracked" is a different instruction to
+ * the user than "that is not a URL I can read".
+ */
+@Composable
+private fun AddFictionSection(
+    onAdd: suspend (String) -> FictionAddResult,
+    onAdded: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var url by rememberSaveable { mutableStateOf("") }
+    var isAdding by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var isError by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = url,
+            onValueChange = {
+                url = it
+                message = null
+            },
+            label = { Text("ADD A FICTION BY URL OR ID") },
+            placeholder = { Text("Royal Road URL or ID") },
+            singleLine = true,
+            enabled = !isAdding,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            onClick = {
+                scope.launch {
+                    isAdding = true
+                    message = null
+                    val result = runCatching { onAdd(url) }.getOrElse { failure ->
+                        isError = true
+                        message = failure.message ?: "Could not add this fiction."
+                        isAdding = false
+                        return@launch
+                    }
+                    when (result) {
+                        is FictionAddResult.Added -> {
+                            isError = false
+                            message = result.fiction?.title?.let { "Tracking \"$it\"." }
+                                ?: "Fiction added."
+                            // Cleared only on success, so a rejected URL stays in the field to be
+                            // corrected rather than having to be pasted again.
+                            url = ""
+                            // The new fiction is not in the loaded list, and conversion has only
+                            // just been queued, so the list has to come from the server again.
+                            onAdded()
+                        }
+
+                        is FictionAddResult.Refused -> {
+                            isError = true
+                            message = result.message
+                        }
+
+                        FictionAddResult.Unsupported -> {
+                            isError = true
+                            message = "This server cannot add fictions."
+                        }
+                    }
+                    isAdding = false
+                }
+            },
+            enabled = !isAdding && url.isNotBlank(),
+            shape = RectangleShape,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (isAdding) "ADDING" else "ADD FICTION")
+        }
+        message?.let {
+            MetaText(text = it, color = if (isError) AarisColor.Danger else AarisColor.Muted)
         }
     }
 }
@@ -3607,6 +3765,9 @@ private fun FictionDetailHeader(
     isFollowBusy: Boolean = false,
     listeningSummary: FictionListeningSummary = FictionListeningSummary(),
     playbackSpeed: Float = 1f,
+    /** Null unless this account is an admin on a server that can delete fictions. */
+    onDelete: (() -> Unit)? = null,
+    isDeleting: Boolean = false,
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
@@ -3788,6 +3949,20 @@ private fun FictionDetailHeader(
                         modifier = Modifier.clickable { descExpanded = !descExpanded },
                     )
                 }
+            }
+        }
+
+        // Last in the header, and the only destructive control on the screen. Deleting is admin
+        // housekeeping, not something anyone does mid-listen, so it sits below everything that is.
+        onDelete?.let { delete ->
+            OutlinedButton(
+                onClick = delete,
+                enabled = !isDeleting,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Danger),
+            ) {
+                Text(if (isDeleting) "DELETING" else "DELETE FICTION")
             }
         }
     }
