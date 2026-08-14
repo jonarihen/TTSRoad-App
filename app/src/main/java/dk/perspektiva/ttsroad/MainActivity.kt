@@ -1156,6 +1156,24 @@ private fun FictionScreen(
                         bulkTarget = null
                         mark(ids, played = true)
                     },
+                    onQueue = if (capabilities.queue) {
+                        { playNext ->
+                            bulkTarget = null
+                            scope.launch {
+                                error = null
+                                runCatching {
+                                    repository.addToQueue(
+                                        listOf(target.resolvedChapterId),
+                                        playNext = playNext,
+                                    )
+                                }.onFailure {
+                                    error = it.message ?: "Could not update the queue"
+                                }
+                            }
+                        }
+                    } else {
+                        null
+                    },
                 )
             }
         }
@@ -1204,6 +1222,8 @@ private fun ChapterBulkSheet(
     allIds: List<Int>,
     onDismiss: () -> Unit,
     onMark: (List<Int>) -> Unit,
+    /** Null on a server with no cross-library queue. `true` means "play it next". */
+    onQueue: ((playNext: Boolean) -> Unit)? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
         MetaText(
@@ -1227,6 +1247,27 @@ private fun ChapterBulkSheet(
             enabled = allIds.isNotEmpty(),
             onClick = { onMark(allIds) },
         )
+        onQueue?.let { queue ->
+            // Only a chapter with audio can be queued — the server rejects the rest anyway, and
+            // offering it would be offering something that silently does nothing.
+            val playable = chapter.audio != null
+            BulkAction(
+                title = "Play next",
+                subtitle = if (playable) {
+                    "After the chapter playing now"
+                } else {
+                    "No audio for this chapter yet"
+                },
+                enabled = playable,
+                onClick = { queue(true) },
+            )
+            BulkAction(
+                title = "Add to queue",
+                subtitle = if (playable) "At the end of Up Next" else "No audio for this chapter yet",
+                enabled = playable,
+                onClick = { queue(false) },
+            )
+        }
         Spacer(modifier = Modifier.height(16.dp))
     }
 }

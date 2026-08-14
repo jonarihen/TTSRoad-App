@@ -89,6 +89,14 @@ interface TtsRoadApi {
     @POST("api/mobile/playback/mark")
     suspend fun markPlayback(@Body request: PlaybackMarkRequest): PlaybackMarkResponse
 
+    /** The shared Up Next queue — the same rows the browser reads. */
+    @GET("api/mobile/queue")
+    suspend fun queue(): QueueResponse
+
+    /** Every mutation, including `advance`, whose reply carries the item to play. */
+    @POST("api/mobile/queue")
+    suspend fun updateQueue(@Body request: QueueRequest): QueueAdvanceResponse
+
     /**
      * Server-side search across fiction metadata, chapter titles and the narration text itself.
      *

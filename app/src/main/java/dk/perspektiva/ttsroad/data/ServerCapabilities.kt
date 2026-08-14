@@ -47,6 +47,14 @@ data class ServerCapabilities(
     val audioContentHash: Boolean = false,
     val deviceManagement: Boolean = false,
     /**
+     * A server-side cross-library queue the app can read and mutate.
+     *
+     * Its own flag rather than folded into another: a client that builds its own queue keeps
+     * working, and the Android Auto "Up Next" node is only offered when the server can back it.
+     */
+    val queue: Boolean = false,
+
+    /**
      * Per-user libraries. When false, `/api/mobile/library` is still the whole shared list and the
      * app must not offer a follow control it cannot honour.
      */
@@ -87,6 +95,7 @@ data class ServerCapabilities(
                 batchProgress = flags.flag("batch_progress"),
                 audioContentHash = flags.flag("audio_content_hash"),
                 deviceManagement = flags.flag("device_management"),
+                queue = flags.flag("queue"),
                 follows = flags.flag("follows"),
                 playerPreferences = flags.flag("player_preferences"),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),

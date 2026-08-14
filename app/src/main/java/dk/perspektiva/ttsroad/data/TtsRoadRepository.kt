@@ -374,6 +374,59 @@ class TtsRoadRepository(
         }
 
     /**
+     * The shared Up Next queue, or null on a server without one.
+     *
+     * Null is not an empty queue: it means this server has no cross-library queue at all, so the
+     * browse node and the queue controls should not be offered.
+     */
+    suspend fun queue(): QueueResponse? {
+        if (!_currentCapabilities.value.queue) return null
+        return withAuthorizedApi { it.queue() }
+    }
+
+    /** Append chapters to the queue, or slot them in right after what is playing. */
+    suspend fun addToQueue(chapterIds: List<Int>, playNext: Boolean = false): QueueAdvanceResponse? {
+        if (chapterIds.isEmpty()) return null
+        if (!_currentCapabilities.value.queue) return null
+        return withAuthorizedApi {
+            it.updateQueue(
+                QueueRequest(
+                    action = QueueActionAdd,
+                    chapterIds = chapterIds,
+                    mode = if (playNext) QueueModeNext else QueueModeEnd,
+                ),
+            )
+        }
+    }
+
+    /** Remove by *queue row* id — the item's `id`, not its chapter id. */
+    suspend fun removeFromQueue(itemIds: List<Int>): QueueAdvanceResponse? {
+        if (itemIds.isEmpty()) return null
+        if (!_currentCapabilities.value.queue) return null
+        return withAuthorizedApi {
+            it.updateQueue(QueueRequest(action = QueueActionRemove, itemIds = itemIds))
+        }
+    }
+
+    suspend fun clearQueue(): QueueAdvanceResponse? {
+        if (!_currentCapabilities.value.queue) return null
+        return withAuthorizedApi { it.updateQueue(QueueRequest(action = QueueActionClear)) }
+    }
+
+    /**
+     * Take the head of the queue, or — when it is empty and the account says `continue` — the
+     * oldest unplayed chapter in the library.
+     *
+     * The decision is the server's on purpose. `queue_when_empty` is an account preference, and
+     * `advance` reads it, so calling this rather than deciding locally is what makes the phone and
+     * the browser agree about what comes after the last chapter of a book.
+     */
+    suspend fun advanceQueue(): QueueAdvanceResponse? {
+        if (!_currentCapabilities.value.queue) return null
+        return withAuthorizedApi { it.updateQueue(QueueRequest(action = QueueActionAdvance)) }
+    }
+
+    /**
      * Server-side search, or null when this server cannot do it.
      *
      * Null is not "no results" — the caller falls back to the local filter, which is still the

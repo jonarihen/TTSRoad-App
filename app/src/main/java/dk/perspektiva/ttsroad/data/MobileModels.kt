@@ -230,6 +230,83 @@ data class PlaybackMarkResponse(
 
 
 /**
+ * One entry in the server-side cross-library queue.
+ *
+ * Flattened on purpose: a cross-fiction queue is played from surfaces that know nothing about the
+ * fiction in question, so every entry carries the fiction title, cover and audio descriptor rather
+ * than assuming the caller can look them up.
+ */
+data class QueueItem(
+    /** The *queue row* id, which is what `reorder` and `remove` take — not the chapter id. */
+    val id: Int = 0,
+    val position: Int = 0,
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "chapter_title") val chapterTitle: String? = null,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
+    @param:Json(name = "audio_duration") val audioDuration: Double? = null,
+    @param:Json(name = "is_played") val isPlayed: Boolean = false,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    val audio: AudioInfo? = null,
+) {
+    val resolvedTitle: String
+        get() = chapterTitle?.trim()?.takeIf { it.isNotEmpty() } ?: "Chapter"
+}
+
+data class QueueResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val items: List<QueueItem> = emptyList(),
+    val total: Int = 0,
+    /**
+     * The account's `queue_when_empty`: `stop` or `continue`. Read rather than decided locally —
+     * `advance` already honours it server-side, which is the point of calling `advance` at all.
+     */
+    @param:Json(name = "when_empty") val whenEmpty: String = "stop",
+    @param:Json(name = "max_items") val maxItems: Int = 0,
+)
+
+/**
+ * The answer to `advance`: what should play next, with no curation from the driver.
+ *
+ * `status` is `playing` or `empty`. `source` says where the item came from — `queue` when it was
+ * taken off the head, `continue` when the queue was empty and the account asked to keep going with
+ * the oldest unplayed chapter.
+ */
+data class QueueAdvanceResponse(
+    val status: String = "",
+    val item: QueueItem? = null,
+    val source: String? = null,
+    val items: List<QueueItem> = emptyList(),
+    val total: Int = 0,
+)
+
+/**
+ * Every queue mutation goes through one POST with an `action`.
+ *
+ * One endpoint rather than five keeps the client's retry path single, and lets the server add
+ * actions without the app needing new URLs.
+ */
+data class QueueRequest(
+    val action: String,
+    @param:Json(name = "chapter_ids") val chapterIds: List<Int> = emptyList(),
+    @param:Json(name = "item_ids") val itemIds: List<Int> = emptyList(),
+    /** `end` or `next` — the difference between "after everything" and "play this after the current one". */
+    val mode: String = QueueModeEnd,
+    val source: String? = null,
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+)
+
+const val QueueActionAdd: String = "add"
+const val QueueActionRemove: String = "remove"
+const val QueueActionClear: String = "clear"
+const val QueueActionAdvance: String = "advance"
+const val QueueModeEnd: String = "end"
+const val QueueModeNext: String = "next"
+const val QueueStatusPlaying: String = "playing"
+
+/**
  * `GET /api/mobile/search?q=`.
  *
  * Grouped rather than flat, and the groups are always present even when empty — fictions, then

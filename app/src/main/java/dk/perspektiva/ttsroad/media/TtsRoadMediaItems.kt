@@ -10,12 +10,14 @@ import androidx.media3.session.MediaConstants
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
+import dk.perspektiva.ttsroad.data.QueueItem
 
 object TtsRoadMediaIds {
     const val Root = "root"
     const val Continue = "continue"
     const val Fictions = "fictions"
     const val Recent = "recent"
+    const val Queue = "queue"
     const val FictionPrefix = "fiction:"
     const val ChapterPrefix = "chapter:"
 
@@ -161,6 +163,55 @@ object TtsRoadMediaItems {
 
         return MediaItem.Builder()
             .setMediaId(TtsRoadMediaIds.chapter(chapter.resolvedChapterId))
+            .setUri(audioUri)
+            .setRequestMetadata(
+                MediaItem.RequestMetadata.Builder()
+                    .setMediaUri(audioUri)
+                    .build(),
+            )
+            .setMediaMetadata(metadataBuilder.build())
+            .build()
+    }
+
+    /**
+     * A server-queue entry as a playable item.
+     *
+     * Separate from [chapter] because a queue entry is already flat — it carries its own fiction
+     * title and cover rather than a [FictionSummary] to look them up in, which is exactly what lets
+     * an Up Next list span several books.
+     *
+     * The media id is still `chapter:<id>`, so an item played from the queue is indistinguishable
+     * downstream from one played from a fiction: progress sync and queue expansion read the same
+     * extras either way.
+     */
+    fun queueItem(item: QueueItem, serverUrl: String? = null): MediaItem? {
+        val rawUrl = item.audio?.url ?: return null
+        val audioUri = ServerUrls.rewriteHost(rawUrl, serverUrl).toUri()
+        val extras = Bundle().apply {
+            putInt("fiction_id", item.fictionId)
+            putInt("chapter_id", item.chapterId)
+            item.chapterNumber?.let { putDouble("display_number", it) }
+            item.positionSeconds.takeIf { it > 0.0 }?.let { putDouble("position_seconds", it) }
+        }
+        val metadataBuilder = MediaMetadata.Builder()
+            .setTitle(item.resolvedTitle)
+            .setAlbumTitle(item.fictionTitle)
+            // The fiction is the useful subtitle here, not the duration: an Up Next list crosses
+            // books, so "which book is this" is the question the row has to answer.
+            .setSubtitle(item.fictionTitle)
+            .setExtras(extras)
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+
+        ServerUrls.resolveCoverOrNull(item.coverImageUrl, serverUrl)
+            ?.let { metadataBuilder.setArtworkUri(it.toUri()) }
+        item.audioDuration
+            ?.takeIf { it > 0.0 }
+            ?.let { metadataBuilder.setDurationMs((it * 1000).toLong()) }
+
+        return MediaItem.Builder()
+            .setMediaId(TtsRoadMediaIds.chapter(item.chapterId))
             .setUri(audioUri)
             .setRequestMetadata(
                 MediaItem.RequestMetadata.Builder()
