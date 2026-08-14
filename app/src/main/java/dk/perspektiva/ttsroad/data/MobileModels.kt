@@ -249,6 +249,13 @@ data class Bookmark(
 
 const val BookmarkKindManual: String = "manual"
 
+/**
+ * The jump-back breadcrumb kind — a position recorded because playback was there, not because
+ * anyone chose it. Shares a table with `manual`, so anything rendering user-chosen marks must
+ * filter, or a day of listening buries the handful the reader actually made.
+ */
+const val BookmarkKindAuto: String = "auto"
+
 data class BookmarksResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
     @param:Json(name = "server_time") val serverTime: String? = null,
