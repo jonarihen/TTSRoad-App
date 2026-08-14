@@ -215,6 +215,17 @@ data class PlaybackMarkResponse(
 
 
 /**
+ * `GET`/`PATCH /api/me/preferences`.
+ *
+ * A loose map for the same reason [CapabilitiesResponse] uses one: the server owns the vocabulary
+ * and adds to it on its own schedule, so a strict model would fail to parse the whole blob over one
+ * key this build has never heard of. The typed reads live in `AccountPreferences.kt`.
+ */
+data class AccountPreferencesResponse(
+    val preferences: Map<String, Any?> = emptyMap(),
+)
+
+/**
  * One bookmark, exactly as `/api/bookmarks` and `/api/mobile/bookmarks` both return it.
  *
  * Chapter and fiction titles ride along in the payload precisely so an account-wide list can be

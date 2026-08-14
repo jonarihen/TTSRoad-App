@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.core
 
 import android.content.Context
+import dk.perspektiva.ttsroad.data.AccountPreferenceSync
 import dk.perspektiva.ttsroad.data.ChapterListPreferences
 import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.LibraryCache
@@ -62,6 +63,9 @@ object ServiceLocator {
 
     @Volatile
     private var offlineDownloads: OfflineDownloads? = null
+
+    @Volatile
+    private var accountPreferenceSync: AccountPreferenceSync? = null
 
     @Volatile
     private var pendingProgress: PendingProgressStore? = null
@@ -142,6 +146,16 @@ object ServiceLocator {
                 ?: ChapterListPreferences(context.applicationContext).also {
                     chapterListPreferences = it
                 }
+        }
+
+    fun accountPreferenceSync(context: Context): AccountPreferenceSync =
+        accountPreferenceSync ?: synchronized(this) {
+            accountPreferenceSync ?: AccountPreferenceSync(
+                repository = repository(context),
+                playbackPreferences = playbackPreferences(context),
+                readerPreferences = readerPreferences(context),
+                chapterListPreferences = chapterListPreferences(context),
+            ).also { accountPreferenceSync = it }
         }
 
     /**

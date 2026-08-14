@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.data
 
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -346,6 +347,45 @@ class TtsRoadRepository(
                 ),
             )
         }
+
+    /**
+     * The account's stored preference blob, or null when this server cannot hold one.
+     *
+     * Gated on the discovered `player_preferences` capability rather than on a 404: an older server
+     * answers `/api/me/preferences` perfectly well and simply drops every key it does not know, so
+     * probing the endpoint would report success while the settings quietly went nowhere.
+     */
+    suspend fun accountPreferences(): Map<String, Any?>? {
+        if (!_currentCapabilities.value.playerPreferences) return null
+        return ifPreferencesSupported { it.accountPreferences() }?.preferences
+    }
+
+    /**
+     * PATCHes [changes] and answers the echoed blob, or null when the server cannot hold it.
+     *
+     * [changes] must carry only the keys being changed — see `chapterFilterPatch` and friends.
+     */
+    suspend fun updateAccountPreferences(changes: Map<String, Any?>): Map<String, Any?>? {
+        if (changes.isEmpty()) return null
+        if (!_currentCapabilities.value.playerPreferences) return null
+        return ifPreferencesSupported { it.updateAccountPreferences(changes) }?.preferences
+    }
+
+    /**
+     * Preference calls must never take a screen down with them.
+     *
+     * Every caller has a working local value already — the account copy is an improvement on it,
+     * not a prerequisite — so a server that has the capability but fails the call anyway (offline,
+     * mid-restart, a 404 from a version skew the flag did not predict) answers null and the phone
+     * keeps what it has. A 401 still propagates through [authorized] and signs the session out.
+     */
+    private suspend fun <T> ifPreferencesSupported(block: suspend (TtsRoadApi) -> T): T? = try {
+        withAuthorizedApi(block)
+    } catch (e: HttpException) {
+        if (e.code() == 401) throw e else null
+    } catch (e: IOException) {
+        null
+    }
 
     /**
      * The account's bookmarks, or null on a server without the `bookmarks` capability.

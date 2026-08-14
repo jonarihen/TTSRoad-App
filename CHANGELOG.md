@@ -6,6 +6,14 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **Reader appearance and Hide played now follow your account.** Text size, page colour and how
+  much is highlighted were settings on this phone; so was the chapter filter, which is the web's
+  **Hide played** under another name. The 0.10.0 notes flagged that the two disagreed with each
+  other. They no longer do.
+- **A sleep timer default.** Pick a duration in Settings → Playback and the player's sleep sheet
+  marks it. The app had no concept of one before; the account has always had somewhere to keep it.
+- Everything still works with no network and on a server too old to hold account preferences —
+  the phone's own copy is what the app reads, and syncing improves on it rather than replacing it.
 - **Bookmarks.** Tap **BOOKMARK** in the player to mark where you are, without stopping playback.
   Marks are listed under Settings → Bookmarks, and tapping one opens the reader at that chapter.
 - **They are the same bookmarks the browser shows.** Not a copy — the same records, so one made on
@@ -39,6 +47,13 @@ No new requests: every figure is a sum over the chapter list the screen has alre
 
 ### Changed
 
+- **Speed, skip interval, skip silence and volume boost stay on this phone deliberately.** A phone
+  on earbuds and a laptop on speakers want different values, and signing out should not reset them.
+  This matches the desktop client's reasoning.
+- A setting changed in the browser wins here only when it is genuinely different. The app has four
+  highlight modes to the web's three and its own **Night** page, so "the same setting" is not always
+  the same value — the phone keeps the more specific choice rather than being flattened to the
+  nearest web equivalent.
 - **The speed picker goes up to 3.0x.** The clamps always allowed 0.5–3.0, but the sheet only
   offers presets, so the list itself was the real ceiling and it stopped at 2.0x. It now offers the
   same nine steps as the desktop client, spanning the whole range the server's `playback_speed`

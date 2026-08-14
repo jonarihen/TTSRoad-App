@@ -83,6 +83,25 @@ interface TtsRoadApi {
     suspend fun markPlayback(@Body request: PlaybackMarkRequest): PlaybackMarkResponse
 
     /**
+     * Account preferences. Note the path: these are `/api/me/...`, not `/api/mobile/...` — the same
+     * rows the web console reads, which is the point of syncing them. The global auth middleware
+     * resolves a bearer token before falling back to the session cookie, so the mobile token
+     * authenticates here exactly as it does on the mobile routes.
+     */
+    @GET("api/me/preferences")
+    suspend fun accountPreferences(): AccountPreferencesResponse
+
+    /**
+     * Only the keys being changed. The server merges the body into the stored blob and echoes the
+     * result, so sending a full snapshot would let this phone's stale copy of a setting overwrite
+     * one changed elsewhere.
+     */
+    @PATCH("api/me/preferences")
+    suspend fun updateAccountPreferences(
+        @Body changes: Map<String, @JvmSuppressWildcards Any?>,
+    ): AccountPreferencesResponse
+
+    /**
      * Bookmarks. The same rows as the web's `/api/bookmarks` — both routers call into the one
      * service — so a mark made in the car is the same record as one made in the browser.
      *

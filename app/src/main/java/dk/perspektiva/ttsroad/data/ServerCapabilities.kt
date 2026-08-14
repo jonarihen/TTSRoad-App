@@ -46,6 +46,15 @@ data class ServerCapabilities(
     val batchProgress: Boolean = false,
     val audioContentHash: Boolean = false,
     val deviceManagement: Boolean = false,
+    /**
+     * The shared player/reader preference vocabulary on `/api/me/preferences`.
+     *
+     * The server gates this on its *schema* route rather than on the preferences endpoint, because
+     * that endpoint predates the vocabulary: an older server answers PATCH happily and drops the
+     * keys it has never heard of. So this flag, and not a 404 probe, is what says the account can
+     * actually hold these settings.
+     */
+    val playerPreferences: Boolean = false,
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch. Null on a server that does not say, in
@@ -72,6 +81,7 @@ data class ServerCapabilities(
                 batchProgress = flags.flag("batch_progress"),
                 audioContentHash = flags.flag("audio_content_hash"),
                 deviceManagement = flags.flag("device_management"),
+                playerPreferences = flags.flag("player_preferences"),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
                 maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             )

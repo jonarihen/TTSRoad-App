@@ -157,6 +157,7 @@ import dk.perspektiva.ttsroad.data.DownloadPrefs
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
+import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
 import dk.perspektiva.ttsroad.data.speedOptions
 import dk.perspektiva.ttsroad.data.TextSpan
 import dk.perspektiva.ttsroad.data.VolumeBoost
@@ -278,6 +279,7 @@ private fun TtsRoadApp(
     val scope = rememberCoroutineScope()
     val tokenStore = remember { ServiceLocator.tokenStore(context) }
     val repository = remember { ServiceLocator.repository(context) }
+    val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val playbackController = remember { ServiceLocator.playbackController(context) }
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
@@ -296,6 +298,10 @@ private fun TtsRoadApp(
             // gated by the time there is anything to gate. Never throws; an older or unreachable
             // server resolves to the baseline and the ordinary flow continues.
             repository.refreshCurrentCapabilities()
+            // Strictly after discovery: the preferences client is gated on the capability, so
+            // pulling first would always see it false and skip. Adopts only what the account holds
+            // and this phone does not, and answers null rather than throwing on an older server.
+            accountPreferenceSync.pull()
             playbackController.connect()
             // Ask once playback becomes possible, so the rationale for the prompt is obvious.
             if (needsNotificationPermission(context)) {
@@ -920,6 +926,9 @@ private fun FictionScreen(
     // that outlives this screen. It used to reset to All on every open, so anyone working through
     // a series in order re-picked "Unplayed" on each book, every time.
     val chapterListPrefs = remember { ServiceLocator.chapterListPreferences(context) }
+    // Written through the account sync rather than straight to the store: this is the web's
+    // "Hide played" under another name, and the two used to disagree with each other.
+    val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val filter by chapterListPrefs.filter
         .collectAsStateWithLifecycle(initialValue = ChapterFilter.All)
     var ascending by remember(fiction.id) { mutableStateOf(true) }
@@ -1041,7 +1050,7 @@ private fun FictionScreen(
                             filter = filter,
                             ascending = ascending,
                             showJumpToCurrent = currentOffScreen,
-                            onFilter = { scope.launch { chapterListPrefs.setFilter(it) } },
+                            onFilter = { scope.launch { accountPreferenceSync.setChapterFilter(it) } },
                             onToggleSort = { ascending = !ascending },
                             onJumpToCurrent = {
                                 scope.launch { listState.animateScrollToItem(currentRow + 1) }
@@ -1239,6 +1248,9 @@ private fun PlayerScreen(
     val skipSilence by remember(preferences) {
         preferences.prefs.map { it.skipSilence }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = DefaultSkipSilence)
+    val playbackPrefs by preferences.prefs.collectAsStateWithLifecycle(
+        initialValue = PlaybackPrefs(),
+    )
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
     LaunchedEffect(showJumpBack) {
@@ -1668,7 +1680,10 @@ private fun PlayerScreen(
                 }
             }
             SleepTimerController.DurationOptionsMinutes.forEach { minutes ->
-                SleepTimerOption(label = "$minutes minutes") {
+                SleepTimerOption(
+                    label = "$minutes minutes",
+                    isDefault = minutes == playbackPrefs.sleepTimerDefaultMinutes,
+                ) {
                     sleepTimer.armDuration(minutes * 60_000L)
                     showSleepTimer = false
                 }
@@ -1794,16 +1809,24 @@ private fun PlayerScreen(
 
 /** One row of the sleep-timer sheet, styled like the chapter rows above it. */
 @Composable
-private fun SleepTimerOption(label: String, onClick: () -> Unit) {
-    Text(
-        text = label,
-        style = MaterialTheme.typography.titleMedium,
-        color = AarisColor.Ink,
+private fun SleepTimerOption(label: String, isDefault: Boolean = false, onClick: () -> Unit) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 14.dp),
-    )
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleMedium,
+            color = if (isDefault) AarisColor.Accent else AarisColor.Ink,
+            modifier = Modifier.weight(1f),
+        )
+        if (isDefault) {
+            MetaText(text = "Default", color = AarisColor.Accent)
+        }
+    }
     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 }
 
@@ -1888,6 +1911,7 @@ private fun SettingsScreen(
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     val downloads = remember { ServiceLocator.offlineDownloads(context) }
     val downloadPreferences = remember { ServiceLocator.downloadPreferences(context) }
@@ -2008,6 +2032,32 @@ private fun SettingsScreen(
                 SettingsItem(label = "Playback speed", value = formatSpeed(prefs.speed))
                 MetaText(
                     text = "Change it from the player; it is kept across restarts and reboots.",
+                    color = AarisColor.Dim,
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(text = "Sleep timer default")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SleepTimerDefaultOptions.forEach { option ->
+                        val selected = option == prefs.sleepTimerDefaultMinutes
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    accountPreferenceSync.setSleepTimerDefaultMinutes(option)
+                                }
+                            },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(formatSleepTimerDefault(option))
+                        }
+                    }
+                }
+                MetaText(
+                    text = "Marked in the player's sleep sheet. Follows your account, so the " +
+                        "browser agrees.",
                     color = AarisColor.Dim,
                 )
             }
@@ -3530,6 +3580,9 @@ private fun ReaderScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val readerPreferences = remember { ServiceLocator.readerPreferences(context) }
+    // Reader appearance follows the account, so the page looks the same in the browser. The store
+    // is still what the reader renders from — the sync writes through it, not around it.
+    val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val prefs by readerPreferences.prefs.collectAsStateWithLifecycle(initialValue = ReaderPrefs())
     val sleepTimer = remember { ServiceLocator.sleepTimer() }
     val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
@@ -3694,9 +3747,9 @@ private fun ReaderScreen(
             prefs = prefs,
             palette = palette,
             onDismiss = { showSettings = false },
-            onFontScale = { scope.launch { readerPreferences.setFontScale(it) } },
-            onTheme = { scope.launch { readerPreferences.setTheme(it) } },
-            onHighlight = { scope.launch { readerPreferences.setHighlight(it) } },
+            onFontScale = { scope.launch { accountPreferenceSync.setReaderFontScale(it) } },
+            onTheme = { scope.launch { accountPreferenceSync.setReaderTheme(it) } },
+            onHighlight = { scope.launch { accountPreferenceSync.setReaderHighlight(it) } },
         )
     }
 }
@@ -3982,6 +4035,10 @@ private fun skipForwardIcon(skipIntervalMs: Long): ImageVector = when {
     skipIntervalMs <= 20_000L -> Icons.Default.Forward10
     else -> Icons.Default.Forward30
 }
+
+/** "30m", or "Ask" for the server's 0, which means "no default — pick one each time". */
+private fun formatSleepTimerDefault(minutes: Int): String =
+    if (minutes <= 0) "Ask" else "${minutes}m"
 
 private fun formatSpeed(speed: Float): String {
     val text = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')
