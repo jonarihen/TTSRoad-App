@@ -374,6 +374,19 @@ class TtsRoadRepository(
         }
 
     /**
+     * Server-side search, or null when this server cannot do it.
+     *
+     * Null is not "no results" — the caller falls back to the local filter, which is still the
+     * instant path and the only one that works offline.
+     */
+    suspend fun search(query: String, fictionId: Int? = null): SearchResponse? {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return null
+        if (!_currentCapabilities.value.search) return null
+        return withAuthorizedApi { it.search(query = trimmed, fictionId = fictionId) }
+    }
+
+    /**
      * The account's stored preference blob, or null when this server cannot hold one.
      *
      * Gated on the discovered `player_preferences` capability rather than on a 404: an older server

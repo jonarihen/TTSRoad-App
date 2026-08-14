@@ -6,6 +6,15 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **Search the text of your chapters, not just the titles you have loaded.** The search box filtered
+  whatever the app had already fetched and could not match chapter text at all. A new **Search
+  chapters and text on the server** action finds fictions, chapter titles and the narration itself —
+  so "which chapter was the bit about the lighthouse in" now has an answer.
+- Results are grouped by what matched, with the passage shown, and tapping a text result opens the
+  reader at that chapter.
+- **The instant filter is unchanged and still first.** It works offline and has no lag; server
+  search is a second, explicit action rather than a replacement, so searching still works with no
+  connection. Servers without search show only the local filter.
 - **Your library is now yours.** The app showed whatever the server held and called that "my
   library", while the web showed a followed subset — so the two disagreed about what the library
   even was. A **FOLLOW / FOLLOWING** toggle on the fiction screen now puts a book on your shelf or
