@@ -14,9 +14,54 @@ Notable changes to the TTSRoad Android client.
   leaves the fiction on the server; it stays reachable from there.
 - Servers whose library is still one shared list show none of this, rather than a toggle they
   cannot honour.
+- **Reader appearance and Hide played now follow your account.** Text size, page colour and how
+  much is highlighted were settings on this phone; so was the chapter filter, which is the web's
+  **Hide played** under another name. The 0.10.0 notes flagged that the two disagreed with each
+  other. They no longer do.
+- **A sleep timer default.** Pick a duration in Settings → Playback and the player's sleep sheet
+  marks it. The app had no concept of one before; the account has always had somewhere to keep it.
+- Everything still works with no network and on a server too old to hold account preferences —
+  the phone's own copy is what the app reads, and syncing improves on it rather than replacing it.
+- **Bookmarks.** Tap **BOOKMARK** in the player to mark where you are, without stopping playback.
+  Marks are listed under Settings → Bookmarks, and tapping one opens the reader at that chapter.
+- **They are the same bookmarks the browser shows.** Not a copy — the same records, so one made on
+  the phone appears in the web bookmarks page and deleting it in either place removes it from both.
+- Servers without bookmark support show none of this, rather than offering a button that fails.
+- **Jump back reaches across devices.** The player's jump-back sheet used to list only moments this
+  phone recorded. It now also shows where the account was listening in the browser or on another
+  device, so "where was I at 23:49" is answerable on the device you happen to be holding.
+- The phone keeps its own full-resolution trail exactly as before — that is still the deepest
+  jump-back reach of the three clients, and it works with no server and no network. What is new is a
+  much coarser five-minute trail written to the account and merged into the same sheet. Where a
+  moment was recorded both ways, the local copy is the one shown.
+- The shared trail is kept bounded on purpose. Bookmarks and breadcrumbs share one budget on the
+  server, so a client writing breadcrumbs without limit would eventually spend the whole allowance
+  and start refusing to save the marks you made deliberately.
+- **The fiction screen says how much listening is left.** It previously answered only the storage
+  question — "0 offline · 73 not downloaded" — which is not the one you ask before starting a
+  400-chapter serial. It now leads with total remaining time, a played count, and how many chapters
+  are left, matching what the web card shows.
+- A chapter you marked played counts as finished even if you never pressed play on it. Trusting the
+  saved position instead would report a book you deliberately finished as entirely unheard.
+- When no chapter reports a duration, the remaining line is left out rather than shown as "0m".
+  A confident zero is worse than saying nothing.
+- **The player shows time left in the chapter** where it used to repeat the total duration. The
+  scrubber already shows how far in you are; how much longer is the thing being asked.
+- **At any speed other than 1x, both numbers appear** — the audio time and what it actually takes
+  at that speed. Remaining alone stops answering "will I finish this on the drive" as soon as you
+  listen at 1.75x.
+
+No new requests: every figure is a sum over the chapter list the screen has already loaded.
 
 ### Changed
 
+- **Speed, skip interval, skip silence and volume boost stay on this phone deliberately.** A phone
+  on earbuds and a laptop on speakers want different values, and signing out should not reset them.
+  This matches the desktop client's reasoning.
+- A setting changed in the browser wins here only when it is genuinely different. The app has four
+  highlight modes to the web's three and its own **Night** page, so "the same setting" is not always
+  the same value — the phone keeps the more specific choice rather than being flattened to the
+  nearest web equivalent.
 - **The speed picker goes up to 3.0x.** The clamps always allowed 0.5–3.0, but the sheet only
   offers presets, so the list itself was the real ceiling and it stopped at 2.0x. It now offers the
   same nine steps as the desktop client, spanning the whole range the server's `playback_speed`
@@ -25,6 +70,25 @@ Notable changes to the TTSRoad Android client.
   speed is actually set to the list when it is not a preset, so the current speed stays visible and
   reachable rather than being snapped to 0.75x silently. Same mechanism will cover a speed that
   arrives from the account once preferences sync.
+
+### Fixed
+
+- **Listening offline no longer loses your place, and no longer overwrites a newer one.** A position
+  recorded with no connection used to be discarded outright, and the next write that did get through
+  carried no timestamp — so a phone reconnecting after a long offline stretch could silently roll
+  back a position you had reached in the browser since. Positions are now queued on the device with
+  the wall-clock moment they were recorded and sent to the server's timestamped batch endpoint,
+  which applies only the genuinely newer one.
+- When your phone's position does lose to a newer one, it is dropped rather than retried forever,
+  and the app takes the server's position instead of holding one that no longer exists.
+- The queue survives the app being killed, which is the normal case for a phone that goes offline
+  and stays offline. It keeps one position per chapter, so an eight-hour night is a handful of
+  entries rather than two thousand.
+- On a server without batched progress the old single-chapter endpoint is still used — unchanged,
+  and still unordered — but a position recorded offline is now retried instead of dropped.
+- Positions are stamped to the millisecond rather than the second. The browser stamps that finely,
+  and the server keeps whichever is newer, so a rounded-down stamp from the phone could lose to a
+  browser write from earlier in the same second and roll your place back.
 
 ## 0.10.0 — 2026-08-08
 
