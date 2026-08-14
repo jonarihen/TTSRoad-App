@@ -42,7 +42,9 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
+import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.PlaybackFailure
+import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.ShakeDetector
 import dk.perspektiva.ttsroad.player.SleepTimerAction
 import dk.perspektiva.ttsroad.player.SleepTimerController
@@ -79,6 +81,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private lateinit var session: MediaLibrarySession
     private lateinit var sleepTimer: SleepTimerController
+    private lateinit var pendingProgress: PendingProgressStore
+    private lateinit var progressSync: ProgressSync
     private var shakeDetector: ShakeDetector? = null
     private var lastLibrary: LibraryResponse? = null
 
@@ -106,6 +110,11 @@ class TtsRoadMediaService : MediaLibraryService() {
         repository = ServiceLocator.repository(this)
         sleepTimer = ServiceLocator.sleepTimer()
         preferences = ServiceLocator.playbackPreferences(this)
+        pendingProgress = ServiceLocator.pendingProgress(this)
+        progressSync = ServiceLocator.progressSync(this)
+        // Anything recorded while the last session was offline is still waiting. Flush it before
+        // playback adds to it, so a reconnect settles the backlog rather than deepening it.
+        serviceScope.launch { progressSync.flush() }
         serviceScope.launch {
             tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
         }
@@ -427,14 +436,18 @@ class TtsRoadMediaService : MediaLibraryService() {
             position >= total - 20_000L || position.toDouble() / total.toDouble() >= 0.96
         } ?: false
 
-        runCatching {
-            repository.saveProgress(
-                fictionId = fictionId,
-                chapterId = chapterId,
-                positionSeconds = position / 1000.0,
-                isPlayed = forcePlayed || nearComplete,
-            )
-        }
+        // Queue first, then try to send. The write used to be a bare `runCatching` around the post,
+        // so a position recorded with no connection was simply lost — and the next successful write
+        // carried an unstamped position the server could not order against one reached in the
+        // browser meanwhile, and so overwrote it. The queue is what makes the position survive
+        // being offline, and the stamp is what lets the server decide who is actually newer.
+        pendingProgress.record(
+            fictionId = fictionId,
+            chapterId = chapterId,
+            positionSeconds = position / 1000.0,
+            isPlayed = forcePlayed || nearComplete,
+        )
+        progressSync.flush()
 
         writeBreadcrumb(chapterId = chapterId, positionMs = position)
     }
