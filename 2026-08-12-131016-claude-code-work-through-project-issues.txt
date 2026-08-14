@@ -1,0 +1,1034 @@
+ ▐▛███▜▌   Claude Code v2.1.227
+▝▜█████▛▘  Opus 5 · Claude Pro
+  ▘▘ ▝▝    /Projekts/TTSRoad-App
+
+  ⎿  SessionStart:startup hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: line 1: node: command not 
+     found
+
+❯ # Claude Code: Work Through Project Issues                                    
+                                                                                
+  Hi,                                                                           
+                                                                                
+  Please review this project's open GitHub issues and start working through     
+  them.                                                                         
+                                                                                
+  Your goal is to resolve as many actionable issues as possible without         
+  requiring supervision from me.                                                
+                                                                                
+  ## Workflow                                                                   
+                                                                                
+  For each issue:                                                               
+                                                                                
+  1. Read and understand the issue completely.                                  
+  2. Investigate the relevant code and determine the appropriate fix.           
+  3. Implement the fix.                                                         
+  4. Run any relevant tests, linting, builds, or other validation available for 
+  the project.                                                                  
+  5. If the fix is successful, create a **separate branch and pull request for  
+  that issue**.                                                                 
+  6. Make sure the PR clearly references the issue it fixes.                    
+  7. Once the PR is created, continue directly to the next issue.               
+                                                                                
+  Continue working through the issues until:                                    
+                                                                                
+  * all actionable issues have been addressed,                                  
+  * an issue genuinely requires information or access you do not have,          
+  * or an issue cannot reasonably be fixed from this repository.                
+                                                                                
+  Do **not** stop after each issue or PR to ask me whether you should continue. 
+                                                                                
+  ## Other Local Projects                                                       
+                                                                                
+  `/Projects/` contains local copies of all of my GitHub repositories.          
+                                                                                
+  You may inspect and search those repositories whenever it helps you           
+  understand:                                                                   
+                                                                                
+  * how another component works,                                                
+  * an API or integration,                                                      
+  * shared conventions,                                                         
+  * dependencies,                                                               
+  * expected behavior,                                                          
+  * or how this project interacts with another one.                             
+                                                                                
+  However, **do not modify another project while working on this project**.     
+                                                                                
+  If you determine that a change is required in another repository:             
+                                                                                
+  1. Identify the correct repository.                                           
+  2. Create a GitHub issue in that repository explaining exactly what needs to  
+  change and why.                                                               
+  3. Link/reference the original issue where appropriate.                       
+  4. Continue with what you can do in the current project.                      
+                                                                                
+  Another AI agent responsible for that project will handle the new issue.      
+                                                                                
+  ## Autonomy                                                                   
+                                                                                
+  I will not be watching the terminal closely.                                  
+                                                                                
+  Please work autonomously and perform whatever investigation, code changes,    
+  testing, Git operations, GitHub operations, and other reasonable development  
+  tasks are necessary to resolve the issues.                                    
+                                                                                
+  Do not ask me to perform routine development steps that you can perform       
+  yourself.                                                                     
+                                                                                
+  Use your judgment when making normal implementation decisions. Only stop for  
+  input if there is a genuine blocker that cannot safely or reasonably be       
+  resolved without me.                                                          
+                                                                                
+  Do not merge your own pull requests unless I have explicitly asked you to do  
+  so.                                                                           
+                                                                                
+  ## When Finished                                                              
+                                                                                
+  When you are finished, give me a concise summary containing:                  
+                                                                                
+  * Every issue you worked on                                                   
+  * The result of each issue                                                    
+  * A link to every PR you created                                              
+  * Any issues you could not fix and why                                        
+  * Any cross-project issues you created, including links to them               
+  * Any important concerns or follow-up work you discovered                     
+                                                                                
+  ⎿  UserPromptSubmit hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: line 1: node: command not 
+     found
+
+● I'll start by reviewing the open issues in this repository.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● There are already branches for several issues. Let me check what PRs exist.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Issues #61–67 already have open PRs. Let me read the remaining ones.
+
+  Listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+● JDK 21 is cached locally, so Gradle should work. Let me verify the gate runs
+  before I change anything.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Gate passes. Let me investigate the remaining issues and the state of the
+  sibling repos.
+
+  Listed 1 directory, ran 3 shell commands (ctrl+o to expand)
+
+● Offline downloads are largely shipped already. Let me read the remaining
+  issues and check the backend for the routes #80 depends on.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me set up task tracking for this session.
+  Searched for 1 pattern, read 4 files, listed 1 directory, ran 5 shell commands (ctrl+o to expand)
+
+● playerState.speed is available on the fiction screen. Let me write the summary
+  logic.
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/data/MobileModels.kt)
+  ⎿  Added 18 lines
+      154  
+      155      val resolvedCoverUrl: String?
+      156          get() = fiction?.coverImageUrl ?: coverImageUrl
+      157 +                                                              
+      158 +    val resolvedIsPlayed: Boolean                             
+      159 +        get() = playback?.isPlayed ?: false                   
+      160 +                                                              
+      161 +    /**                                                       
+      162 +     * Seconds left in this chapter, or null when nothing in t
+          +he payload can answer that.                                   
+      163 +     *                                                        
+      164 +     * The server computes `max(0, duration - position)` and s
+          +ends it as `remaining_seconds`, but not                       
+      165 +     * on every endpoint and not on every version, so fall bac
+          +k to the same arithmetic locally.                             
+      166 +     * Null rather than 0.0 when neither is available: a total
+          + built from chapters that never                               
+      167 +     * reported a duration should read as "unknown", not as "n
+          +othing left to listen to".                                    
+      168 +     */                                                       
+      169 +    val resolvedRemainingSeconds: Double?                     
+      170 +        get() {                                               
+      171 +            playback?.remainingSeconds?.let { return it.coerce
+          +AtLeast(0.0) }                                                
+      172 +            val duration = audioDuration ?: return null       
+      173 +            return (duration - resolvedPositionSeconds).coerce
+          +In(0.0, duration)                                             
+      174 +        }                                                     
+      175  }
+      176  
+      177  data class AudioInfo(
+
+● Write(app/src/main/java/dk/perspektiva/ttsroad/player/FictionListeningSummary.
+       kt)
+  ⎿  Wrote 106 lines to app/src/main/java/dk/perspektiva/ttsroad/player/Fic
+     tionListeningSummary.kt
+       1 package dk.perspektiva.ttsroad.player
+       2 
+       4 import kotlin.math.roundToLong
+       5 
+       6 /**
+         as opposed to what is on disk.
+       8  *
+       9  * The screen already answers the storage question — "0 offline 
+      10  * the one asked before starting a 400-chapter serial, which is 
+         a different question with a
+     … +117 lines (ctrl+o to expand)
+
+● Now let me wire it into the fiction header.
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/MainActivity.kt)
+  ⎿  Added 2 lines
+      2988      onPlay: (ChapterSummary) -> Unit,
+      2989      downloadSummary: FictionDownloadSummary = FictionDownload
+            Summary(),
+      2990      onDownloadNext: (() -> Unit)? = null,
+      2991 +    listeningSummary: FictionListeningSummary = FictionListen
+           +ingSummary(),                                                
+      2992 +    playbackSpeed: Float = 1f,                               
+      2993  ) {
+      2994      var descExpanded by remember(fiction.id) { mutableStateOf
+            (false) }
+      2995      var descCanExpand by remember(fiction.id) { mutableStateO
+            f(false) }
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/MainActivity.kt)
+  ⎿  Added 29 lines
+      3041              }
+      3042          }
+      3043  
+      3044 +        if (listeningSummary.playable > 0) {                 
+      3045 +            Column(verticalArrangement = Arrangement.spacedBy
+           +(6.dp)) {                                                    
+      3046 +                if (listeningSummary.hasRemaining) {         
+      3047 +                    Text(                                    
+      3048 +                        text = "${formatListeningSpan(listeni
+           +ngSummary.remainingSeconds)} remaining",                     
+      3049 +                        style = MaterialTheme.typography.titl
+           +eMedium,                                                     
+      3050 +                    )                                        
+      3051 +                }                                            
+      3052 +                MetaText(                                    
+      3053 +                    text = buildString {                     
+      3054 +                        append("${listeningSummary.played}/${
+           +listeningSummary.playable} played")                          
+      3055 +                        if (listeningSummary.unplayed > 0) { 
+      3056 +                            append("  ·  ${listeningSummary.u
+           +nplayed} left")                                              
+      3057 +                        }                                    
+      3058 +                        // Only worth saying when it changes 
+           +the answer; at 1x it is the same number                      
+      3059 +                        // twice, which reads as a bug rather
+           + than as extra information.                                  
+      3060 +                        if (listeningSummary.hasRemaining && 
+           +playbackSpeed != 1f) {                                       
+      3061 +                            val atSpeed = listeningSpanAtSpee
+           +d(                                                           
+      3062 +                                listeningSummary.remainingSec
+           +onds,                                                        
+      3063 +                                playbackSpeed,               
+      3064 +                            )                                
+      3065 +                            append("  ·  ${formatListeningSpa
+           +n(atSpeed)} at ${formatSpeed(playbackSpeed)}")               
+      3066 +                        }                                    
+      3067 +                    },                                       
+      3068 +                    color = AarisColor.Dim,                  
+      3069 +                )                                            
+      3070 +            }                                                
+      3071 +        }                                                    
+      3072 +                                                             
+      3073          onDownloadNext?.let { download ->
+      3074              Column(verticalArrangement = Arrangement.spacedBy
+            (6.dp)) {
+      3075                  OutlinedButton(
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● formatSpeed already exists. Now the call site:
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/MainActivity.kt)
+  ⎿  Added 4 lines
+       996                              downloadSummary = remember(chapte
+            rs, downloadState) {
+       997                                  fictionDownloadSummary(chapte
+            rs, downloadState)
+       998                              },
+       999 +                            listeningSummary = remember(chapt
+           +ers) {                                                       
+      1000 +                                fictionListeningSummary(chapt
+           +ers)                                                         
+      1001 +                            },                               
+      1002 +                            playbackSpeed = playerState.speed
+           +,                                                            
+      1003                              onDownloadNext = {
+      1004                                  // Start where the listener i
+            s, not at chapter one — the point of the
+      1005                                  // batch is the drive ahead o
+            f them.
+
+● Now the player's remaining-in-chapter line:
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/MainActivity.kt)
+  ⎿  Added 27 lines, removed 1 line
+      1280              horizontalArrangement = Arrangement.SpaceBetween,
+      1281          ) {
+      1282              MetaText(text = formatDuration(dragMs?.toLong() ?
+            : playerState.positionMs))
+      1283 -            MetaText(text = formatDuration(playerState.durati
+           -onMs))                                                       
+      1283 +            // Time left beats total duration here: the scrub
+           +ber already shows how far in this is,                        
+      1284 +            // and "how much longer" is the thing being asked
+           +. At anything but 1x the wall-clock                          
+      1285 +            // answer differs from the audio one, so say both
+           + rather than the misleading one.                             
+      1286 +            if (playerState.durationMs > 0L) {               
+      1287 +                val position = dragMs?.toLong() ?: playerStat
+           +e.positionMs                                                 
+      1288 +                MetaText(                                    
+      1289 +                    text = buildString {                     
+      1290 +                        append("-")                          
+      1291 +                        append(formatDuration(remainingMs(pos
+           +ition, playerState.durationMs)))                             
+      1292 +                        if (playerState.speed != 1f) {       
+      1293 +                            append("  ·  ")                  
+      1294 +                            append(                          
+      1295 +                                formatDuration(              
+      1296 +                                    remainingMsAtSpeed(      
+      1297 +                                        position,            
+      1298 +                                        playerState.durationM
+           +s,                                                           
+      1299 +                                        playerState.speed,   
+      1300 +                                    ),                       
+      1301 +                                ),                           
+      1302 +                            )                                
+      1303 +                            append(" at ${formatSpeed(playerS
+           +tate.speed)}")                                               
+      1304 +                        }                                    
+      1305 +                    },                                       
+      1306 +                )                                            
+      1307 +            } else {                                         
+      1308 +                MetaText(text = formatDuration(playerState.du
+           +rationMs))                                                   
+      1309 +            }                                                
+      1310          }
+      1311          Spacer(modifier = Modifier.height(12.dp))
+      1312          LinearProgressIndicator(
+
+● Now the imports:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/MainActivity.kt)
+  ⎿  Added 6 lines
+      182  import dk.perspektiva.ttsroad.nav.popScreen
+      183  import dk.perspektiva.ttsroad.nav.rootBackStack
+      184  import dk.perspektiva.ttsroad.nav.saveKey
+      185 +import dk.perspektiva.ttsroad.player.FictionListeningSummary  
+      186 +import dk.perspektiva.ttsroad.player.fictionListeningSummary  
+      187 +import dk.perspektiva.ttsroad.player.formatListeningSpan      
+      188  import dk.perspektiva.ttsroad.player.HistorySnapshot
+      189  import dk.perspektiva.ttsroad.player.lastHeardSnapshot
+      190 +import dk.perspektiva.ttsroad.player.listeningSpanAtSpeed     
+      191 +import dk.perspektiva.ttsroad.player.remainingMs              
+      192 +import dk.perspektiva.ttsroad.player.remainingMsAtSpeed       
+      193  import dk.perspektiva.ttsroad.player.PlaybackController
+      194  import dk.perspektiva.ttsroad.player.PlayerUiState
+      195  import dk.perspektiva.ttsroad.player.SleepTimerController
+
+● Now let me write tests for the new logic.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Write(app/src/test/java/dk/perspektiva/ttsroad/player/FictionListeningSummaryT
+       est.kt)
+  ⎿  Wrote 174 lines to app/src/test/java/dk/perspektiva/ttsroad/player/Fic
+     tionListeningSummaryTest.kt
+      1 package dk.perspektiva.ttsroad.player
+      2 
+      3 import dk.perspektiva.ttsroad.data.AudioInfo
+      4 import dk.perspektiva.ttsroad.data.ChapterSummary
+      5 import dk.perspektiva.ttsroad.data.PlaybackInfo
+      6 import org.junit.Assert.assertEquals
+      7 import org.junit.Assert.assertFalse
+      8 import org.junit.Assert.assertTrue
+      9 import org.junit.Test
+     … +193 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+● Tests pass. Let me run lint and update the changelog.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● Update(CHANGELOG.md)
+  ⎿  Added 20 lines
+       2  
+       3  Notable changes to the TTSRoad Android client.
+       4  
+       5 +## Unreleased                                                  
+       6 +                                                               
+       7 +### Added                                                      
+       8 +                                                               
+       9 +- **The fiction screen says how much listening is left.** It pr
+         +eviously answered only the storage                             
+      10 +  question — "0 offline · 73 not downloaded" — which is not the
+         + one you ask before starting a                                 
+      11 +  400-chapter serial. It now leads with total remaining time, a
+         + played count, and how many chapters                           
+      12 +  are left, matching what the web card shows.                  
+      13 +- A chapter you marked played counts as finished even if you ne
+         +ver pressed play on it. Trusting the                           
+      14 +  saved position instead would report a book you deliberately f
+         +inished as entirely unheard.                                   
+      15 +- When no chapter reports a duration, the remaining line is lef
+         +t out rather than shown as "0m".                               
+      16 +  A confident zero is worse than saying nothing.               
+      17 +- **The player shows time left in the chapter** where it used t
+         +o repeat the total duration. The                               
+      18 +  scrubber already shows how far in you are; how much longer is
+         + the thing being asked.                                        
+      19 +- **At any speed other than 1x, both numbers appear** — the aud
+         +io time and what it actually takes                             
+      20 +  at that speed. Remaining alone stops answering "will I finish
+         + this on the drive" as soon as you                             
+      21 +  listen at 1.75x.                                             
+      22 +                                                               
+      23 +No new requests: every figure is a sum over the chapter list th
+         +e screen has already loaded.                                   
+      24 +                                                               
+      25  ## 0.10.0 — 2026-08-08
+      26  
+      27  Signed with the same pinned key as 0.7.0 through 0.9.0, so this
+           installs directly over any of them
+
+  Created PR #81, ran 1 shell command (ctrl+o to expand)
+
+● PR #81 created for issue #79. Now let me move to #72.
+
+  Read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● The #61 branch already emits seconds precision — but let me check for a
+  subtler hazard in how it formats.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● My locale hypothesis doesn't reproduce — dropping it. The #61 branch already
+  avoids the 9-digit trap via an explicit pattern. Let me check what genuinely
+  remains.
+
+  Read 1 file (ctrl+o to expand)
+
+● Now let me implement #72 on top of the #61 branch.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/player/PendingProgressStore.kt
+        )
+  ⎿  Added 20 lines, removed 5 lines
+      28      val recordedAtMillis: Long,
+      29  )
+      30  
+      31 -/** The server's format for `client_updated_at`. Seconds precis
+         -ion, explicit Z, never a local zone. */                        
+      32 -private val Iso8601Utc: DateTimeFormatter =                    
+      33 -    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").wit
+         -hZone(ZoneOffset.UTC)                                          
+      31 +/**                                                            
+      32 + * The server's format for `client_updated_at`: ISO-8601 UTC wi
+         +th an explicit `Z` and **at most                               
+      33 + * three** fractional-second digits.                           
+      34 + *                                                             
+      35 + * The digit count is the part that matters, and it is a trap r
+         +ather than a preference. The backend                           
+      36 + * hands the string to Python's `datetime.fromisoformat`, which
+         + before 3.11 accepts only 3 or 6                               
+      37 + * fractional digits — and the backend's stated floor is 3.10. 
+         +The obvious way to write this,                                 
+      38 + * `Instant.now().toString()`, emits as many digits as the plat
+         +form clock has, which on Android is                            
+      39 + * frequently **9**. A stamp the server cannot parse comes back
+         + as `invalid_client_updated_at`, and                           
+      40 + * a rejected item is dropped rather than retried, so the failu
+         +re is a silently lost listening                                
+      41 + * position — the exact thing `/playback/sync` exists to preven
+         +t. Worse, it would not show up when                            
+      42 + * testing against a 3.11+ deployment. See issue #72.          
+      43 + *                                                             
+      44 + * Taking epoch **millis** is what enforces the bound structura
+         +lly rather than by convention:                                 
+      45 + * [Instant.ofEpochMilli] can only carry millisecond precision,
+         + and [Instant.toString] emits                                  
+      46 + * fractional digits in groups of three, so the result always h
+         +as either 0 or 3 of them. Both parse                           
+      47 + * everywhere. A future refactor would have to change this sign
+         +ature to reintroduce the bug.                                  
+      48 + */                                                            
+      49 +fun iso8601Utc(epochMillis: Long): String =                    
+      50 +    Instant.ofEpochMilli(epochMillis).truncatedTo(ChronoUnit.MI
+         +LLIS).toString()                                               
+      51  
+      35 -fun iso8601Utc(epochMillis: Long): String = Iso8601Utc.format(I
+         -nstant.ofEpochMilli(epochMillis))                              
+      36 -                                                               
+      52  /**
+      53   * How many chapters can be waiting to sync before the oldest a
+          re dropped.
+      54   *
+
+● Now fix the imports and the doc comment on the field:
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/player/PendingProgressStore.kt
+        )
+  ⎿  Added 1 line, removed 2 lines
+       6  import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFacto
+          ry
+       7  import java.io.File
+       8  import java.time.Instant
+       9 -import java.time.ZoneOffset                                    
+      10 -import java.time.format.DateTimeFormatter                      
+       9 +import java.time.temporal.ChronoUnit                           
+      10  
+      11  /**
+      12   * One recorded playback position, waiting to reach the server.
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/player/PendingProgressStore.kt
+        )
+  ⎿  Added 1 line, removed 1 line
+      21      val chapterId: Int,
+      22      val positionSeconds: Double,
+      23      val isPlayed: Boolean,
+      24 -    /** ISO-8601 UTC, e.g. `2026-08-11T09:41:07Z` — the format 
+         -the backend parses. */                                         
+      24 +    /** ISO-8601 UTC, e.g. `2026-08-11T09:41:07.412Z` — see [is
+         +o8601Utc] for why the precision. */                            
+      25      val clientUpdatedAt: String,
+      26      /** Epoch millis of the same moment, kept so entries can be
+           ordered without reparsing. */
+      27      val recordedAtMillis: Long,
+
+● Now the regression test that pins the format:
+
+● Update(app/src/test/java/dk/perspektiva/ttsroad/player/PendingProgressStoreTes
+        t.kt)
+  ⎿  Added 37 lines
+      105      }
+      106  
+      107      @Test
+      108 +    fun `stamps carry at most three fractional-second digits`(
+          +) {                                                           
+      109 +        // The trap in issue #72. `datetime.fromisoformat` bef
+          +ore Python 3.11 accepts only 3 or 6                           
+      110 +        // fractional digits, and the backend's floor is 3.10;
+          + `Instant.now().toString()` emits as                          
+      111 +        // many as the clock has, which on Android is frequent
+          +ly 9. A stamp the server cannot parse                         
+      112 +        // is rejected as `invalid_client_updated_at`, and a r
+          +ejected item is dropped rather than                           
+      113 +        // retried — a silently lost position, which is what /
+          +playback/sync exists to prevent.                              
+      114 +        //                                                    
+      115 +        // It would also not fail against a 3.11+ deployment, 
+          +so this is pinned here rather than                            
+      116 +        // discovered in the field.                           
+      117 +        assertEquals("2023-11-14T22:13:20.123Z", iso8601Utc(1_
+          +700_000_000_123L))                                            
+      118 +        assertEquals("2023-11-14T22:13:20.100Z", iso8601Utc(1_
+          +700_000_000_100L))                                            
+      119 +    }                                                         
+      120 +                                                              
+      121 +    @Test                                                     
+      122 +    fun `the real clock never produces an unparseable stamp`()
+          + {                                                            
+      123 +        // Over repeated calls, because the digit count varies
+          + with what the clock happens to read                          
+      124 +        // and a single sample can pass by luck. The desktop c
+          +lient pins the same shape.                                    
+      125 +        val parseable = Regex("""^\d{4}-\d{2}-\d{2}T\d{2}:\d{2
+          +}:\d{2}(\.\d{3})?Z$""")                                       
+      126 +        repeat(200) {                                         
+      127 +            val stamp = iso8601Utc(System.currentTimeMillis())
+      128 +            assertTrue("unparseable stamp: $stamp", parseable.
+          +matches(stamp))                                               
+      129 +        }                                                     
+      130 +    }                                                         
+      131 +                                                              
+      132 +    @Test                                                     
+      133 +    fun `a recorded entry's stamp keeps sub-second ordering`()
+          + {                                                            
+      134 +        // Seconds precision would round two positions in the 
+          +same second to a tie. The server                              
+      135 +        // applies last-write-wins on this field, and the web 
+          +client stamps in milliseconds, so a                           
+      136 +        // phone truncating to seconds could stamp a genuinely
+          + newer position as older than a                               
+      137 +        // browser write from earlier in the same second and l
+          +ose to it.                                                    
+      138 +        val store = store { 1_700_000_000_900L }              
+      139 +        val entry = store.record(1, 7, 10.0, false)           
+      140 +                                                              
+      141 +        assertEquals("2023-11-14T22:13:20.900Z", entry.clientU
+          +pdatedAt)                                                     
+      142 +    }                                                         
+      143 +                                                              
+      144 +    @Test                                                     
+      145      fun `the queue is capped, dropping the oldest first`() {
+      146          val store = store()
+      147          for (chapter in 1..(MaxPendingProgress + 10)) {
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Imports are already present. Let me run the tests.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Update(CHANGELOG.md)
+  ⎿  Added 3 lines
+      19    entries rather than two thousand.
+      20  - On a server without batched progress the old single-chapter e
+          ndpoint is still used — unchanged,
+      21    and still unordered — but a position recorded offline is now 
+          retried instead of dropped.
+      22 +- Positions are stamped to the millisecond rather than the seco
+         +nd. The browser stamps that finely,                            
+      23 +  and the server keeps whichever is newer, so a rounded-down st
+         +amp from the phone could lose to a                             
+      24 +  browser write from earlier in the same second and roll your p
+         +lace back.                                                     
+      25  
+      26  ## 0.10.0 — 2026-08-08
+      27  
+
+  Created PR #82, ran 1 shell command (ctrl+o to expand)
+
+● PR #82 created for #72. Now let me look at #78 and the bookmarks branch.
+  Ran 1 shell command (ctrl+o to expand)
+
+● PR #74 already defaults kind=manual, so #78's second point is covered. Let me
+  assess the main part — moving breadcrumbs to the server.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Let me check the quick assessments first — #80's backend dependency and #14's
+  status.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Both backend issues are open and unimplemented, so #80 is genuinely blocked.
+  Let me verify #14's state.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The download stack is fully implemented on main. Now let me verify the backend
+  contract for #78 before building.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● MAX_AUTO_BREADCRUMBS_PER_USER doesn't exist in the backend checkout. Let me
+  verify that carefully — it's the premise #78 rests on.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● TTSRoad#90 is still an open PR — not merged. Let me check whether the window
+  exists inside it before filing anything.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The window exists but only inside the unmerged PR #90. Let me record these
+  findings on the issues.
+
+  Ran 4 shell commands (ctrl+o to expand)
+
+● Let me verify CI on both PRs and confirm the repo state is clean.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Both PRs pass CI. Here's the summary.
+
+  Issues worked on
+
+  #79 — Fiction screen shows no listening totals → Fixed, PR #81
+  (https://github.com/jonarihen/TTSRoad-App/pull/81)
+  Fiction header now leads with total remaining (54h 38m remaining), 0/73 played
+  · 73 left, and at non-1x speeds the wall-clock figure too. The player's
+  right-hand timestamp changed from total duration to time remaining. Added
+  resolvedRemainingSeconds / resolvedIsPlayed to ChapterSummary per the repo's
+  resolved* convention — returning null, not 0.0, when nothing can answer, so a
+  payload without durations reads as unknown rather than "nothing left". 17 new
+  tests. No new requests; all sums over already-loaded data.
+
+  #72 — Truncate client_updated_at to milliseconds → Fixed, PR #82
+  (https://github.com/jonarihen/TTSRoad-App/pull/82) (targets 
+  fix/61-offline-progress-sync, not main — the code only exists there)
+  The 9-digit trap was not live: #61 formats through an explicit
+  seconds-precision pattern. What was missing was anything stopping it becoming
+  live, so the substance is a regression test pinning the format over 200 calls.
+  Also moved seconds → milliseconds, which bounds the digit count structurally
+  (the function takes epoch millis) and fixes a real ordering case: the web
+  stamps in milliseconds, so a phone rounding …07.900 down to …07.000 loses to a
+  browser write from …07.400.
+
+  Blocked — with findings recorded on each issue
+
+  #78 — Jump-back history to the server — blocked; the issue's premise is wrong.
+  It says the backend store "and its rolling window shipped".
+  jonarihen/TTSRoad#90 is an open PR. On origin/main there is no
+  MAX_AUTO_BREADCRUMBS_PER_USER, no tombstoning — only the single 5000 cap that
+  counts both kinds and 409s. Building the writer on this issue's "no need to
+  prune client-side" instruction would walk the shared budget to the cap and
+  lock the account out of manual bookmarks, which is the exact hazard the issue
+  raises. The one actionable part — ?kind=manual — is already correct on PR #74.
+
+  #80 — Add/delete a fiction — blocked on jonarihen/TTSRoad#94, open and
+  unimplemented. Verified /api/mobile/ has only follow/unfollow and no
+  capability flag. Did not build against /api/fictions directly, as the issue
+  itself argued against.
+
+  #14 — Offline downloads — the whole proposed stack is on main; three of four
+  acceptance criteria met. Left open because the fourth — playback in airplane
+  mode — needs a device I don't have, and it's the one that actually proves the
+  feature.
+
+  #70 — parked manual-only, not touched. #60, #68 — trackers, not code. #61–67
+  already have open PRs.
+
+  No cross-project issues filed
+
+  Both backend dependencies (TTSRoad#94, #95) already exist as open issues, so
+  filing more would be noise.
+
+  Worth your attention
+
+  - The correction #78 asks you to make to #60's parity table is itself wrong —
+  it wants Web's jump-back row flipped to yes on the strength of #90, which
+  hasn't merged. I'd leave the row alone until it lands. Given #72's footnote
+  about these review-pass tables misstating main, that pattern has now recurred
+  twice.
+  - A design decision awaits whoever picks up #78: the local store records every
+  ~15s, so pushing every snapshot gives ~1 hour of cross-device reach at 240
+  writes/hour. A coarser server cadence (~5 min ≈ 20 hours) with the 2000-entry
+  local store kept as-is is the shape I'd suggest. Detail is in the issue
+  comment.
+  - #14's real remaining gap is automatic download-ahead (#68 item 1), not
+  anything in #14 itself — worth its own issue if #14 closes on a manual
+  airplane-mode check.
+
+✻ Cooked for 19m 58s
+
+❯ if wrong then fix, please dont bother me for non issues. please continue        ⎿  UserPromptSubmit hook error
+  ⎿  Failed with non-blocking status code: /bin/sh: line 1: node: command not 
+     found
+
+● Understood — fixing rather than reporting. #78 is implementable safely; let me
+  build it so it works against servers with or without the rolling window.
+
+  Read 1 file, ran 4 shell commands (ctrl+o to expand)
+
+● minSdk = 26, so java.time is native. Let me check the exact timestamp format
+  the server emits.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Server emits ISO-8601 with Z, 0 or 6 fractional digits — Instant.parse handles
+  both. Let me write the core logic.
+
+● Write(app/src/main/java/dk/perspektiva/ttsroad/player/PlaybackBreadcrumbs.kt)
+  ⎿  Wrote 151 lines to
+     app/src/main/java/dk/perspektiva/ttsroad/player/PlaybackBreadcrumbs.kt
+       1 package dk.perspektiva.ttsroad.player
+       2 
+       3 import dk.perspektiva.ttsroad.data.Bookmark
+       4 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
+       5 import java.time.Instant
+       7 
+       8 /**
+       9  * Jump-back breadcrumbs kept on the server, so "where was I at 
+         23:49" can be answered on a device
+      10  * that was not the one playing.
+     … +192 lines (ctrl+o to expand)
+
+● Now the DTO constant and repository support:
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/data/MobileModels.kt)
+  ⎿  Added 7 lines
+      231  
+      232  const val BookmarkKindManual: String = "manual"
+      233  
+      234 +/**                                                           
+      235 + * The jump-back breadcrumb kind — a position recorded because
+          + playback was there, not because                              
+      236 + * anyone chose it. Shares a table with `manual`, so anything 
+          +rendering user-chosen marks must                              
+      237 + * filter, or a day of listening buries the handful the reader
+          + actually made.                                               
+      238 + */                                                           
+      239 +const val BookmarkKindAuto: String = "auto"                   
+      240 +                                                              
+      241  data class BookmarksResponse(
+      242      @param:Json(name = "api_version") val apiVersion: Int = 1,
+      243      @param:Json(name = "server_time") val serverTime: String? 
+           = null,
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/data/TtsRoadRepository.kt)
+  ⎿  Added 14 lines
+      352          }.bookmarks
+      353      }
+      354  
+      355 +    /**                                                       
+      356 +     * The account's jump-back breadcrumbs, or null on a serve
+          +r without the `bookmarks` capability.                         
+      357 +     *                                                        
+      358 +     * Separate from [bookmarks] rather than a parameter on it
+          + so the two can never be confused at a                        
+      359 +     * call site: this list is machine-written and can run to 
+          +hundreds of rows, and rendering it                            
+      360 +     * where the user's own marks belong is the bug this filte
+          +r exists to prevent.                                          
+      361 +     */                                                       
+      362 +    suspend fun breadcrumbs(): List<Bookmark>? {              
+      363 +        if (!_currentCapabilities.value.bookmarks) return null
+      364 +        return withAuthorizedApi { it.bookmarks(kind = Bookmar
+          +kKindAuto) }.bookmarks                                        
+      365 +    }                                                         
+      366 +                                                              
+      367      /** The created bookmark, or null when the server cannot h
+           old one. Throws on a real failure. */
+      368      suspend fun createBookmark(
+      369          chapterId: Int,
+      370          positionSeconds: Double,
+      371          label: String? = null,
+      372          note: String? = null,
+      373 +        kind: String = BookmarkKindManual,                    
+      374      ): Bookmark? {
+      375          if (!_currentCapabilities.value.bookmarks) return null
+      376          return withAuthorizedApi {
+     ...
+      380                      positionSeconds = positionSeconds.coerceAt
+           Least(0.0),
+      381                      label = label?.trim()?.takeIf { text -> te
+           xt.isNotEmpty() },
+      382                      note = note?.trim()?.takeIf { text -> text
+           .isNotEmpty() },
+      383 +                    kind = kind,                              
+      384                  ),
+      385              )
+      386          }.bookmark
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Same package — no import needed. Now let me wire the write path into the media
+  service.
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+● Now let me add the write path to the service, with bounded pruning:
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/player/PlaybackBreadcrumbs.kt)
+  ⎿  Added 10 lines
+      48  const val MaxServerBreadcrumbs: Int = 240
+      49  
+      50  /**
+      51 + * How often the trail is pruned back to [MaxServerBreadcrumbs]
+         +.                                                              
+      52 + *                                                             
+      53 + * Pruning costs a listing, so it is not worth doing on every w
+         +rite. At twelve writes an hour it                              
+      54 + * takes twenty hours of playback to reach the cap from empty, 
+         +so an hourly check cannot be                                   
+      55 + * outrun — and against a server that already windows, the list
+         +ing comes back at or under the cap                             
+      56 + * and nothing is deleted.                                     
+      57 + */                                                            
+      58 +const val BreadcrumbPruneIntervalMs: Long = 60 * 60_000L       
+      59 +                                                               
+      60 +/**                                                            
+      61   * Whether enough time has passed to write another breadcrumb.
+      62   *
+      63   * [lastWrittenAt] is null before the first write of a session,
+           which always qualifies — the moment
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/media/TtsRoadMediaService.kt)
+  ⎿  Added 38 lines
+      426                  isPlayed = forcePlayed || nearComplete,
+      427              )
+      428          }
+      429 +                                                              
+      430 +        writeBreadcrumb(chapterId = chapterId, positionMs = po
+          +sition)                                                       
+      431      }
+      432  
+      433 +    /**                                                       
+      434 +     * Drop a coarse jump-back breadcrumb on the server, so th
+          +e moment is findable from the browser                         
+      435 +     * and from any other device on this account.             
+      436 +     *                                                        
+      437 +     * Deliberately much rarer than the local snapshot above —
+          + see [ServerBreadcrumbIntervalMs]. The                        
+      438 +     * local store keeps its full-resolution trail either way;
+          + this is the cross-device overlay.                            
+      439 +     *                                                        
+      440 +     * Every failure here is swallowed. A breadcrumb is a conv
+          +enience, and the caller's real job is                         
+      441 +     * saving the listening position — an offline phone must n
+          +ot lose that to a failed extra write.                         
+      442 +     */                                                       
+      443 +    private suspend fun writeBreadcrumb(chapterId: Int, positi
+          +onMs: Long) {                                                 
+      444 +        val now = System.currentTimeMillis()                  
+      445 +        if (!shouldWriteBreadcrumb(lastBreadcrumbAt, now)) ret
+          +urn                                                           
+      446 +        // Claimed before the call rather than after it, so a 
+          +slow or hanging write cannot let the                          
+      447 +        // next tick queue a second one behind it.            
+      448 +        lastBreadcrumbAt = now                                
+      449 +                                                              
+      450 +        val written = runCatching {                           
+      451 +            repository.createBookmark(                        
+      452 +                chapterId = chapterId,                        
+      453 +                positionSeconds = positionMs / 1000.0,        
+      454 +                kind = BookmarkKindAuto,                      
+      455 +            )                                                 
+      456 +        }.getOrNull()                                         
+      457 +        // Null means this server has no bookmarks capability 
+          +at all. Stop reaching for it: there is                        
+      458 +        // nothing to prune either, and the next tick would on
+          +ly repeat the same failed call.                               
+      459 +        if (written == null) return                           
+      460 +                                                              
+      461 +        if (!shouldWriteBreadcrumb(lastBreadcrumbPruneAt, now,
+          + BreadcrumbPruneIntervalMs)) return                           
+      462 +        lastBreadcrumbPruneAt = now                           
+      463 +        runCatching {                                         
+      464 +            val stale = breadcrumbsToPrune(repository.breadcru
+          +mbs().orEmpty())                                              
+      465 +            for (id in stale) repository.deleteBookmark(id)   
+      466 +        }                                                     
+      467 +    }                                                         
+      468 +                                                              
+      469      private suspend fun serverUrl(): String = tokenStore.curre
+           nt().serverUrl
+      470  
+      471      private suspend fun library(): LibraryResponse? {
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Now the read path — merging server breadcrumbs into the jump-back sheet:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/MainActivity.kt)
+  ⎿  Added 13 lines, removed 1 line
+      1214          ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
+      1215      val historyStore = remember { ServiceLocator.playbackHist
+            ory(context) }
+      1216      val history by historyStore.snapshots.collectAsStateWithL
+            ifecycle()
+      1217 -    val jumpBackOptions = remember(history) { jumpBackOptions
+           -(history, System.currentTimeMillis()) }                      
+      1217 +    // Breadcrumbs the account recorded elsewhere — the brows
+           +er, or another phone. Fetched when the                       
+      1218 +    // sheet is opened rather than on every player compositio
+           +n: it is a request, and it is only ever                      
+      1219 +    // read by that sheet. A failure leaves the local trail o
+           +n its own, which is what this always was.                    
+      1220 +    var remoteBreadcrumbs by remember { mutableStateOf<List<H
+           +istorySnapshot>>(emptyList()) }                              
+      1221 +    LaunchedEffect(showJumpBack) {                           
+      1222 +        if (!showJumpBack) return@LaunchedEffect             
+      1223 +        remoteBreadcrumbs = runCatching {                    
+      1224 +            repository.breadcrumbs().orEmpty().mapNotNull { b
+           +readcrumbSnapshot(it) }                                      
+      1225 +        }.getOrDefault(emptyList())                          
+      1226 +    }                                                        
+      1227 +    val jumpBackOptions = remember(history, remoteBreadcrumbs
+           +) {                                                          
+      1228 +        jumpBackOptions(mergeBreadcrumbs(history, remoteBread
+           +crumbs), System.currentTimeMillis())                         
+      1229 +    }                                                        
+      1230      val sleepTimer = remember { ServiceLocator.sleepTimer() }
+      1231      val sleepTimerState by sleepTimer.state.collectAsStateWit
+            hLifecycle()
+      1232      val preferences = remember { ServiceLocator.playbackPrefe
+            rences(context) }
+
+● showJumpBack is declared later — let me fix the ordering.
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/MainActivity.kt)
+  ⎿  Removed 6 lines
+      1218      // sheet is opened rather than on every player compositio
+            n: it is a request, and it is only ever
+      1219      // read by that sheet. A failure leaves the local trail o
+            n its own, which is what this always was.
+      1220      var remoteBreadcrumbs by remember { mutableStateOf<List<H
+            istorySnapshot>>(emptyList()) }
+      1221 -    LaunchedEffect(showJumpBack) {                           
+      1222 -        if (!showJumpBack) return@LaunchedEffect             
+      1223 -        remoteBreadcrumbs = runCatching {                    
+      1224 -            repository.breadcrumbs().orEmpty().mapNotNull { b
+           -readcrumbSnapshot(it) }                                      
+      1225 -        }.getOrDefault(emptyList())                          
+      1226 -    }                                                        
+      1221      val jumpBackOptions = remember(history, remoteBreadcrumbs
+            ) {
+      1222          jumpBackOptions(mergeBreadcrumbs(history, remoteBread
+            crumbs), System.currentTimeMillis())
+      1223      }
+
+● Update(app/src/main/java/dk/perspektiva/ttsroad/MainActivity.kt)
+  ⎿  Added 6 lines
+      1229      }.collectAsStateWithLifecycle(initialValue = DefaultSkipS
+            ilence)
+      1230      var showChapters by remember { mutableStateOf(false) }
+      1231      var showJumpBack by remember { mutableStateOf(false) }
+      1232 +    LaunchedEffect(showJumpBack) {                           
+      1233 +        if (!showJumpBack) return@LaunchedEffect             
+      1234 +        remoteBreadcrumbs = runCatching {                    
+      1235 +            repository.breadcrumbs().orEmpty().mapNotNull { b
+           +readcrumbSnapshot(it) }                                      
+      1236 +        }.getOrDefault(emptyList())                          
+      1237 +    }                                                        
+      1238      var showSleepTimer by remember { mutableStateOf(false) }
+      1239      var showSpeed by remember { mutableStateOf(false) }
+      1240      // Confirmation for the bookmark button. A mark made whil
+            e listening gives no other sign that
+  Searched for 1 pattern (ctrl+o to expand)
+
+● repository is in scope. Let me add the imports and compile.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Compiles. Now the tests:
+
+● Write(app/src/test/java/dk/perspektiva/ttsroad/player/PlaybackBreadcrumbsTest.
+       kt)
+  ⎿  Wrote 233 lines to app/src/test/java/dk/perspektiva/ttsroad/player/Pla
+     ybackBreadcrumbsTest.kt
+       1 package dk.perspektiva.ttsroad.player
+       2 
+       3 import dk.perspektiva.ttsroad.data.Bookmark
+       4 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
+       5 import dk.perspektiva.ttsroad.data.BookmarkKindManual
+       6 import org.junit.Assert.assertEquals
+       7 import org.junit.Assert.assertFalse
+       8 import org.junit.Assert.assertNull
+       9 import org.junit.Assert.assertTrue
+      10 import org.junit.Test
+     … +268 lines (ctrl+o to expand)
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me confirm the new tests actually executed, then run lint.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 463 tests, 0 failures — the new class ran. Now lint and the changelog:
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  You've hit your session limit · resets 5:10pm (UTC)
+     /upgrade to increase your usage limit.
+
+✻ Sautéed for 6m 41s

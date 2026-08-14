@@ -71,6 +71,13 @@ data class ServerInfo(
 
 data class LibraryResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
+    /**
+     * `followed` or `all`, echoed back by the server. Read rather than assumed: a server without
+     * per-user libraries answers `followed` whatever was asked for, and the browse screen needs to
+     * know it is looking at the shared list rather than a shelf.
+     */
+    val scope: String = LibraryScopeFollowed,
+    @param:Json(name = "following_ids") val followingIds: List<Int> = emptyList(),
     val fictions: List<FictionSummary> = emptyList(),
     @param:Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
     @param:Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
@@ -98,6 +105,14 @@ data class FictionSummary(
     @param:Json(name = "pending_chapters") val pendingChapters: Int = 0,
     @param:Json(name = "error_chapters") val errorChapters: Int = 0,
     @param:Json(name = "processing_chapters") val processingChapters: Int = 0,
+    /**
+     * Whether this fiction is on the caller's shelf.
+     *
+     * Absent on a server without per-user libraries, where every fiction is effectively followed —
+     * hence the default. The follow control is gated on the capability, not on this, so the default
+     * is never read on a server that cannot honour it.
+     */
+    val following: Boolean = true,
 ) {
     /** Fraction of chapters with audio ready, for progress indicators. */
     val readyFraction: Float
@@ -154,6 +169,24 @@ data class ChapterSummary(
 
     val resolvedCoverUrl: String?
         get() = fiction?.coverImageUrl ?: coverImageUrl
+
+    val resolvedIsPlayed: Boolean
+        get() = playback?.isPlayed ?: false
+
+    /**
+     * Seconds left in this chapter, or null when nothing in the payload can answer that.
+     *
+     * The server computes `max(0, duration - position)` and sends it as `remaining_seconds`, but not
+     * on every endpoint and not on every version, so fall back to the same arithmetic locally.
+     * Null rather than 0.0 when neither is available: a total built from chapters that never
+     * reported a duration should read as "unknown", not as "nothing left to listen to".
+     */
+    val resolvedRemainingSeconds: Double?
+        get() {
+            playback?.remainingSeconds?.let { return it.coerceAtLeast(0.0) }
+            val duration = audioDuration ?: return null
+            return (duration - resolvedPositionSeconds).coerceIn(0.0, duration)
+        }
 }
 
 data class AudioInfo(
@@ -272,3 +305,236 @@ const val QueueActionAdvance: String = "advance"
 const val QueueModeEnd: String = "end"
 const val QueueModeNext: String = "next"
 const val QueueStatusPlaying: String = "playing"
+
+/**
+ * `GET /api/mobile/search?q=`.
+ *
+ * Grouped rather than flat, and the groups are always present even when empty — fictions, then
+ * chapter titles, then narration text. The group order *is* the rank order; `score` says the same
+ * thing numerically for a client that would rather have one list.
+ */
+data class SearchResponse(
+    val query: String = "",
+    val fictions: SearchGroup = SearchGroup(),
+    val chapters: SearchGroup = SearchGroup(),
+    val text: SearchGroup = SearchGroup(),
+    /**
+     * Whether the full-text index was available. False means the narration-text group fell back to
+     * a slower or narrower match, which is worth saying rather than silently returning less.
+     */
+    val indexed: Boolean = false,
+    val total: Int = 0,
+)
+
+data class SearchGroup(
+    val items: List<SearchHit> = emptyList(),
+    val total: Int = 0,
+    /** The server stops counting at a cap; render "500+" rather than "500" when this is set. */
+    val capped: Boolean = false,
+    @param:Json(name = "has_more") val hasMore: Boolean = false,
+)
+
+/**
+ * One hit. The same shape in all three groups, so a fiction hit simply has no chapter.
+ *
+ * Everything but `kind` is optional on purpose: a fiction hit carries no chapter id or snippet, and
+ * a text hit carries no tags, and one strict field would fail the whole response.
+ */
+data class SearchHit(
+    /** `fiction`, `chapter` or `text`. */
+    val kind: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    @param:Json(name = "chapter_id") val chapterId: Int? = null,
+    @param:Json(name = "chapter_title") val chapterTitle: String? = null,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
+    val author: String? = null,
+    @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
+    /** The matching passage, for chapter-title and narration-text hits. */
+    val snippet: String? = null,
+    val playable: Boolean = false,
+) {
+    /** Never blank, so every row has something to show. */
+    val resolvedTitle: String
+        get() = when {
+            !chapterTitle.isNullOrBlank() -> chapterTitle
+            !fictionTitle.isNullOrBlank() -> fictionTitle
+            else -> "Untitled"
+        }
+}
+
+const val SearchKindFiction: String = "fiction"
+const val SearchKindChapter: String = "chapter"
+const val SearchKindText: String = "text"
+
+/**
+ * The two `scope` values `/api/mobile/library` accepts.
+ *
+ * `followed` is the default and is what a client that has never heard of follows gets. That is safe
+ * because the backend's upgrade backfills a follow of every fiction for every existing account, so
+ * an older app sees exactly what it saw before rather than an empty shelf.
+ */
+const val LibraryScopeFollowed: String = "followed"
+const val LibraryScopeAll: String = "all"
+
+/** `POST`/`DELETE /api/mobile/fictions/{id}/follow`. Both answer the resulting state. */
+data class FollowResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    val following: Boolean = false,
+)
+
+/**
+ * `GET`/`PATCH /api/me/preferences`.
+ *
+ * A loose map for the same reason [CapabilitiesResponse] uses one: the server owns the vocabulary
+ * and adds to it on its own schedule, so a strict model would fail to parse the whole blob over one
+ * key this build has never heard of. The typed reads live in `AccountPreferences.kt`.
+ */
+data class AccountPreferencesResponse(
+    val preferences: Map<String, Any?> = emptyMap(),
+)
+
+/**
+ * One bookmark, exactly as `/api/bookmarks` and `/api/mobile/bookmarks` both return it.
+ *
+ * Chapter and fiction titles ride along in the payload precisely so an account-wide list can be
+ * rendered without a second request per row — use them rather than looking the chapter up.
+ *
+ * Everything but the id is optional: the server returns nulls for a bookmark whose chapter has been
+ * removed, and a list that failed to parse over one such row would be worse than one that shows it.
+ */
+data class Bookmark(
+    val id: Int = 0,
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "position_label") val positionLabel: String? = null,
+    val label: String? = null,
+    val note: String? = null,
+    val color: String? = null,
+    /** `manual` for a mark the user made; `auto` is the jump-back breadcrumb, filtered out by default. */
+    val kind: String = BookmarkKindManual,
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    @param:Json(name = "chapter_title") val chapterTitle: String? = null,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+) {
+    /** Never blank, so an unlabelled mark still has something to show in the list. */
+    val resolvedLabel: String
+        get() = label?.trim()?.takeIf { it.isNotEmpty() }
+            ?: chapterTitle?.trim()?.takeIf { it.isNotEmpty() }
+            ?: "Bookmark"
+}
+
+const val BookmarkKindManual: String = "manual"
+
+/**
+ * The jump-back breadcrumb kind — a position recorded because playback was there, not because
+ * anyone chose it. Shares a table with `manual`, so anything rendering user-chosen marks must
+ * filter, or a day of listening buries the handful the reader actually made.
+ */
+const val BookmarkKindAuto: String = "auto"
+
+data class BookmarksResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    val bookmarks: List<Bookmark> = emptyList(),
+    val deleted: List<Int> = emptyList(),
+)
+
+/** POST and PATCH both answer the single written row under `bookmark`. */
+data class BookmarkWriteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val bookmark: Bookmark? = null,
+)
+
+data class BookmarkDeleteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    val id: Int = 0,
+)
+
+/**
+ * A new bookmark. Only `chapter_id` is required by the server; the rest default.
+ *
+ * `kind` is sent explicitly rather than left to the server's default so that a mark made from the
+ * player is always a `manual` one, and can never be mistaken for a jump-back breadcrumb.
+ */
+data class CreateBookmarkRequest(
+    @param:Json(name = "chapter_id") val chapterId: Int,
+    @param:Json(name = "position_seconds") val positionSeconds: Double,
+    val label: String? = null,
+    val note: String? = null,
+    val kind: String = BookmarkKindManual,
+)
+
+/**
+ * A partial update.
+ *
+ * The server checks key *presence* — a key that is absent leaves the stored value alone. Moshi omits
+ * null fields when serialising, so a null here means "do not touch this field", which lines the two
+ * halves up exactly. To *clear* a value, send an empty string: the server trims it and stores null.
+ */
+data class UpdateBookmarkRequest(
+    val label: String? = null,
+    val note: String? = null,
+)
+
+/**
+ * One item of `POST /api/mobile/playback/sync`.
+ *
+ * [clientUpdatedAt] is what makes the batch endpoint different from `/playback/progress`: the
+ * server applies an item only if this stamp is *strictly newer* than what it already holds. Equal
+ * loses, so two devices re-posting the same synced state do not take turns clobbering each other,
+ * and a missing or unparseable stamp loses rather than being guessed at.
+ */
+data class PlaybackSyncItem(
+    @param:Json(name = "chapter_id") val chapterId: Int,
+    @param:Json(name = "position_seconds") val positionSeconds: Double,
+    @param:Json(name = "is_played") val isPlayed: Boolean,
+    @param:Json(name = "client_updated_at") val clientUpdatedAt: String,
+)
+
+data class PlaybackSyncRequest(
+    val items: List<PlaybackSyncItem>,
+)
+
+/** What the server actually holds for a chapter after the batch was applied. */
+data class PlaybackSyncState(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "is_played") val isPlayed: Boolean = false,
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    @param:Json(name = "client_updated_at") val clientUpdatedAt: String? = null,
+)
+
+data class PlaybackSyncAccepted(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "is_played") val isPlayed: Boolean = false,
+)
+
+/**
+ * A rejected item, with the reason and the watermark that beat it.
+ *
+ * `reason` is one of `not_found`, `missing_client_updated_at`, `invalid_client_updated_at`, `empty`
+ * or `stale`. Only `stale` means "someone else was newer"; the rest mean this client sent something
+ * the server could not use, and retrying it unchanged would fail identically.
+ */
+data class PlaybackSyncRejected(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    val reason: String = "",
+    @param:Json(name = "server_updated_at") val serverUpdatedAt: String? = null,
+)
+
+data class PlaybackSyncResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    val accepted: List<PlaybackSyncAccepted> = emptyList(),
+    val rejected: List<PlaybackSyncRejected> = emptyList(),
+    @param:Json(name = "server_state") val serverState: List<PlaybackSyncState> = emptyList(),
+)
