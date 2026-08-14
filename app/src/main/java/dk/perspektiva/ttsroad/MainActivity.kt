@@ -137,6 +137,7 @@ import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterFilter
+import dk.perspektiva.ttsroad.data.Bookmark
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.DeviceSession
 import dk.perspektiva.ttsroad.data.FictionSummary
@@ -149,6 +150,9 @@ import dk.perspektiva.ttsroad.data.ReadAlongHighlight
 import dk.perspektiva.ttsroad.data.ReaderFontScales
 import dk.perspektiva.ttsroad.data.ReaderPrefs
 import dk.perspektiva.ttsroad.data.ReaderTheme
+import dk.perspektiva.ttsroad.data.SearchGroup
+import dk.perspektiva.ttsroad.data.SearchHit
+import dk.perspektiva.ttsroad.data.SearchResponse
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSkipSilence
@@ -157,6 +161,7 @@ import dk.perspektiva.ttsroad.data.KeepAheadChoices
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
+import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
 import dk.perspektiva.ttsroad.data.speedOptions
 import dk.perspektiva.ttsroad.data.TextSpan
 import dk.perspektiva.ttsroad.data.VolumeBoost
@@ -183,8 +188,16 @@ import dk.perspektiva.ttsroad.nav.navigateTo
 import dk.perspektiva.ttsroad.nav.popScreen
 import dk.perspektiva.ttsroad.nav.rootBackStack
 import dk.perspektiva.ttsroad.nav.saveKey
+import dk.perspektiva.ttsroad.player.FictionListeningSummary
+import dk.perspektiva.ttsroad.player.fictionListeningSummary
+import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
+import dk.perspektiva.ttsroad.player.breadcrumbSnapshot
+import dk.perspektiva.ttsroad.player.mergeBreadcrumbs
 import dk.perspektiva.ttsroad.player.lastHeardSnapshot
+import dk.perspektiva.ttsroad.player.listeningSpanAtSpeed
+import dk.perspektiva.ttsroad.player.remainingMs
+import dk.perspektiva.ttsroad.player.remainingMsAtSpeed
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
 import dk.perspektiva.ttsroad.player.SleepTimerController
@@ -270,6 +283,7 @@ private fun TtsRoadApp(
     val scope = rememberCoroutineScope()
     val tokenStore = remember { ServiceLocator.tokenStore(context) }
     val repository = remember { ServiceLocator.repository(context) }
+    val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val playbackController = remember { ServiceLocator.playbackController(context) }
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
@@ -288,6 +302,10 @@ private fun TtsRoadApp(
             // gated by the time there is anything to gate. Never throws; an older or unreachable
             // server resolves to the baseline and the ordinary flow continues.
             repository.refreshCurrentCapabilities()
+            // Strictly after discovery: the preferences client is gated on the capability, so
+            // pulling first would always see it false and skip. Adopts only what the account holds
+            // and this phone does not, and answers null rather than throwing on an older server.
+            accountPreferenceSync.pull()
             playbackController.connect()
             // Ask once playback becomes possible, so the rationale for the prompt is obvious.
             if (needsNotificationPermission(context)) {
@@ -574,6 +592,7 @@ private fun MainScaffold(
         is AppScreen.Reader -> screen.title
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Device sessions"
+        AppScreen.Bookmarks -> "Bookmarks"
     }
 
     Scaffold(
@@ -643,7 +662,9 @@ private fun MainScaffold(
 
                 AppScreen.Fictions -> FictionsScreen(
                     padding = padding,
+                    repository = repository,
                     onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
+                    onOpenReader = { onScreenChange(it) },
                 )
 
                 is AppScreen.Fiction -> FictionScreen(
@@ -676,12 +697,19 @@ private fun MainScaffold(
                     session = session,
                     repository = repository,
                     onOpenDevices = { onScreenChange(AppScreen.Devices) },
+                    onOpenBookmarks = { onScreenChange(AppScreen.Bookmarks) },
                 )
 
                 AppScreen.Devices -> DevicesScreen(
                     padding = padding,
                     session = session,
                     repository = repository,
+                )
+
+                AppScreen.Bookmarks -> BookmarksScreen(
+                    padding = padding,
+                    repository = repository,
+                    onOpenReader = { onScreenChange(it) },
                 )
             }
         }
@@ -904,10 +932,24 @@ private fun FictionScreen(
     // that outlives this screen. It used to reset to All on every open, so anyone working through
     // a series in order re-picked "Unplayed" on each book, every time.
     val chapterListPrefs = remember { ServiceLocator.chapterListPreferences(context) }
+    // Written through the account sync rather than straight to the store: this is the web's
+    // "Hide played" under another name, and the two used to disagree with each other.
+    val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val filter by chapterListPrefs.filter
         .collectAsStateWithLifecycle(initialValue = ChapterFilter.All)
     var ascending by remember(fiction.id) { mutableStateOf(true) }
     var bulkTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
+    var isFollowBusy by remember(fiction.id) { mutableStateOf(false) }
+    // The shelf is the server's answer, so the toggle reads from the loaded library rather than
+    // from the FictionSummary handed over by navigation, which may be a browse-screen row that has
+    // been followed since.
+    val libraryState by cache.library.collectAsStateWithLifecycle()
+    val browseState by cache.browseAll.collectAsStateWithLifecycle()
+    val isFollowing = remember(libraryState, browseState, fiction.id) {
+        browseState.value?.fictions?.firstOrNull { it.id == fiction.id }?.following
+            ?: libraryState.value?.followingIds?.contains(fiction.id)
+            ?: fiction.following
+    }
     var didAutoScroll by remember(fiction.id) { mutableStateOf(false) }
     // Held here so an in-place row update cannot scroll a 500-row list back to the top.
     val listState = rememberLazyListState()
@@ -994,9 +1036,38 @@ private fun FictionScreen(
                                     onOpenPlayer()
                                 }
                             },
+                            isFollowing = isFollowing,
+                            isFollowBusy = isFollowBusy,
+                            // Hidden entirely on a server whose library is still the whole shared
+                            // list: there is no shelf for a follow to mean anything against.
+                            onSetFollowing = if (capabilities.follows) {
+                                { wanted ->
+                                    scope.launch {
+                                        isFollowBusy = true
+                                        error = null
+                                        runCatching { repository.setFollowing(fiction.id, wanted) }
+                                            .onSuccess { result ->
+                                                // Trust the server's answer, not the request: a
+                                                // fiction deleted since the screen loaded comes
+                                                // back as not followed rather than as an error.
+                                                result?.let { cache.applyFollowing(fiction.id, it) }
+                                            }
+                                            .onFailure {
+                                                error = it.message ?: "Could not update your library"
+                                            }
+                                        isFollowBusy = false
+                                    }
+                                }
+                            } else {
+                                null
+                            },
                             downloadSummary = remember(chapters, downloadState) {
                                 fictionDownloadSummary(chapters, downloadState)
                             },
+                            listeningSummary = remember(chapters) {
+                                fictionListeningSummary(chapters)
+                            },
+                            playbackSpeed = playerState.speed,
                             onDownloadNext = {
                                 // Start where the listener is, not at chapter one — the point of the
                                 // batch is the drive ahead of them.
@@ -1021,7 +1092,7 @@ private fun FictionScreen(
                             filter = filter,
                             ascending = ascending,
                             showJumpToCurrent = currentOffScreen,
-                            onFilter = { scope.launch { chapterListPrefs.setFilter(it) } },
+                            onFilter = { scope.launch { accountPreferenceSync.setChapterFilter(it) } },
                             onToggleSort = { ascending = !ascending },
                             onJumpToCurrent = {
                                 scope.launch { listState.animateScrollToItem(currentRow + 1) }
@@ -1086,6 +1157,24 @@ private fun FictionScreen(
                         bulkTarget = null
                         mark(ids, played = true)
                     },
+                    onQueue = if (capabilities.queue) {
+                        { playNext ->
+                            bulkTarget = null
+                            scope.launch {
+                                error = null
+                                runCatching {
+                                    repository.addToQueue(
+                                        listOf(target.resolvedChapterId),
+                                        playNext = playNext,
+                                    )
+                                }.onFailure {
+                                    error = it.message ?: "Could not update the queue"
+                                }
+                            }
+                        }
+                    } else {
+                        null
+                    },
                 )
             }
         }
@@ -1134,6 +1223,8 @@ private fun ChapterBulkSheet(
     allIds: List<Int>,
     onDismiss: () -> Unit,
     onMark: (List<Int>) -> Unit,
+    /** Null on a server with no cross-library queue. `true` means "play it next". */
+    onQueue: ((playNext: Boolean) -> Unit)? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
         MetaText(
@@ -1157,6 +1248,27 @@ private fun ChapterBulkSheet(
             enabled = allIds.isNotEmpty(),
             onClick = { onMark(allIds) },
         )
+        onQueue?.let { queue ->
+            // Only a chapter with audio can be queued — the server rejects the rest anyway, and
+            // offering it would be offering something that silently does nothing.
+            val playable = chapter.audio != null
+            BulkAction(
+                title = "Play next",
+                subtitle = if (playable) {
+                    "After the chapter playing now"
+                } else {
+                    "No audio for this chapter yet"
+                },
+                enabled = playable,
+                onClick = { queue(true) },
+            )
+            BulkAction(
+                title = "Add to queue",
+                subtitle = if (playable) "At the end of Up Next" else "No audio for this chapter yet",
+                enabled = playable,
+                onClick = { queue(false) },
+            )
+        }
         Spacer(modifier = Modifier.height(16.dp))
     }
 }
@@ -1206,17 +1318,42 @@ private fun PlayerScreen(
         ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val history by historyStore.snapshots.collectAsStateWithLifecycle()
-    val jumpBackOptions = remember(history) { jumpBackOptions(history, System.currentTimeMillis()) }
+    // Breadcrumbs the account recorded elsewhere — the browser, or another phone. Fetched when the
+    // sheet is opened rather than on every player composition: it is a request, and it is only ever
+    // read by that sheet. A failure leaves the local trail on its own, which is what this always was.
+    var remoteBreadcrumbs by remember { mutableStateOf<List<HistorySnapshot>>(emptyList()) }
+    val jumpBackOptions = remember(history, remoteBreadcrumbs) {
+        jumpBackOptions(mergeBreadcrumbs(history, remoteBreadcrumbs), System.currentTimeMillis())
+    }
     val sleepTimer = remember { ServiceLocator.sleepTimer() }
     val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val skipSilence by remember(preferences) {
         preferences.prefs.map { it.skipSilence }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = DefaultSkipSilence)
+    val playbackPrefs by preferences.prefs.collectAsStateWithLifecycle(
+        initialValue = PlaybackPrefs(),
+    )
     var showChapters by remember { mutableStateOf(false) }
     var showJumpBack by remember { mutableStateOf(false) }
+    LaunchedEffect(showJumpBack) {
+        if (!showJumpBack) return@LaunchedEffect
+        remoteBreadcrumbs = runCatching {
+            repository.breadcrumbs().orEmpty().mapNotNull { breadcrumbSnapshot(it) }
+        }.getOrDefault(emptyList())
+    }
     var showSleepTimer by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
+    // Confirmation for the bookmark button. A mark made while listening gives no other sign that
+    // anything happened, and the alternative — opening the list — is the thing this avoids.
+    var bookmarkFeedback by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(bookmarkFeedback) {
+        // Clears itself: it is a confirmation, not a state the screen should settle into.
+        if (bookmarkFeedback != null) {
+            delay(4_000)
+            bookmarkFeedback = null
+        }
+    }
     // Track the drag locally and only seek on release, so scrubbing doesn't spam the player.
     var dragMs by remember { mutableStateOf<Float?>(null) }
 
@@ -1231,6 +1368,13 @@ private fun PlayerScreen(
         playerState.error?.let { message ->
             Spacer(modifier = Modifier.height(12.dp))
             PlaybackErrorBanner(message = message, onRetry = playbackController::retry)
+        }
+        bookmarkFeedback?.let { message ->
+            MetaText(
+                text = "// $message",
+                color = AarisColor.Accent,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
         BoxWithConstraints(
             modifier = Modifier
@@ -1277,7 +1421,33 @@ private fun PlayerScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             MetaText(text = formatDuration(dragMs?.toLong() ?: playerState.positionMs))
-            MetaText(text = formatDuration(playerState.durationMs))
+            // Time left beats total duration here: the scrubber already shows how far in this is,
+            // and "how much longer" is the thing being asked. At anything but 1x the wall-clock
+            // answer differs from the audio one, so say both rather than the misleading one.
+            if (playerState.durationMs > 0L) {
+                val position = dragMs?.toLong() ?: playerState.positionMs
+                MetaText(
+                    text = buildString {
+                        append("-")
+                        append(formatDuration(remainingMs(position, playerState.durationMs)))
+                        if (playerState.speed != 1f) {
+                            append("  ·  ")
+                            append(
+                                formatDuration(
+                                    remainingMsAtSpeed(
+                                        position,
+                                        playerState.durationMs,
+                                        playerState.speed,
+                                    ),
+                                ),
+                            )
+                            append(" at ${formatSpeed(playerState.speed)}")
+                        }
+                    },
+                )
+            } else {
+                MetaText(text = formatDuration(playerState.durationMs))
+            }
         }
         Spacer(modifier = Modifier.height(12.dp))
         LinearProgressIndicator(
@@ -1369,6 +1539,30 @@ private fun PlayerScreen(
                         },
                     ) {
                         Text("READ", maxLines = 1, softWrap = false)
+                    }
+                }
+                // Same gating as READ: hidden outright on a server without bookmarks, rather than
+                // offered and then failing.
+                if (capabilities.bookmarks && playingChapterId != null) {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                // Deliberately does not touch playback: marking a line worth
+                                // keeping is something you do *while* listening.
+                                bookmarkFeedback = runCatching {
+                                    repository.createBookmark(
+                                        chapterId = playingChapterId,
+                                        positionSeconds = playerState.positionMs / 1000.0,
+                                        label = playerState.title.takeIf { it.isNotBlank() },
+                                    )
+                                }.fold(
+                                    onSuccess = { "Bookmarked at ${formatDuration(playerState.positionMs)}" },
+                                    onFailure = { "Could not save the bookmark" },
+                                )
+                            }
+                        },
+                    ) {
+                        Text("BOOKMARK", maxLines = 1, softWrap = false)
                     }
                 }
                 if (jumpBackOptions.isNotEmpty()) {
@@ -1569,7 +1763,10 @@ private fun PlayerScreen(
                 }
             }
             SleepTimerController.DurationOptionsMinutes.forEach { minutes ->
-                SleepTimerOption(label = "$minutes minutes") {
+                SleepTimerOption(
+                    label = "$minutes minutes",
+                    isDefault = minutes == playbackPrefs.sleepTimerDefaultMinutes,
+                ) {
                     sleepTimer.armDuration(minutes * 60_000L)
                     showSleepTimer = false
                 }
@@ -1695,16 +1892,24 @@ private fun PlayerScreen(
 
 /** One row of the sleep-timer sheet, styled like the chapter rows above it. */
 @Composable
-private fun SleepTimerOption(label: String, onClick: () -> Unit) {
-    Text(
-        text = label,
-        style = MaterialTheme.typography.titleMedium,
-        color = AarisColor.Ink,
+private fun SleepTimerOption(label: String, isDefault: Boolean = false, onClick: () -> Unit) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 14.dp),
-    )
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleMedium,
+            color = if (isDefault) AarisColor.Accent else AarisColor.Ink,
+            modifier = Modifier.weight(1f),
+        )
+        if (isDefault) {
+            MetaText(text = "Default", color = AarisColor.Accent)
+        }
+    }
     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 }
 
@@ -1781,12 +1986,15 @@ private fun SettingsScreen(
     session: SessionState,
     repository: TtsRoadRepository,
     onOpenDevices: () -> Unit,
+    onOpenBookmarks: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
+    val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val prefs by preferences.prefs.collectAsStateWithLifecycle(initialValue = PlaybackPrefs())
     val downloads = remember { ServiceLocator.offlineDownloads(context) }
     val downloadPreferences = remember { ServiceLocator.downloadPreferences(context) }
@@ -1834,6 +2042,17 @@ private fun SettingsScreen(
                 )
                 OutlinedButton(onClick = onOpenDevices, shape = RectangleShape) {
                     Text("DEVICE SESSIONS")
+                }
+                // Hidden on a server without bookmarks, rather than opening a screen that 404s.
+                if (capabilities.bookmarks) {
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    MetaText(
+                        text = "Marks you made in the player. The same ones the browser shows.",
+                        color = AarisColor.Dim,
+                    )
+                    OutlinedButton(onClick = onOpenBookmarks, shape = RectangleShape) {
+                        Text("BOOKMARKS")
+                    }
                 }
             }
         }
@@ -1896,6 +2115,32 @@ private fun SettingsScreen(
                 SettingsItem(label = "Playback speed", value = formatSpeed(prefs.speed))
                 MetaText(
                     text = "Change it from the player; it is kept across restarts and reboots.",
+                    color = AarisColor.Dim,
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(text = "Sleep timer default")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SleepTimerDefaultOptions.forEach { option ->
+                        val selected = option == prefs.sleepTimerDefaultMinutes
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    accountPreferenceSync.setSleepTimerDefaultMinutes(option)
+                                }
+                            },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(formatSleepTimerDefault(option))
+                        }
+                    }
+                }
+                MetaText(
+                    text = "Marked in the player's sleep sheet. Follows your account, so the " +
+                        "browser agrees.",
                     color = AarisColor.Dim,
                 )
             }
@@ -2109,6 +2354,166 @@ private fun SettingsScreen(
                 TextButton(onClick = { confirmDeleteDownloads = false }) { Text("CANCEL") }
             },
         )
+    }
+}
+
+/**
+ * Every bookmark on the account, newest first.
+ *
+ * Loaded on entry rather than cached, for the same reason the devices list is: it is only ever
+ * opened deliberately, and it is shared with the browser, so a stale copy would be showing marks
+ * that may have been edited or deleted somewhere else.
+ *
+ * Only `manual` marks are listed. The `auto` rows in the same table are the jump-back breadcrumbs
+ * the web player writes, and a list of chosen marks drowned in them would be useless.
+ */
+@Composable
+private fun BookmarksScreen(
+    padding: PaddingValues,
+    repository: TtsRoadRepository,
+    onOpenReader: (AppScreen.Reader) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    var bookmarks by remember { mutableStateOf<List<Bookmark>?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isBusy by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf<Bookmark?>(null) }
+
+    fun load() {
+        scope.launch {
+            isLoading = true
+            error = null
+            runCatching { repository.bookmarks() }
+                // Null means the server cannot do bookmarks at all, which the capability gate
+                // should already have caught; empty means none have been made yet.
+                .onSuccess { bookmarks = it.orEmpty() }
+                .onFailure { error = it.message ?: "Could not load bookmarks" }
+            isLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    val loaded = bookmarks
+    when {
+        isLoading && loaded == null && error == null -> LoadingPane(padding)
+        loaded == null -> ErrorPane(
+            padding = padding,
+            message = error ?: "Could not load bookmarks",
+            onRetry = ::load,
+        )
+
+        else -> Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            if (isLoading) {
+                ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+            }
+            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+
+            if (loaded.isEmpty()) {
+                MetaText(text = "// No bookmarks", color = AarisColor.Accent)
+                EmptyCard(
+                    "Tap BOOKMARK in the player to mark where you are. Marks made here show up " +
+                        "in the browser too.",
+                )
+            } else {
+                MetaText(text = "// ${loaded.size} bookmarks", color = AarisColor.Accent)
+                loaded.forEach { bookmark ->
+                    BookmarkCard(
+                        bookmark = bookmark,
+                        // Read-along is where a bookmark actually leads: the point of marking a
+                        // line is going back to read it.
+                        onOpen = if (capabilities.readAlong && bookmark.chapterId > 0) {
+                            {
+                                onOpenReader(
+                                    AppScreen.Reader(
+                                        chapterId = bookmark.chapterId,
+                                        title = bookmark.chapterTitle ?: bookmark.resolvedLabel,
+                                    ),
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                        onDelete = { confirmDelete = bookmark }.takeIf { !isBusy },
+                    )
+                }
+            }
+
+            OutlinedButton(
+                onClick = ::load,
+                enabled = !isLoading && !isBusy,
+                shape = RectangleShape,
+            ) {
+                Text("REFRESH")
+            }
+        }
+    }
+
+    confirmDelete?.let { bookmark ->
+        ConfirmDialog(
+            title = "DELETE BOOKMARK",
+            body = "\"${bookmark.resolvedLabel}\" will be removed here and in the browser.",
+            confirmLabel = "DELETE IT",
+            onConfirm = {
+                confirmDelete = null
+                scope.launch {
+                    isBusy = true
+                    error = null
+                    runCatching { repository.deleteBookmark(bookmark.id) }
+                        .onFailure { error = it.message ?: "Could not delete the bookmark" }
+                    isBusy = false
+                    // Reload rather than removing locally: the server owns the list, and it is
+                    // shared with the browser.
+                    load()
+                }
+            },
+            onDismiss = { confirmDelete = null },
+        )
+    }
+}
+
+@Composable
+private fun BookmarkCard(
+    bookmark: Bookmark,
+    onOpen: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+) {
+    AarisCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (onOpen != null) Modifier.clickable(onClick = onOpen) else Modifier)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = bookmark.resolvedLabel,
+                style = MaterialTheme.typography.titleMedium,
+                color = AarisColor.Ink,
+            )
+            // The payload carries the fiction and chapter titles precisely so a list like this
+            // needs no extra request per row.
+            bookmark.fictionTitle?.let { MetaText(text = it, color = AarisColor.Muted) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                bookmark.positionLabel?.let { AarisTag(text = it) }
+                bookmark.chapterNumber?.let { AarisTag(text = "CH ${chapterNumberLabel(it)}") }
+            }
+            bookmark.note?.let { MetaText(text = it, color = AarisColor.Dim) }
+            if (onDelete != null) {
+                TextButton(onClick = onDelete) {
+                    Text("DELETE", color = AarisColor.Danger)
+                }
+            }
+        }
     }
 }
 
@@ -2857,10 +3262,12 @@ private fun ChapterRow(
     }
 }
 
-private fun chapterNumberLabel(chapter: ChapterSummary): String {
-    val n = chapter.displayNumber ?: return "—"
-    return if (n % 1.0 == 0.0) n.toLong().toString() else n.toString()
-}
+private fun chapterNumberLabel(chapter: ChapterSummary): String =
+    chapter.displayNumber?.let(::chapterNumberLabel) ?: "—"
+
+/** "12" rather than "12.0", but "12.5" kept — chapter numbers are not always whole. */
+private fun chapterNumberLabel(number: Double): String =
+    if (number % 1.0 == 0.0) number.toLong().toString() else number.toString()
 
 /** The row's download button. Its icon is the *action*, not the state — except when there is none. */
 private fun downloadIcon(state: ChapterDownloadState): ImageVector = when (state) {
@@ -2892,18 +3299,35 @@ private fun downloadMetaLabel(download: ChapterDownload?): String? = when (downl
 @Composable
 private fun FictionsScreen(
     padding: PaddingValues,
+    repository: TtsRoadRepository,
     onOpenFiction: (FictionSummary) -> Unit,
+    onOpenReader: (AppScreen.Reader) -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val cache = remember { ServiceLocator.libraryCache(context) }
-    val state by cache.library.collectAsStateWithLifecycle()
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    // Browse means *everything on the server* once the server has per-user libraries — that is what
+    // makes this the screen a fiction gets followed from. Without them there is only one list, and
+    // browsing the shelf is browsing the server.
+    val browseAll = capabilities.follows
+    val state by (if (browseAll) cache.browseAll else cache.library)
+        .collectAsStateWithLifecycle()
+    // Server search is a *second* path, never a replacement. The local filter below is instant and
+    // works offline; this one can match narration text, which the local filter structurally cannot.
+    var serverResults by remember { mutableStateOf<SearchResponse?>(null) }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<String?>(null) }
     // Saveable so the browse position and filter survive a trip into a fiction and back.
     var query by rememberSaveable { mutableStateOf("") }
     // Hoisted so the browse position survives the round trip into a fiction, alongside the
     // SaveableStateProvider keyed per back-stack entry.
     val gridState = rememberLazyGridState()
 
-    LaunchedEffect(Unit) { cache.ensureLibrary() }
+    LaunchedEffect(browseAll) {
+        if (browseAll) cache.ensureBrowseAll() else cache.ensureLibrary()
+    }
+    val refresh: () -> Unit = if (browseAll) cache::refreshBrowseAll else cache::refreshLibrary
 
     val fictions = state.value?.fictions
     when {
@@ -2911,7 +3335,7 @@ private fun FictionsScreen(
         fictions == null -> ErrorPane(
             padding = padding,
             message = state.error ?: "Could not load fictions",
-            onRetry = cache::refreshLibrary,
+            onRetry = refresh,
         )
 
         else -> {
@@ -2931,18 +3355,62 @@ private fun FictionsScreen(
                 padding = padding,
                 isRefreshing = state.isRefreshing,
                 error = state.error,
-                onRefresh = cache::refreshLibrary,
+                onRefresh = refresh,
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     OutlinedTextField(
                         value = query,
-                        onValueChange = { query = it },
+                        onValueChange = {
+                            query = it
+                            // Typing starts a new question; last answer's results would be stale.
+                            serverResults = null
+                            searchError = null
+                        },
                         label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(16.dp),
                     )
+                    if (capabilities.search) {
+                        ServerSearchSection(
+                            query = query,
+                            results = serverResults,
+                            isSearching = isSearching,
+                            error = searchError,
+                            onSearch = {
+                                scope.launch {
+                                    isSearching = true
+                                    searchError = null
+                                    runCatching { repository.search(query) }
+                                        .onSuccess { serverResults = it }
+                                        .onFailure {
+                                            searchError = it.message ?: "Search failed"
+                                        }
+                                    isSearching = false
+                                }
+                            },
+                            onOpenFiction = { fictionId ->
+                                fictions.firstOrNull { it.id == fictionId }?.let(onOpenFiction)
+                            },
+                            // A text hit's whole point is the passage, so it opens the reader —
+                            // where read-along already lands.
+                            onOpenChapter = if (capabilities.readAlong) {
+                                { hit ->
+                                    hit.chapterId?.let { chapterId ->
+                                        onOpenReader(
+                                            AppScreen.Reader(
+                                                chapterId = chapterId,
+                                                title = hit.resolvedTitle,
+                                            ),
+                                        )
+                                    }
+                                }
+                            } else {
+                                null
+                            },
+                        )
+                    }
                     if (filtered.isEmpty()) {
                         Box(modifier = Modifier.padding(16.dp)) {
                             EmptyCard(
@@ -2966,6 +3434,117 @@ private fun FictionsScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Server-side search, offered alongside the local filter rather than instead of it.
+ *
+ * The local filter above is instant, works offline, and matches what is already loaded. This one
+ * costs a round trip but can match chapter titles and the narration text itself — "which chapter
+ * was the bit about the lighthouse in" is a question with an answer on the server and none in the
+ * app. Making it an explicit action keeps the offline case from silently becoming useless.
+ */
+@Composable
+private fun ServerSearchSection(
+    query: String,
+    results: SearchResponse?,
+    isSearching: Boolean,
+    error: String?,
+    onSearch: () -> Unit,
+    onOpenFiction: (Int) -> Unit,
+    /** Null when the server has no read-along, which is where a text hit would otherwise land. */
+    onOpenChapter: ((SearchHit) -> Unit)?,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedButton(
+            onClick = onSearch,
+            enabled = query.isNotBlank() && !isSearching,
+            shape = RectangleShape,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (isSearching) "SEARCHING" else "SEARCH CHAPTERS AND TEXT ON THE SERVER")
+        }
+        error?.let { MetaText(text = it, color = AarisColor.Danger) }
+
+        results?.let { found ->
+            if (found.total == 0) {
+                MetaText(text = "// Nothing on the server for \"${found.query}\"", color = AarisColor.Muted)
+            } else {
+                // Group order is rank order: fictions, then chapter titles, then narration text.
+                SearchHitGroup(
+                    title = "Fictions",
+                    group = found.fictions,
+                    onOpen = { hit -> hit.fictionId?.let(onOpenFiction) },
+                )
+                SearchHitGroup(
+                    title = "Chapter titles",
+                    group = found.chapters,
+                    onOpen = onOpenChapter,
+                )
+                SearchHitGroup(
+                    title = "In the text",
+                    group = found.text,
+                    onOpen = onOpenChapter,
+                )
+                if (!found.indexed) {
+                    // Worth saying rather than quietly returning less than the server could.
+                    MetaText(
+                        text = "// The full-text index is unavailable, so text matches may be incomplete",
+                        color = AarisColor.Dim,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchHitGroup(
+    title: String,
+    group: SearchGroup,
+    onOpen: ((SearchHit) -> Unit)?,
+) {
+    if (group.items.isEmpty()) return
+    MetaText(
+        // `total` stops counting at the server's cap, so say "20+" rather than an exact-looking 20.
+        text = "// $title (${group.total}${if (group.capped) "+" else ""})",
+        color = AarisColor.Accent,
+    )
+    group.items.forEach { hit ->
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (onOpen != null) Modifier.clickable { onOpen(hit) } else Modifier,
+                    )
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = hit.resolvedTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = AarisColor.Ink,
+                )
+                hit.fictionTitle
+                    ?.takeIf { it != hit.resolvedTitle }
+                    ?.let { MetaText(text = it, color = AarisColor.Muted) }
+                // The matching passage is the answer for a text hit, so it is the row's substance
+                // rather than a decoration.
+                hit.snippet?.takeIf { it.isNotBlank() }?.let {
+                    MetaText(text = it, color = AarisColor.Dim)
+                }
+            }
+        }
+    }
+    if (group.hasMore) {
+        MetaText(text = "// More matches on the server — narrow the search", color = AarisColor.Dim)
     }
 }
 
@@ -3022,6 +3601,12 @@ private fun FictionDetailHeader(
     onPlay: (ChapterSummary) -> Unit,
     downloadSummary: FictionDownloadSummary = FictionDownloadSummary(),
     onDownloadNext: (() -> Unit)? = null,
+    /** Null on a server without per-user libraries, where there is no shelf to be on. */
+    onSetFollowing: ((Boolean) -> Unit)? = null,
+    isFollowing: Boolean = true,
+    isFollowBusy: Boolean = false,
+    listeningSummary: FictionListeningSummary = FictionListeningSummary(),
+    playbackSpeed: Float = 1f,
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
@@ -3070,6 +3655,63 @@ private fun FictionDetailHeader(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+            }
+        }
+
+        onSetFollowing?.let { setFollowing ->
+            OutlinedButton(
+                onClick = { setFollowing(!isFollowing) },
+                enabled = !isFollowBusy,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isFollowing) AarisColor.Accent else AarisColor.Muted,
+                ),
+            ) {
+                Text(
+                    when {
+                        isFollowBusy -> "WORKING"
+                        isFollowing -> "FOLLOWING"
+                        else -> "FOLLOW"
+                    },
+                )
+            }
+            MetaText(
+                text = if (isFollowing) {
+                    "On your library. Unfollowing leaves it on the server."
+                } else {
+                    "Not on your library. Follow it to see it on the home screen."
+                },
+                color = AarisColor.Dim,
+            )
+        }
+
+        if (listeningSummary.playable > 0) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (listeningSummary.hasRemaining) {
+                    Text(
+                        text = "${formatListeningSpan(listeningSummary.remainingSeconds)} remaining",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                MetaText(
+                    text = buildString {
+                        append("${listeningSummary.played}/${listeningSummary.playable} played")
+                        if (listeningSummary.unplayed > 0) {
+                            append("  ·  ${listeningSummary.unplayed} left")
+                        }
+                        // Only worth saying when it changes the answer; at 1x it is the same number
+                        // twice, which reads as a bug rather than as extra information.
+                        if (listeningSummary.hasRemaining && playbackSpeed != 1f) {
+                            val atSpeed = listeningSpanAtSpeed(
+                                listeningSummary.remainingSeconds,
+                                playbackSpeed,
+                            )
+                            append("  ·  ${formatListeningSpan(atSpeed)} at ${formatSpeed(playbackSpeed)}")
+                        }
+                    },
+                    color = AarisColor.Dim,
+                )
             }
         }
 
@@ -3258,6 +3900,9 @@ private fun ReaderScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val readerPreferences = remember { ServiceLocator.readerPreferences(context) }
+    // Reader appearance follows the account, so the page looks the same in the browser. The store
+    // is still what the reader renders from — the sync writes through it, not around it.
+    val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val prefs by readerPreferences.prefs.collectAsStateWithLifecycle(initialValue = ReaderPrefs())
     val sleepTimer = remember { ServiceLocator.sleepTimer() }
     val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
@@ -3422,9 +4067,9 @@ private fun ReaderScreen(
             prefs = prefs,
             palette = palette,
             onDismiss = { showSettings = false },
-            onFontScale = { scope.launch { readerPreferences.setFontScale(it) } },
-            onTheme = { scope.launch { readerPreferences.setTheme(it) } },
-            onHighlight = { scope.launch { readerPreferences.setHighlight(it) } },
+            onFontScale = { scope.launch { accountPreferenceSync.setReaderFontScale(it) } },
+            onTheme = { scope.launch { accountPreferenceSync.setReaderTheme(it) } },
+            onHighlight = { scope.launch { accountPreferenceSync.setReaderHighlight(it) } },
         )
     }
 }
@@ -3710,6 +4355,10 @@ private fun skipForwardIcon(skipIntervalMs: Long): ImageVector = when {
     skipIntervalMs <= 20_000L -> Icons.Default.Forward10
     else -> Icons.Default.Forward30
 }
+
+/** "30m", or "Ask" for the server's 0, which means "no default — pick one each time". */
+private fun formatSleepTimerDefault(minutes: Int): String =
+    if (minutes <= 0) "Ask" else "${minutes}m"
 
 private fun formatSpeed(speed: Float): String {
     val text = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')

@@ -46,7 +46,36 @@ data class ServerCapabilities(
     val batchProgress: Boolean = false,
     val audioContentHash: Boolean = false,
     val deviceManagement: Boolean = false,
+    /**
+     * A server-side cross-library queue the app can read and mutate.
+     *
+     * Its own flag rather than folded into another: a client that builds its own queue keeps
+     * working, and the Android Auto "Up Next" node is only offered when the server can back it.
+     */
+    val queue: Boolean = false,
+
+    /**
+     * Per-user libraries. When false, `/api/mobile/library` is still the whole shared list and the
+     * app must not offer a follow control it cannot honour.
+     */
+    val follows: Boolean = false,
+
+    /**
+     * The shared player/reader preference vocabulary on `/api/me/preferences`.
+     *
+     * The server gates this on its *schema* route rather than on the preferences endpoint, because
+     * that endpoint predates the vocabulary: an older server answers PATCH happily and drops the
+     * keys it has never heard of. So this flag, and not a 404 probe, is what says the account can
+     * actually hold these settings.
+     */
+    val playerPreferences: Boolean = false,
     val maxChaptersPerPage: Int? = null,
+    /**
+     * How many items `/playback/sync` accepts in one batch. Null on a server that does not say, in
+     * which case the client uses its own conservative default rather than guessing high and
+     * having a whole flush rejected with a 400.
+     */
+    val maxPlaybackSyncItems: Int? = null,
 ) {
     companion object {
         /** What an older server — or an unreachable one — is assumed to support. */
@@ -66,7 +95,11 @@ data class ServerCapabilities(
                 batchProgress = flags.flag("batch_progress"),
                 audioContentHash = flags.flag("audio_content_hash"),
                 deviceManagement = flags.flag("device_management"),
+                queue = flags.flag("queue"),
+                follows = flags.flag("follows"),
+                playerPreferences = flags.flag("player_preferences"),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
+                maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             )
         }
 

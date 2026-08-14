@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -31,6 +32,14 @@ data class PlaybackPrefs(
     val skipIntervalMs: Long = DefaultSkipIntervalMs,
     val skipSilence: Boolean = DefaultSkipSilence,
     val volumeBoost: VolumeBoost = VolumeBoost.Off,
+    /**
+     * The duration the sleep timer offers first, or 0 for "ask me every time".
+     *
+     * Unlike its four neighbours here, this one follows the account — see `AccountPreferences.kt`
+     * for why those stay on the device and this does not. It is stored locally all the same, so the
+     * timer still has a default with no network and on a server too old to hold one.
+     */
+    val sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes,
 )
 
 /**
@@ -139,6 +148,7 @@ class PlaybackPreferences(private val context: Context) {
         val SkipIntervalMs = longPreferencesKey("skip_interval_ms")
         val SkipSilence = booleanPreferencesKey("skip_silence")
         val VolumeBoost = stringPreferencesKey("volume_boost")
+        val SleepTimerDefaultMinutes = intPreferencesKey("sleep_timer_default_minutes")
     }
 
     val prefs: Flow<PlaybackPrefs> = context.playbackDataStore.data
@@ -153,6 +163,9 @@ class PlaybackPreferences(private val context: Context) {
                 ),
                 skipSilence = stored[Keys.SkipSilence] ?: DefaultSkipSilence,
                 volumeBoost = volumeBoostOf(stored[Keys.VolumeBoost]),
+                sleepTimerDefaultMinutes = sanitizeSleepTimerMinutes(
+                    stored[Keys.SleepTimerDefaultMinutes] ?: DefaultSleepTimerMinutes,
+                ),
             )
         }
 
@@ -174,5 +187,11 @@ class PlaybackPreferences(private val context: Context) {
 
     suspend fun setVolumeBoost(boost: VolumeBoost) {
         context.playbackDataStore.edit { it[Keys.VolumeBoost] = boost.name }
+    }
+
+    suspend fun setSleepTimerDefaultMinutes(minutes: Int) {
+        context.playbackDataStore.edit {
+            it[Keys.SleepTimerDefaultMinutes] = sanitizeSleepTimerMinutes(minutes)
+        }
     }
 }
