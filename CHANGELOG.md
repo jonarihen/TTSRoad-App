@@ -6,6 +6,22 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **The app can keep the next few chapters downloaded for you.** Settings → Offline → *Keep chapters
+  ahead*. Pick 3, 5, 10 or 20 and the chapter playing plus the ones after it are fetched as you
+  listen, so a tunnel, a dead zone or a home connection dropping out no longer stops playback. The
+  case this exists for is the one nobody remembers to prepare for.
+  ([#14](https://github.com/jonarihen/TTSRoad-App/issues/14))
+- **It is off until you switch it on.** Every other download in the app is something you asked for by
+  name, and an upgrade that quietly started filling a phone is the kind of surprise the Wi-Fi-only
+  default exists to prevent.
+- **It cleans up after itself, and only after itself.** Chapters it fetched are deleted once you are
+  past them, so the space it uses stays roughly constant instead of growing all the way through a
+  serial. Chapters *you* downloaded are never deleted automatically, however far behind you they
+  are — including ones downloaded by earlier versions, which are all treated as yours.
+- Switching it back off gives the space back, deleting what it fetched and nothing else. It obeys
+  the existing **Download on Wi-Fi only** switch, so on the default settings it never spends mobile
+  data. Alternating between two books keeps a window in each rather than re-fetching the one you
+  just left.
 - **An Up Next queue that spans books.** Long-press any chapter for **Play next** or **Add to
   queue**. It is the same queue the browser drives, so a chapter lined up on the phone is there in
   the browser too.

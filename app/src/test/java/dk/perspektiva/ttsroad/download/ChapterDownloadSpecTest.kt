@@ -107,5 +107,46 @@ class ChapterDownloadSpecTest {
         assertNull(decodeDownloadIds(ByteArray(0)))
         assertNull(decodeDownloadIds("not-a-pair".toByteArray()))
         assertNull(decodeDownloadIds("7:not-a-number".toByteArray()))
+        assertNull(decodeDownloadIds("7:42:auto:extra".toByteArray()))
+    }
+
+    @Test
+    fun `a manual download is encoded exactly as 0_9_0 wrote it`() {
+        val spec = chapterDownloadSpec(chapter(id = 42, fictionId = 7), serverUrl)!!
+
+        // Byte-for-byte, because every download record already on a phone was written this way and
+        // has to keep decoding after the upgrade.
+        assertEquals("7:42", spec.encodedIds().toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun `an existing record with no origin field reads as manual`() {
+        // Which is what stops keep-ahead deleting downloads made before it existed.
+        assertEquals(
+            DownloadIds(fictionId = 7, chapterId = 42, origin = DownloadOrigin.Manual),
+            decodeDownloadIds("7:42".toByteArray()),
+        )
+    }
+
+    @Test
+    fun `the origin survives a round trip through the download record`() {
+        val spec = chapterDownloadSpec(
+            chapter(id = 42, fictionId = 7),
+            serverUrl,
+            origin = DownloadOrigin.Auto,
+        )!!
+
+        assertEquals(
+            DownloadIds(fictionId = 7, chapterId = 42, origin = DownloadOrigin.Auto),
+            decodeDownloadIds(spec.encodedIds()),
+        )
+    }
+
+    @Test
+    fun `an unrecognised origin marker reads as manual rather than as deletable`() {
+        assertEquals(
+            DownloadIds(fictionId = 7, chapterId = 42, origin = DownloadOrigin.Manual),
+            decodeDownloadIds("7:42:something-later".toByteArray()),
+        )
     }
 }

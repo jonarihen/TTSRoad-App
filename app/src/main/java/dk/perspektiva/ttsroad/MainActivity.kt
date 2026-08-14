@@ -157,6 +157,7 @@ import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSkipSilence
 import dk.perspektiva.ttsroad.data.DownloadPrefs
+import dk.perspektiva.ttsroad.data.KeepAheadChoices
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
@@ -2234,10 +2235,43 @@ private fun SettingsScreen(
 
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
+                MetaText(text = "Keep chapters ahead")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    KeepAheadChoices.forEach { option ->
+                        val selected = option == downloadPrefs.keepAheadChapters
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch { downloadPreferences.setKeepAheadChapters(option) }
+                            },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(if (option == 0) "OFF" else option.toString())
+                        }
+                    }
+                }
+                MetaText(
+                    text = if (downloadPrefs.keepAheadChapters <= 0) {
+                        "Off. Chapters are downloaded only when you ask for them, so losing " +
+                            "signal mid-book stops playback."
+                    } else {
+                        "${downloadPrefs.keepAheadChapters} chapters are kept on the phone as you " +
+                            "listen, starting with the one playing, so a tunnel or a dead zone " +
+                            "does not stop playback. They are deleted again once you are past " +
+                            "them; chapters you downloaded yourself are never touched."
+                    },
+                    color = AarisColor.Dim,
+                )
+
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
                 SettingsItem(label = "Storage used", value = formatStorageSize(cacheBytes))
                 MetaText(
                     text = "Covers both chapters you downloaded and chapters kept from streaming. " +
-                        "Nothing is deleted automatically.",
+                        "Nothing you downloaded is deleted automatically.",
                     color = AarisColor.Dim,
                 )
                 OutlinedButton(
