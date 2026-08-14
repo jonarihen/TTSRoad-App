@@ -248,7 +248,32 @@ class TtsRoadRepository(
         synchronized(capabilityCache) { capabilityCache.remove(normalized) }
     }
 
-    suspend fun library(): LibraryResponse = withAuthorizedApi { it.library() }
+    /**
+     * The caller's shelf, or the whole catalogue with [scope] = [LibraryScopeAll].
+     *
+     * The parameter is always sent. A server without per-user libraries ignores it and answers the
+     * shared list either way, and the response says which scope it actually applied.
+     */
+    suspend fun library(scope: String = LibraryScopeFollowed): LibraryResponse =
+        withAuthorizedApi { it.library(scope) }
+
+    /**
+     * Follow or unfollow a fiction. Answers the resulting state, or null when the server has no
+     * per-user libraries and the control should not have been offered.
+     *
+     * A 404 means the fiction is gone from the server — not a failure to report as one, but it
+     * cannot be followed either, so the caller is told what is true: it is not followed.
+     */
+    suspend fun setFollowing(fictionId: Int, following: Boolean): Boolean? {
+        if (!_currentCapabilities.value.follows) return null
+        return try {
+            withAuthorizedApi {
+                if (following) it.followFiction(fictionId) else it.unfollowFiction(fictionId)
+            }.following
+        } catch (e: HttpException) {
+            if (e.code() == 404) false else throw e
+        }
+    }
 
     suspend fun chapters(
         fictionId: Int,

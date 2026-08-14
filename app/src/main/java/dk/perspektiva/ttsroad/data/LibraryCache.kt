@@ -45,6 +45,19 @@ class LibraryCache(private val repository: TtsRoadRepository) {
     private val _library = MutableStateFlow(Cached<LibraryResponse>())
     val library: StateFlow<Cached<LibraryResponse>> = _library.asStateFlow()
 
+    /**
+     * Everything on the server, for the browse screen — a separate list from [library], not a
+     * widened one.
+     *
+     * They answer different questions. [library] is "my shelf", which is what the home screen and
+     * the car's browse tree show; this is "everything there is", which is where a fiction gets
+     * followed *from*. Sharing one cache would mean opening browse silently replaced the shelf.
+     */
+    private val _browseAll = MutableStateFlow(Cached<LibraryResponse>())
+    val browseAll: StateFlow<Cached<LibraryResponse>> = _browseAll.asStateFlow()
+
+    private var browseAllJob: Job? = null
+
     private val chapterStates = mutableMapOf<Int, MutableStateFlow<Cached<List<ChapterSummary>>>>()
 
     // One in-flight load per key. A pull-to-refresh landing on top of the initial load should not
@@ -80,6 +93,64 @@ class LibraryCache(private val repository: TtsRoadRepository) {
                     )
                 },
             )
+        }
+    }
+
+    fun ensureBrowseAll() {
+        if (_browseAll.value.hasContent || browseAllJob?.isActive == true) return
+        refreshBrowseAll()
+    }
+
+    fun refreshBrowseAll() {
+        browseAllJob?.cancel()
+        browseAllJob = scope.launch {
+            _browseAll.value = _browseAll.value.copy(isRefreshing = true, error = null)
+            _browseAll.value = runCatching { repository.library(LibraryScopeAll) }.fold(
+                onSuccess = { Cached(value = it) },
+                onFailure = { failure ->
+                    _browseAll.value.copy(
+                        isRefreshing = false,
+                        error = failure.message ?: "Could not load fictions",
+                    )
+                },
+            )
+        }
+    }
+
+    /**
+     * Reflect a follow change without refetching either list.
+     *
+     * Both are updated: the fiction's row in browse has to show its new state, and the shelf has to
+     * gain or lose it — otherwise following something from browse leaves the home screen wrong
+     * until the next refresh.
+     */
+    fun applyFollowing(fictionId: Int, following: Boolean) {
+        _browseAll.value = _browseAll.value.copy(
+            value = _browseAll.value.value?.let { response ->
+                response.copy(
+                    fictions = response.fictions.map {
+                        if (it.id == fictionId) it.copy(following = following) else it
+                    },
+                    followingIds = if (following) {
+                        (response.followingIds + fictionId).distinct()
+                    } else {
+                        response.followingIds - fictionId
+                    },
+                )
+            },
+        )
+        // The shelf cannot gain a fiction it has never loaded, so an unfollow is applied in place
+        // and a follow falls back to a refetch — the server decides what the shelf contains.
+        val shelf = _library.value.value
+        if (shelf != null && !following) {
+            _library.value = _library.value.copy(
+                value = shelf.copy(
+                    fictions = shelf.fictions.filterNot { it.id == fictionId },
+                    followingIds = shelf.followingIds - fictionId,
+                ),
+            )
+        } else if (shelf != null) {
+            refreshLibrary()
         }
     }
 
@@ -131,6 +202,8 @@ class LibraryCache(private val repository: TtsRoadRepository) {
     /** Drop everything on sign-out, so the next account does not see the previous one's library. */
     fun clear() {
         libraryJob?.cancel()
+        browseAllJob?.cancel()
+        _browseAll.value = Cached()
         chapterJobs.values.forEach(Job::cancel)
         chapterJobs.clear()
         _library.value = Cached()

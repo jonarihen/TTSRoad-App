@@ -47,6 +47,12 @@ data class ServerCapabilities(
     val audioContentHash: Boolean = false,
     val deviceManagement: Boolean = false,
     /**
+     * Per-user libraries. When false, `/api/mobile/library` is still the whole shared list and the
+     * app must not offer a follow control it cannot honour.
+     */
+    val follows: Boolean = false,
+
+    /**
      * The shared player/reader preference vocabulary on `/api/me/preferences`.
      *
      * The server gates this on its *schema* route rather than on the preferences endpoint, because
@@ -81,6 +87,7 @@ data class ServerCapabilities(
                 batchProgress = flags.flag("batch_progress"),
                 audioContentHash = flags.flag("audio_content_hash"),
                 deviceManagement = flags.flag("device_management"),
+                follows = flags.flag("follows"),
                 playerPreferences = flags.flag("player_preferences"),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
                 maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),

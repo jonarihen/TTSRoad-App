@@ -6,6 +6,14 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **Your library is now yours.** The app showed whatever the server held and called that "my
+  library", while the web showed a followed subset — so the two disagreed about what the library
+  even was. A **FOLLOW / FOLLOWING** toggle on the fiction screen now puts a book on your shelf or
+  takes it off, and the home screen shows the shelf.
+- **All fictions browses the whole server**, which is where you follow something from. Unfollowing
+  leaves the fiction on the server; it stays reachable from there.
+- Servers whose library is still one shared list show none of this, rather than a toggle they
+  cannot honour.
 - **Reader appearance and Hide played now follow your account.** Text size, page colour and how
   much is highlighted were settings on this phone; so was the chapter filter, which is the web's
   **Hide played** under another name. The 0.10.0 notes flagged that the two disagreed with each
