@@ -47,6 +47,12 @@ data class ServerCapabilities(
     val audioContentHash: Boolean = false,
     val deviceManagement: Boolean = false,
     val maxChaptersPerPage: Int? = null,
+    /**
+     * How many items `/playback/sync` accepts in one batch. Null on a server that does not say, in
+     * which case the client uses its own conservative default rather than guessing high and
+     * having a whole flush rejected with a 400.
+     */
+    val maxPlaybackSyncItems: Int? = null,
 ) {
     companion object {
         /** What an older server — or an unreachable one — is assumed to support. */
@@ -67,6 +73,7 @@ data class ServerCapabilities(
                 audioContentHash = flags.flag("audio_content_hash"),
                 deviceManagement = flags.flag("device_management"),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
+                maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
             )
         }
 

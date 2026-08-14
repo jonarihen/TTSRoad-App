@@ -275,3 +275,59 @@ data class UpdateBookmarkRequest(
     val label: String? = null,
     val note: String? = null,
 )
+
+/**
+ * One item of `POST /api/mobile/playback/sync`.
+ *
+ * [clientUpdatedAt] is what makes the batch endpoint different from `/playback/progress`: the
+ * server applies an item only if this stamp is *strictly newer* than what it already holds. Equal
+ * loses, so two devices re-posting the same synced state do not take turns clobbering each other,
+ * and a missing or unparseable stamp loses rather than being guessed at.
+ */
+data class PlaybackSyncItem(
+    @param:Json(name = "chapter_id") val chapterId: Int,
+    @param:Json(name = "position_seconds") val positionSeconds: Double,
+    @param:Json(name = "is_played") val isPlayed: Boolean,
+    @param:Json(name = "client_updated_at") val clientUpdatedAt: String,
+)
+
+data class PlaybackSyncRequest(
+    val items: List<PlaybackSyncItem>,
+)
+
+/** What the server actually holds for a chapter after the batch was applied. */
+data class PlaybackSyncState(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "is_played") val isPlayed: Boolean = false,
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    @param:Json(name = "client_updated_at") val clientUpdatedAt: String? = null,
+)
+
+data class PlaybackSyncAccepted(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "is_played") val isPlayed: Boolean = false,
+)
+
+/**
+ * A rejected item, with the reason and the watermark that beat it.
+ *
+ * `reason` is one of `not_found`, `missing_client_updated_at`, `invalid_client_updated_at`, `empty`
+ * or `stale`. Only `stale` means "someone else was newer"; the rest mean this client sent something
+ * the server could not use, and retrying it unchanged would fail identically.
+ */
+data class PlaybackSyncRejected(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    val reason: String = "",
+    @param:Json(name = "server_updated_at") val serverUpdatedAt: String? = null,
+)
+
+data class PlaybackSyncResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    val accepted: List<PlaybackSyncAccepted> = emptyList(),
+    val rejected: List<PlaybackSyncRejected> = emptyList(),
+    @param:Json(name = "server_state") val serverState: List<PlaybackSyncState> = emptyList(),
+)
