@@ -4,6 +4,14 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+### Added
+
+- **Bookmarks.** Tap **BOOKMARK** in the player to mark where you are, without stopping playback.
+  Marks are listed under Settings → Bookmarks, and tapping one opens the reader at that chapter.
+- **They are the same bookmarks the browser shows.** Not a copy — the same records, so one made on
+  the phone appears in the web bookmarks page and deleting it in either place removes it from both.
+- Servers without bookmark support show none of this, rather than offering a button that fails.
+
 ### Changed
 
 - **The speed picker goes up to 3.0x.** The clamps always allowed 0.5–3.0, but the sheet only
