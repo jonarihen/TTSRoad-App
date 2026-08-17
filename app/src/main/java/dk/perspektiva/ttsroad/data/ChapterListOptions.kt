@@ -35,9 +35,59 @@ fun List<ChapterSummary>.sortedByDisplayNumber(ascending: Boolean): List<Chapter
     return numbered.sortedWith(if (ascending) byNumber else byNumber.reversed()) + unnumbered
 }
 
-/** The rows to draw for the current filter and sort direction. */
-fun List<ChapterSummary>.chapterView(filter: ChapterFilter, ascending: Boolean): List<ChapterSummary> =
-    this.filter { filter.matches(it) }.sortedByDisplayNumber(ascending)
+/**
+ * A chapter number as it is written: "12" rather than "12.0", but "12.5" kept — chapter numbers are
+ * not always whole. Null when the chapter has no number.
+ *
+ * Lives here rather than in the UI because the find-a-chapter field matches against it. Typing what
+ * the row shows has to find that row, and two implementations of "how a number is written" would
+ * eventually disagree about it.
+ */
+fun chapterNumberText(number: Double?): String? = number?.let {
+    if (it % 1.0 == 0.0) it.toLong().toString() else it.toString()
+}
+
+/**
+ * Whether a row matches what was typed into a find-a-chapter field.
+ *
+ * A several-hundred-chapter serial is unpleasant to scroll, and the two places that list one — the
+ * fiction screen and the player's queue sheet — both need this. Deliberately dumb compared to the
+ * server-side search in `/api/mobile/search`: this filters rows that are already on screen, works
+ * offline, and has no lag. It does not look at chapter *text*; that is what the server search is for.
+ *
+ * @param title the row's title.
+ * @param numberLabel the chapter number as written, or null if it has none.
+ * @param query what the user typed. Blank matches everything, so an empty field hides nothing.
+ */
+fun matchesChapterQuery(title: String, numberLabel: String?, query: String): Boolean {
+    val needle = query.trim().lowercase()
+    if (needle.isEmpty()) return true
+    if (title.lowercase().contains(needle)) return true
+    // Prefix rather than substring on the number: someone typing "17" wants chapter 17 and the
+    // chapters just past it, not every chapter with a 17 buried in it — 117, 170, 217 and so on.
+    // The title match above still covers a number that appears in the words of the title.
+    return numberLabel != null && needle.isNotEmpty() && numberLabel.startsWith(needle)
+}
+
+/** Whether this chapter matches what was typed; see [matchesChapterQuery]. */
+fun ChapterSummary.matchesQuery(query: String): Boolean = matchesChapterQuery(
+    title = resolvedTitle,
+    numberLabel = chapterNumberText(displayNumber),
+    query = query,
+)
+
+/**
+ * The rows to draw for the current filter, sort direction and find-a-chapter text.
+ *
+ * [query] defaults to blank, which matches everything — the list with no text typed is the list
+ * exactly as it was before there was a field to type into.
+ */
+fun List<ChapterSummary>.chapterView(
+    filter: ChapterFilter,
+    ascending: Boolean,
+    query: String = "",
+): List<ChapterSummary> =
+    this.filter { filter.matches(it) && it.matchesQuery(query) }.sortedByDisplayNumber(ascending)
 
 /**
  * Ids of every chapter that comes before [chapterId] in reading order, regardless of the direction

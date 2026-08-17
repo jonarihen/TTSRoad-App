@@ -17,6 +17,17 @@ Notable changes to the TTSRoad Android client.
 - The action sits in the overflow rather than taking a slot from the −30s / +30s skips, which are
   what a driver actually reaches for, and it appears only on a server that can hold a bookmark.
   If the write fails the car says so; a silent no-op would be worse than the button not being there.
+- **Find a chapter by name or number.** A **FIND A CHAPTER** field on the fiction screen and in the
+  player's chapter sheet narrows the list as you type. A several-hundred-chapter serial was
+  scrollable and nothing else; typing `173` or `lighthouse` now gets you there.
+  ([#68](https://github.com/jonarihen/TTSRoad-App/issues/68))
+- Numbers match from the start, so `17` finds chapter 17 and the 170s rather than every chapter with
+  a 17 buried in it. Titles match anywhere, and matching ignores case.
+- It filters what is already loaded, so it works offline and has no lag. It is not the server-side
+  search added in 0.11.0 and does not replace it: this one answers "which one was chapter 173", that
+  one searches the narration text. The All/Unplayed/Ready chips still apply on top.
+- Filtering the player's chapter sheet never renumbers the queue — a row keeps the position it holds
+  in the book, so tapping it plays the chapter it says it will.
 
 ### Fixed
 

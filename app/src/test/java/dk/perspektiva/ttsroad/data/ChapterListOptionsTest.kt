@@ -121,4 +121,83 @@ class ChapterListOptionsTest {
     fun `withPlayed returns the same list when nothing is selected`() {
         assertEquals(chapters, chapters.withPlayed(emptyList(), played = true))
     }
+
+    private fun titled(id: Int, number: Double?, title: String) =
+        ChapterSummary(id = id, displayNumber = number, title = title)
+
+    private val serial = listOf(
+        titled(id = 1, number = 1.0, title = "The Gate Opens"),
+        titled(id = 17, number = 17.0, title = "Ashes"),
+        titled(id = 18, number = 17.5, title = "Interlude: The Lighthouse"),
+        titled(id = 170, number = 170.0, title = "A Long Walk"),
+        titled(id = 217, number = 217.0, title = "The Gate Closes"),
+    )
+
+    private fun found(query: String) =
+        serial.chapterView(ChapterFilter.All, ascending = true, query = query)
+            .map { it.resolvedChapterId }
+
+    @Test
+    fun `an empty query hides nothing`() {
+        // The list with nothing typed has to be the list exactly as it was before there was a
+        // field to type into, or every existing caller quietly changes behaviour.
+        assertEquals(listOf(1, 17, 18, 170, 217), found(""))
+        assertEquals(listOf(1, 17, 18, 170, 217), found("   "))
+    }
+
+    @Test
+    fun `a title match is a case-insensitive substring`() {
+        assertEquals(listOf(1, 217), found("gate"))
+        assertEquals(listOf(1, 217), found("GATE"))
+        assertEquals(listOf(18), found("lighthouse"))
+    }
+
+    @Test
+    fun `a number match is a prefix, so typing a chapter number finds that chapter`() {
+        // "17" wants chapter 17 and the ones just past it — not 117 or 217, which is what a
+        // substring match would drag in and is the reason this is not one.
+        assertEquals(listOf(17, 18, 170), found("17"))
+        assertEquals(listOf(170), found("170"))
+    }
+
+    @Test
+    fun `a number typed as written matches, including a half chapter`() {
+        // The row shows "17.5", so typing "17.5" has to find it.
+        assertEquals(listOf(18), found("17.5"))
+    }
+
+    @Test
+    fun `the query and the filter both apply`() {
+        val played = listOf(
+            titled(id = 1, number = 1.0, title = "The Gate Opens")
+                .copy(playback = PlaybackInfo(isPlayed = true)),
+            titled(id = 217, number = 217.0, title = "The Gate Closes"),
+        )
+
+        val view = played.chapterView(ChapterFilter.Unplayed, ascending = true, query = "gate")
+
+        assertEquals(listOf(217), view.map { it.resolvedChapterId })
+    }
+
+    @Test
+    fun `a query matching nothing gives an empty list rather than everything`() {
+        assertEquals(emptyList<Int>(), found("nothing here"))
+    }
+
+    @Test
+    fun `a chapter with no number is still findable by title`() {
+        val unnumbered = listOf(titled(id = 5, number = null, title = "Epilogue"))
+
+        assertEquals(listOf(5), unnumbered.chapterView(ChapterFilter.All, true, "epi").map { it.resolvedChapterId })
+        assertEquals(emptyList<Int>(), unnumbered.chapterView(ChapterFilter.All, true, "5").map { it.resolvedChapterId })
+    }
+
+    @Test
+    fun `chapter numbers are written the way the rows show them`() {
+        // The field matches against this, so "what you see is what you type" only holds while the
+        // two agree — which is why the UI's label delegates here rather than reimplementing it.
+        assertEquals("12", chapterNumberText(12.0))
+        assertEquals("12.5", chapterNumberText(12.5))
+        assertEquals(null, chapterNumberText(null))
+    }
 }
