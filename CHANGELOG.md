@@ -2,7 +2,21 @@
 
 Notable changes to the TTSRoad Android client.
 
-## 0.11.0 — 2026-08-14
+## Unreleased
+
+### Added
+
+- **Bookmark from the car and the notification.** A **Bookmark this moment** action on the Android
+  Auto transport, the media notification and the lockscreen marks where you are without unlocking
+  the phone, opening the app or interrupting playback. Hearing a line worth keeping while driving is
+  the moment the web's bookmarks page cannot serve and an in-app list barely serves either.
+  ([#68](https://github.com/jonarihen/TTSRoad-App/issues/68))
+- It writes the same bookmarks everything else does, so a mark made at the wheel is in the player's
+  list, under Settings → Bookmarks, and in the browser. The moment is read the instant you press,
+  not when the network write finishes, so it lands on the line you heard.
+- The action sits in the overflow rather than taking a slot from the −30s / +30s skips, which are
+  what a driver actually reaches for, and it appears only on a server that can hold a bookmark.
+  If the write fails the car says so; a silent no-op would be worse than the button not being there.
 
 Signed with the same pinned key as 0.7.0 through 0.10.0, so this installs directly over any of them
 as an ordinary update.
