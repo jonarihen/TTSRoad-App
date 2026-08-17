@@ -187,6 +187,8 @@ import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.nav.AppScreen
 import dk.perspektiva.ttsroad.nav.navigateTo
 import dk.perspektiva.ttsroad.nav.popScreen
+import dk.perspektiva.ttsroad.nav.readerFollowTarget
+import dk.perspektiva.ttsroad.nav.replaceTop
 import dk.perspektiva.ttsroad.nav.rootBackStack
 import dk.perspektiva.ttsroad.nav.saveKey
 import dk.perspektiva.ttsroad.player.FictionListeningSummary
@@ -346,6 +348,7 @@ private fun TtsRoadApp(
                 screen = backStack.last(),
                 canGoBack = backStack.size > 1,
                 onScreenChange = { backStack = backStack.navigateTo(it) },
+                onReplaceScreen = { backStack = backStack.replaceTop(it) },
                 onBack = { backStack = backStack.popScreen() },
                 repository = repository,
                 playbackController = playbackController,
@@ -563,6 +566,7 @@ private fun MainScaffold(
     screen: AppScreen,
     canGoBack: Boolean,
     onScreenChange: (AppScreen) -> Unit,
+    onReplaceScreen: (AppScreen) -> Unit,
     onBack: () -> Unit,
     repository: TtsRoadRepository,
     playbackController: PlaybackController,
@@ -574,6 +578,13 @@ private fun MainScaffold(
     val popBackStack = {
         stateHolder.removeState(screen.saveKey)
         onBack()
+    }
+    // Same bookkeeping as popping: the entry being replaced is gone for good, so its saved state
+    // goes with it. An overnight listen re-targets the reader once a chapter, and without this
+    // every chapter it passed through would keep a scroll offset nothing can ever restore.
+    val replaceScreen = { next: AppScreen ->
+        stateHolder.removeState(screen.saveKey)
+        onReplaceScreen(next)
     }
     BackHandler(enabled = canGoBack, onBack = popBackStack)
     val playerState by playbackController.state.collectAsStateWithLifecycle()
@@ -697,6 +708,9 @@ private fun MainScaffold(
                     playerState = playerState,
                     playbackController = playbackController,
                     repository = repository,
+                    // Replaces rather than pushes: the reader moving on with the audio is the same
+                    // destination showing a later chapter, not somewhere the user navigated to.
+                    onFollowChapter = replaceScreen,
                 )
 
                 AppScreen.Settings -> SettingsScreen(
@@ -4063,6 +4077,11 @@ private fun EmptyCard(message: String) {
  *
  * Reading works with nothing playing at all — that is both a feature in its own right and the only
  * thing a chapter with no timings can offer — so playback state only ever *adds* a highlight.
+ *
+ * When the reader *is* showing what is playing it also follows the audio across a chapter boundary,
+ * via [onFollowChapter] — see [readerFollowTarget] for which changes count. Every piece of
+ * per-chapter state below hangs off `screen.chapterId`, so re-targeting the entry reloads the text,
+ * re-arms the highlight and resets the scroll without any of them needing to know it happened.
  */
 @Composable
 private fun ReaderScreen(
@@ -4071,6 +4090,7 @@ private fun ReaderScreen(
     playerState: PlayerUiState,
     playbackController: PlaybackController,
     repository: TtsRoadRepository,
+    onFollowChapter: (AppScreen.Reader) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -4099,12 +4119,32 @@ private fun ReaderScreen(
         loading = false
     }
 
-    // Only follow when this is the chapter actually playing. Opening the reader for a different
+    // Only highlight when this is the chapter actually playing. Opening the reader for a different
     // chapter is an ordinary thing to do, and highlighting it against someone else's audio would
     // be worse than not highlighting at all.
-    val playingChapterId = playerState.queue.getOrNull(playerState.currentIndex)
-        ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
+    val playingItem = playerState.queue.getOrNull(playerState.currentIndex)
+    val playingChapterId = playingItem?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
     val isPlayingThisChapter = playingChapterId == screen.chapterId
+
+    // Seeded with whatever was playing when this entry was composed, which is what makes a reader
+    // opened on an unrelated chapter stay there: it never matches, so it never follows. A re-target
+    // recomposes this whole subtree under a new save key, and the seed matches again on the way in.
+    var previousPlayingChapterId by remember { mutableStateOf(playingChapterId) }
+    LaunchedEffect(playingChapterId) {
+        val target = readerFollowTarget(
+            readerChapterId = screen.chapterId,
+            previousPlayingChapterId = previousPlayingChapterId,
+            playingChapterId = playingChapterId,
+        )
+        previousPlayingChapterId = playingChapterId
+        if (target != null) {
+            // The queue row is where the id came from, so its title describes the same chapter.
+            // It is only what the top bar shows until the document lands and names it properly.
+            onFollowChapter(
+                AppScreen.Reader(chapterId = target, title = playingItem?.title ?: screen.title),
+            )
+        }
+    }
 
     var highlight by remember(screen.chapterId) { mutableStateOf(ReadAlongHighlight.None) }
 
