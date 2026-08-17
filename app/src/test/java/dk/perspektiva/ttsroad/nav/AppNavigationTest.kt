@@ -140,4 +140,30 @@ class AppNavigationTest {
     fun `the reader save key does not collide with a fiction of the same id`() {
         assertNotEquals(reader(1).saveKey, AppScreen.Fiction(fiction(1)).saveKey)
     }
+
+    @Test
+    fun `the reader following playback leaves back pointing at whatever opened it`() {
+        val fictionScreen = AppScreen.Fiction(fiction(1))
+        val stack = rootBackStack.navigateTo(fictionScreen).navigateTo(reader(10))
+
+        // An overnight listen advances chapter after chapter. Each one replaces the last, so the
+        // stack stays three deep and BACK still returns to the fiction rather than walking back
+        // through every chapter that played while nobody was looking.
+        val readOn = stack.replaceTop(reader(11)).replaceTop(reader(12)).replaceTop(reader(13))
+
+        assertEquals(listOf(AppScreen.Library, fictionScreen, reader(13)), readOn)
+        assertEquals(fictionScreen, readOn.popScreen().last())
+    }
+
+    @Test
+    fun `replacing changes the save key, so the new chapter starts at the top`() {
+        val stack = rootBackStack.navigateTo(reader(10))
+
+        assertEquals("Reader:11", stack.replaceTop(reader(11)).last().saveKey)
+    }
+
+    @Test
+    fun `replacing the root entry is a no-op`() {
+        assertEquals(rootBackStack, rootBackStack.replaceTop(AppScreen.Settings))
+    }
 }

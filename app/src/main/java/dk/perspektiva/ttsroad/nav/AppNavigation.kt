@@ -66,3 +66,18 @@ fun List<AppScreen>.navigateTo(screen: AppScreen): List<AppScreen> {
 /** Pop the top entry. The root entry is never popped, so the stack is never empty. */
 fun List<AppScreen>.popScreen(): List<AppScreen> =
     if (size > 1) subList(0, size - 1).toList() else this
+
+/**
+ * Swap the top entry for [screen], leaving everything under it alone.
+ *
+ * For a screen that re-targets itself rather than being navigated to — the reader following
+ * playback into the next chapter. [navigateTo] would be wrong twice over: BACK would walk back
+ * through every chapter an overnight listen advanced through, and the entry it returned to would
+ * be one nobody chose to open. Replacing keeps BACK meaning "whatever I opened the reader from",
+ * while still changing [saveKey], which is what resets the scroll to the top of the new chapter.
+ *
+ * Replacing the root entry is a no-op: the stack always has a root, and nothing that replaces
+ * itself is ever the root.
+ */
+fun List<AppScreen>.replaceTop(screen: AppScreen): List<AppScreen> =
+    if (size > 1) subList(0, size - 1) + screen else this
