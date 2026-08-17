@@ -2,7 +2,13 @@
 
 Notable changes to the TTSRoad Android client.
 
-## Unreleased
+## 0.12.0 — 2026-08-17
+
+Signed with the same pinned key as 0.7.0 through 0.11.0, so this installs directly over any of them
+as an ordinary update.
+
+Nothing in this release needs a newer server. The bookmark action appears only where the server
+already advertises bookmarks, and the rest is entirely client-side.
 
 ### Added
 

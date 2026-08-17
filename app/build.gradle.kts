@@ -52,8 +52,8 @@ android {
         applicationId = "dk.perspektiva.ttsroad"
         minSdk = 26
         targetSdk = 37
-        versionCode = 13
-        versionName = "0.11.0"
+        versionCode = 14
+        versionName = "0.12.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SENTRY_DSN", "\"$ttsRoadSentryDsn\"")
     }
