@@ -6,6 +6,17 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **Bookmark from the car and the notification.** A **Bookmark this moment** action on the Android
+  Auto transport, the media notification and the lockscreen marks where you are without unlocking
+  the phone, opening the app or interrupting playback. Hearing a line worth keeping while driving is
+  the moment the web's bookmarks page cannot serve and an in-app list barely serves either.
+  ([#68](https://github.com/jonarihen/TTSRoad-App/issues/68))
+- It writes the same bookmarks everything else does, so a mark made at the wheel is in the player's
+  list, under Settings → Bookmarks, and in the browser. The moment is read the instant you press,
+  not when the network write finishes, so it lands on the line you heard.
+- The action sits in the overflow rather than taking a slot from the −30s / +30s skips, which are
+  what a driver actually reaches for, and it appears only on a server that can hold a bookmark.
+  If the write fails the car says so; a silent no-op would be worse than the button not being there.
 - **Find a chapter by name or number.** A **FIND A CHAPTER** field on the fiction screen and in the
   player's chapter sheet narrows the list as you type. A several-hundred-chapter serial was
   scrollable and nothing else; typing `173` or `lighthouse` now gets you there.
@@ -17,6 +28,22 @@ Notable changes to the TTSRoad Android client.
   one searches the narration text. The All/Unplayed/Ready chips still apply on top.
 - Filtering the player's chapter sheet never renumbers the queue — a row keeps the position it holds
   in the book, so tapping it plays the chapter it says it will.
+
+### Fixed
+
+- **The reader follows the audio into the next chapter.** Leaving the reader open on the chapter
+  that is playing used to strand it there: the chapter ended, the next one played on, and the page
+  kept showing the finished text under a highlight that had stopped moving. It now moves on with
+  the audio — new text, highlight running again, scrolled to the top of the new chapter — and the
+  same applies when you skip with next or previous rather than reaching the end.
+  ([#89](https://github.com/jonarihen/TTSRoad-App/issues/89))
+- A reader you opened on some *other* chapter is still never dragged off it, which is the whole
+  reason the page does not simply track the player. Reading ahead stays exactly as it was; if the
+  audio catches up to the chapter you skipped forward to, the reader starts following again from
+  there. BACK still returns to whatever opened the reader, not to every chapter that played on the
+  way, and a chapter with no read-along text says so rather than leaving the previous one on screen.
+
+## 0.11.0 — 2026-08-14
 
 Signed with the same pinned key as 0.7.0 through 0.10.0, so this installs directly over any of them
 as an ordinary update.

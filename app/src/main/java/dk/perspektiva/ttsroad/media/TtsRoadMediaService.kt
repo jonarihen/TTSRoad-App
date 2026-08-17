@@ -179,6 +179,20 @@ class TtsRoadMediaService : MediaLibraryService() {
             .setSessionActivity(playerActivityIntent())
             .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
             .build()
+        // The bookmark button depends on what the server can hold, and that is not known when the
+        // session is built — discovery is asynchronous, and a start from the car runs with no UI to
+        // have done it. Republishing the buttons when the answer arrives is what makes the button
+        // appear on a server that supports bookmarks and stay absent on one that does not.
+        serviceScope.launch {
+            repository.currentCapabilities
+                .map { it.bookmarks }
+                .distinctUntilChanged()
+                .collect { bookmarks ->
+                    session.setMediaButtonPreferences(
+                        TtsRoadSessionCommands.mediaButtonPreferences(bookmarks = bookmarks),
+                    )
+                }
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
@@ -416,6 +430,69 @@ class TtsRoadMediaService : MediaLibraryService() {
                 player.volume = 1f
             }
         }
+    }
+
+    /**
+     * Mark the current moment, for the bookmark button on the notification, the lockscreen and the
+     * Android Auto transport.
+     *
+     * Hearing a line worth keeping while driving is exactly the moment neither the web's bookmarks
+     * page nor an in-app list can serve, and this is the whole point of the feature on a phone: one
+     * press, no unlocking, no leaving the current screen, playback untouched.
+     *
+     * The moment is read here and synchronously — before anything suspends — because that is what
+     * makes the mark land where the press did rather than wherever the network round trip finished.
+     */
+    @OptIn(UnstableApi::class)
+    private fun bookmarkCurrentMoment(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+    ): ListenableFuture<SessionResult> {
+        val target = bookmarkTargetFor(
+            chapterId = player.currentMediaItem?.mediaMetadata?.extras?.getInt("chapter_id"),
+            positionMs = player.currentPosition,
+        ) ?: return Futures.immediateFuture(
+            bookmarkResult(session, controller, BookmarkOutcome.NothingPlaying),
+        )
+
+        return serviceScope.future {
+            val outcome = runCatching {
+                repository.createBookmark(
+                    chapterId = target.chapterId,
+                    positionSeconds = target.positionSeconds,
+                )
+            }.fold(
+                // Null is not a failure to report as one: it is this server having no bookmarks
+                // capability, which is a different thing to say than "could not save".
+                onSuccess = { if (it == null) BookmarkOutcome.Unsupported else BookmarkOutcome.Written },
+                onFailure = { BookmarkOutcome.Failed },
+            )
+            bookmarkResult(session, controller, outcome)
+        }
+    }
+
+    /**
+     * Turn an outcome into a result, telling the controller about it when there is something to say.
+     *
+     * A failure is sent as a [SessionError] as well as returned, because the two reach different
+     * places: the return value answers the controller that issued the command, while [MediaSession
+     * .sendError] is what surfaces a message in the car and on the notification.
+     */
+    private fun bookmarkResult(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        outcome: BookmarkOutcome,
+    ): SessionResult {
+        if (outcome == BookmarkOutcome.Written) return SessionResult(SessionResult.RESULT_SUCCESS)
+        val code = when (outcome) {
+            BookmarkOutcome.NothingPlaying -> SessionError.ERROR_INVALID_STATE
+            BookmarkOutcome.Unsupported -> SessionError.ERROR_NOT_SUPPORTED
+            // Everything else is the network: offline, a dead server, an expired token.
+            else -> SessionError.ERROR_IO
+        }
+        val error = SessionError(code, outcome.message)
+        session.sendError(controller, error)
+        return SessionResult(error)
     }
 
     private fun chapterRemainingMs(): Long? {
@@ -682,6 +759,10 @@ class TtsRoadMediaService : MediaLibraryService() {
                         .buildUpon()
                         .add(TtsRoadSessionCommands.skipBackCommand)
                         .add(TtsRoadSessionCommands.skipForwardCommand)
+                        // Granted regardless of the bookmarks capability: whether the *button* is
+                        // offered is decided by the media button preferences, and a controller that
+                        // asks anyway gets a "not supported" it can show rather than silence.
+                        .add(TtsRoadSessionCommands.bookmarkCommand)
                         .build(),
                 )
                 .build()
@@ -693,6 +774,11 @@ class TtsRoadMediaService : MediaLibraryService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
+            // Handled apart from the seeks below: it writes to the server rather than the player,
+            // so it answers asynchronously and never touches the playback position.
+            if (customCommand.customAction == TtsRoadSessionCommands.Bookmark) {
+                return service.bookmarkCurrentMoment(session, controller)
+            }
             val delta = when (customCommand.customAction) {
                 TtsRoadSessionCommands.SkipBack -> -service.skipIntervalMs
                 TtsRoadSessionCommands.SkipForward -> service.skipIntervalMs
