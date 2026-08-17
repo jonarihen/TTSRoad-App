@@ -18,6 +18,22 @@ Notable changes to the TTSRoad Android client.
   what a driver actually reaches for, and it appears only on a server that can hold a bookmark.
   If the write fails the car says so; a silent no-op would be worse than the button not being there.
 
+### Fixed
+
+- **The reader follows the audio into the next chapter.** Leaving the reader open on the chapter
+  that is playing used to strand it there: the chapter ended, the next one played on, and the page
+  kept showing the finished text under a highlight that had stopped moving. It now moves on with
+  the audio — new text, highlight running again, scrolled to the top of the new chapter — and the
+  same applies when you skip with next or previous rather than reaching the end.
+  ([#89](https://github.com/jonarihen/TTSRoad-App/issues/89))
+- A reader you opened on some *other* chapter is still never dragged off it, which is the whole
+  reason the page does not simply track the player. Reading ahead stays exactly as it was; if the
+  audio catches up to the chapter you skipped forward to, the reader starts following again from
+  there. BACK still returns to whatever opened the reader, not to every chapter that played on the
+  way, and a chapter with no read-along text says so rather than leaving the previous one on screen.
+
+## 0.11.0 — 2026-08-14
+
 Signed with the same pinned key as 0.7.0 through 0.10.0, so this installs directly over any of them
 as an ordinary update.
 
