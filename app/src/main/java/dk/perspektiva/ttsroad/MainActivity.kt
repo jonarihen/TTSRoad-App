@@ -1032,6 +1032,13 @@ private fun FictionScreen(
                 }
             }
 
+            // Results start at the top. A chapter list is often scrolled hundreds of rows down, and
+            // LazyColumn clamps rather than resets when the list shrinks under it — so without this
+            // typing into the field lands at the *end* of the matches instead of the first one.
+            LaunchedEffect(chapterQuery) {
+                if (chapterQuery.isNotBlank()) listState.scrollToItem(0)
+            }
+
             RefreshablePane(
                 padding = padding,
                 isRefreshing = chapterState.isRefreshing,
@@ -1796,14 +1803,21 @@ private fun PlayerScreen(
             val queueRows = remember(playerState.queue, queueQuery) {
                 playerState.queue.queueRows(queueQuery)
             }
-            // The sheet is composed fresh each time it opens, so this lands on the playing chapter
-            // instead of the top of a several-hundred-entry queue. Keyed on the filtered rows too:
-            // typing changes which row the playing chapter is, and scrolling to its old position
-            // would land somewhere arbitrary in the results.
             val chapterListState = rememberLazyListState()
-            LaunchedEffect(playerState.currentIndex, queueRows) {
-                val row = queueRows.indexOfFirst { it.index == playerState.currentIndex }
-                if (row >= 0) chapterListState.scrollToItem(row)
+            LaunchedEffect(playerState.currentIndex, queueRows, queueQuery) {
+                if (queueQuery.isBlank()) {
+                    // The sheet is composed fresh each time it opens, so this lands on the playing
+                    // chapter instead of the top of a several-hundred-entry queue. Its row is looked
+                    // up rather than assumed: clearing the field restores the full list, and the
+                    // queue index is only the row index while nothing is filtered.
+                    val row = queueRows.indexOfFirst { it.index == playerState.currentIndex }
+                    if (row >= 0) chapterListState.scrollToItem(row)
+                } else {
+                    // Results start at the top. The list was sitting wherever the playing chapter
+                    // is, and LazyColumn clamps rather than resets when the list shrinks under it —
+                    // so without this the first match can be scrolled off the top of the sheet.
+                    chapterListState.scrollToItem(0)
+                }
             }
             if (queueRows.isEmpty()) {
                 Box(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
