@@ -2,7 +2,21 @@
 
 Notable changes to the TTSRoad Android client.
 
-## 0.11.0 — 2026-08-14
+## Unreleased
+
+### Added
+
+- **Find a chapter by name or number.** A **FIND A CHAPTER** field on the fiction screen and in the
+  player's chapter sheet narrows the list as you type. A several-hundred-chapter serial was
+  scrollable and nothing else; typing `173` or `lighthouse` now gets you there.
+  ([#68](https://github.com/jonarihen/TTSRoad-App/issues/68))
+- Numbers match from the start, so `17` finds chapter 17 and the 170s rather than every chapter with
+  a 17 buried in it. Titles match anywhere, and matching ignores case.
+- It filters what is already loaded, so it works offline and has no lag. It is not the server-side
+  search added in 0.11.0 and does not replace it: this one answers "which one was chapter 173", that
+  one searches the narration text. The All/Unplayed/Ready chips still apply on top.
+- Filtering the player's chapter sheet never renumbers the queue — a row keeps the position it holds
+  in the book, so tapping it plays the chapter it says it will.
 
 Signed with the same pinned key as 0.7.0 through 0.10.0, so this installs directly over any of them
 as an ordinary update.

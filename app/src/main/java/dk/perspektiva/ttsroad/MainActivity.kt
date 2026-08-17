@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.Replay5
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -174,6 +175,7 @@ import dk.perspektiva.ttsroad.data.shouldKeepReaderScreenOn
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
+import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
 import dk.perspektiva.ttsroad.download.ChapterDownload
 import dk.perspektiva.ttsroad.download.ChapterDownloadState
@@ -201,6 +203,7 @@ import dk.perspektiva.ttsroad.player.remainingMs
 import dk.perspektiva.ttsroad.player.remainingMsAtSpeed
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
+import dk.perspektiva.ttsroad.player.queueRows
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
 import dk.perspektiva.ttsroad.ui.AarisCard
@@ -947,6 +950,9 @@ private fun FictionScreen(
     val filter by chapterListPrefs.filter
         .collectAsStateWithLifecycle(initialValue = ChapterFilter.All)
     var ascending by remember(fiction.id) { mutableStateOf(true) }
+    // Keyed on the fiction, unlike the filter above: "which chapter was called X" is a question
+    // about the book in front of you, and carrying the text to the next one would only hide it.
+    var chapterQuery by remember(fiction.id) { mutableStateOf("") }
     var bulkTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
     var confirmDelete by remember(fiction.id) { mutableStateOf(false) }
     var isDeleting by remember(fiction.id) { mutableStateOf(false) }
@@ -995,8 +1001,8 @@ private fun FictionScreen(
         else -> {
             // Filtering and sorting are client-side: the full list is already loaded, and a 500+
             // chapter fiction is still cheap to re-derive whenever the view options change.
-            val visible = remember(chapters, filter, ascending) {
-                chapters.chapterView(filter, ascending)
+            val visible = remember(chapters, filter, ascending, chapterQuery) {
+                chapters.chapterView(filter, ascending, chapterQuery)
             }
             val currentChapterId = playerState.queue.getOrNull(playerState.currentIndex)
                 ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
@@ -1112,6 +1118,8 @@ private fun FictionScreen(
                             filter = filter,
                             ascending = ascending,
                             showJumpToCurrent = currentOffScreen,
+                            query = chapterQuery,
+                            onQuery = { chapterQuery = it },
                             onFilter = { scope.launch { accountPreferenceSync.setChapterFilter(it) } },
                             onToggleSort = { ascending = !ascending },
                             onJumpToCurrent = {
@@ -1161,6 +1169,20 @@ private fun FictionScreen(
                                     }
                                 },
                         )
+                    }
+                    // A list that filtered down to nothing needs to say so. Silence here reads as a
+                    // fiction whose chapters failed to load, which is a different problem entirely.
+                    if (visible.isEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            EmptyCard(
+                                message = if (chapterQuery.isBlank()) {
+                                    "// No chapters match this filter"
+                                } else {
+                                    "// No chapter matches \"$chapterQuery\""
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -1238,16 +1260,42 @@ private fun FictionScreen(
     }
 }
 
-/** Filter chips, sort direction and the "jump to current" affordance above the chapter list. */
+/**
+ * Find-a-chapter field, filter chips, sort direction and the "jump to current" affordance above the
+ * chapter list.
+ *
+ * The field filters rows already on screen, which is a different job from the server search on the
+ * library screen: this one works offline, has no lag, and answers "which one was chapter 173"
+ * rather than "which chapter mentioned the lighthouse".
+ */
 @Composable
 private fun ChapterListControls(
     filter: ChapterFilter,
     ascending: Boolean,
     showJumpToCurrent: Boolean,
+    query: String,
+    onQuery: (String) -> Unit,
     onFilter: (ChapterFilter) -> Unit,
     onToggleSort: () -> Unit,
     onJumpToCurrent: () -> Unit,
 ) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQuery,
+        label = { Text("FIND A CHAPTER") },
+        placeholder = { Text("Title or number") },
+        singleLine = true,
+        shape = RectangleShape,
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQuery("") }) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear the chapter filter")
+                }
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(modifier = Modifier.height(8.dp))
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -1392,6 +1440,9 @@ private fun PlayerScreen(
         initialValue = PlaybackPrefs(),
     )
     var showChapters by remember { mutableStateOf(false) }
+    // Cleared when the sheet closes rather than remembered: reopening it to find where you are
+    // should show where you are, not the last thing you went looking for.
+    var queueQuery by remember(showChapters) { mutableStateOf("") }
     var showJumpBack by remember { mutableStateOf(false) }
     LaunchedEffect(showJumpBack) {
         if (!showJumpBack) return@LaunchedEffect
@@ -1721,21 +1772,53 @@ private fun PlayerScreen(
                 color = AarisColor.Accent,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
             )
+            // Same job as the fiction screen's field: a several-hundred-entry queue is unpleasant to
+            // scroll, and this is the surface where scrolling it happens mid-listen.
+            OutlinedTextField(
+                value = queueQuery,
+                onValueChange = { queueQuery = it },
+                label = { Text("FIND A CHAPTER") },
+                placeholder = { Text("Title or number") },
+                singleLine = true,
+                shape = RectangleShape,
+                trailingIcon = {
+                    if (queueQuery.isNotEmpty()) {
+                        IconButton(onClick = { queueQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear the chapter filter")
+                        }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp),
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val queueRows = remember(playerState.queue, queueQuery) {
+                playerState.queue.queueRows(queueQuery)
+            }
             // The sheet is composed fresh each time it opens, so this lands on the playing chapter
-            // instead of the top of a several-hundred-entry queue.
+            // instead of the top of a several-hundred-entry queue. Keyed on the filtered rows too:
+            // typing changes which row the playing chapter is, and scrolling to its old position
+            // would land somewhere arbitrary in the results.
             val chapterListState = rememberLazyListState()
-            LaunchedEffect(playerState.currentIndex, playerState.queue.size) {
-                if (playerState.queue.isNotEmpty()) {
-                    chapterListState.scrollToItem(
-                        playerState.currentIndex.coerceIn(0, playerState.queue.lastIndex),
-                    )
+            LaunchedEffect(playerState.currentIndex, queueRows) {
+                val row = queueRows.indexOfFirst { it.index == playerState.currentIndex }
+                if (row >= 0) chapterListState.scrollToItem(row)
+            }
+            if (queueRows.isEmpty()) {
+                Box(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                    MetaText(text = "// No chapter matches \"$queueQuery\"", color = AarisColor.Muted)
                 }
             }
             LazyColumn(state = chapterListState, modifier = Modifier.heightIn(max = 440.dp)) {
                 itemsIndexed(
-                    playerState.queue,
-                    key = { index, item -> "${item.mediaId}-$index" },
-                ) { index, item ->
+                    queueRows,
+                    key = { _, row -> "${row.item.mediaId}-${row.index}" },
+                ) { _, row ->
+                    // The queue position, not the row's position in the filtered list: it is both
+                    // what the row is labelled with and what skipToQueueIndex is given.
+                    val index = row.index
+                    val item = row.item
                     val isCurrent = index == playerState.currentIndex
                     Row(
                         modifier = Modifier
@@ -3322,9 +3405,13 @@ private fun ChapterRow(
 private fun chapterNumberLabel(chapter: ChapterSummary): String =
     chapter.displayNumber?.let(::chapterNumberLabel) ?: "—"
 
-/** "12" rather than "12.0", but "12.5" kept — chapter numbers are not always whole. */
-private fun chapterNumberLabel(number: Double): String =
-    if (number % 1.0 == 0.0) number.toLong().toString() else number.toString()
+/**
+ * "12" rather than "12.0", but "12.5" kept — chapter numbers are not always whole.
+ *
+ * Delegates rather than reimplementing: the find-a-chapter field matches against the same text, and
+ * typing what a row shows has to find that row.
+ */
+private fun chapterNumberLabel(number: Double): String = chapterNumberText(number).orEmpty()
 
 /** The row's download button. Its icon is the *action*, not the state — except when there is none. */
 private fun downloadIcon(state: ChapterDownloadState): ImageVector = when (state) {
