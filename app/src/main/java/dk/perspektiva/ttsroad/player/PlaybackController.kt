@@ -6,6 +6,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
@@ -35,6 +36,11 @@ data class QueueItem(
 data class PlayerUiState(
     val title: String = "Nothing playing",
     val fictionTitle: String? = null,
+    /**
+     * Which book is playing, from the item's `fiction_id` extra, or null when nothing is or the
+     * item does not carry one. Read by the speed sheet to know whose override it is editing.
+     */
+    val fictionId: Int? = null,
     val coverImageUrl: String? = null,
     val isPlaying: Boolean = false,
     val hasMedia: Boolean = false,
@@ -65,6 +71,7 @@ class PlaybackController(
     private val context: Context,
     private val tokenStore: TokenStore,
     private val preferences: PlaybackPreferences,
+    private val fictionSpeeds: FictionSpeedPreferences,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
@@ -260,8 +267,38 @@ class PlaybackController(
     fun setSpeed(speed: Float) {
         val sanitized = sanitizeSpeed(speed)
         scope.launch { preferences.setSpeed(sanitized) }
+        applySpeedNow(sanitized)
+    }
+
+    /**
+     * Pin [fictionId] to [speed], leaving the global speed and every other book alone.
+     *
+     * The service applies this too, from the same store — this only makes the change audible before
+     * the store's flow has come back round, which is what stops the sheet from feeling laggy.
+     */
+    fun setSpeedForFiction(fictionId: Int, speed: Float) {
+        val sanitized = sanitizeSpeed(speed)
+        scope.launch { fictionSpeeds.setSpeed(fictionId, sanitized) }
+        applySpeedNow(sanitized)
+    }
+
+    /**
+     * Hand [fictionId] back to the global speed.
+     *
+     * Applies the global speed immediately for the same reason, and takes it from the preference
+     * store rather than from the player: the player is currently running at the override, which is
+     * precisely the value being discarded.
+     */
+    fun clearSpeedForFiction(fictionId: Int) {
+        scope.launch {
+            fictionSpeeds.clearSpeed(fictionId)
+            applySpeedNow(sanitizeSpeed(preferences.current().speed))
+        }
+    }
+
+    private fun applySpeedNow(speed: Float) {
         val controller = controller ?: return
-        controller.setPlaybackSpeed(sanitized)
+        controller.setPlaybackSpeed(speed)
         publishState(controller)
     }
 

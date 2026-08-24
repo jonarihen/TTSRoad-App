@@ -58,6 +58,9 @@ internal fun playerUiStateOf(player: Player, queue: List<QueueItem>): PlayerUiSt
     return PlayerUiState(
         title = metadata?.title?.toString()?.takeIf { it.isNotBlank() } ?: "Nothing playing",
         fictionTitle = metadata?.albumTitle?.toString(),
+        // Extras survive the binder (unlike the item's local configuration, which the controller
+        // strips), so this is available on the UI side and not only in the service.
+        fictionId = metadata?.extras?.getInt("fiction_id")?.takeIf { it > 0 },
         coverImageUrl = metadata?.artworkUri?.toString(),
         isPlaying = player.isPlaying,
         hasMedia = player.currentMediaItem != null,
