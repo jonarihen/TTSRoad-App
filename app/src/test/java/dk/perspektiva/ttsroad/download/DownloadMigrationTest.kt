@@ -103,4 +103,54 @@ class DownloadMigrationTest {
     fun `an empty cache is not a special case`() {
         assertTrue(orphanedCacheKeys(emptyList(), emptySet()).isEmpty())
     }
+
+    // --- the streaming cache split ----------------------------------------------------------
+
+    @Test
+    fun `a downloaded chapter is never stranded, whichever keyspace it is in`() {
+        val stranded = strandedStreamKeys(
+            cacheKeys = listOf("/audio/fic/ch1.mp3", "ttsroad.example /audio/fic/ch2.mp3"),
+            indexedKeys = setOf("/audio/fic/ch1.mp3", "ttsroad.example /audio/fic/ch2.mp3"),
+        )
+
+        assertTrue(stranded.isEmpty())
+    }
+
+    @Test
+    fun `what streaming left in the download cache is stranded and freed`() {
+        val stranded = strandedStreamKeys(
+            cacheKeys = listOf("/audio/fic/ch1.mp3", "/audio/fic/streamed.mp3"),
+            indexedKeys = setOf("/audio/fic/ch1.mp3"),
+        )
+
+        assertEquals(listOf("/audio/fic/streamed.mp3"), stranded)
+    }
+
+    @Test
+    fun `a scoped span with no download record is stranded too`() {
+        // Unlike the 0.8.0 identity migration, which leaves scoped keys alone because they may
+        // belong to another server. Here the question is different — nothing will read this
+        // directory for streamed audio again — so a scoped orphan is as unreachable as a bare one.
+        val stranded = strandedStreamKeys(
+            cacheKeys = listOf("ttsroad.example /audio/fic/streamed.mp3"),
+            indexedKeys = setOf("ttsroad.example /audio/fic/ch1.mp3"),
+        )
+
+        assertEquals(listOf("ttsroad.example /audio/fic/streamed.mp3"), stranded)
+    }
+
+    @Test
+    fun `a null custom cache key in the index does not strand everything`() {
+        val stranded = strandedStreamKeys(
+            cacheKeys = listOf("/audio/fic/ch1.mp3"),
+            indexedKeys = setOf(null, "/audio/fic/ch1.mp3"),
+        )
+
+        assertTrue(stranded.isEmpty())
+    }
+
+    @Test
+    fun `an empty download cache strands nothing`() {
+        assertTrue(strandedStreamKeys(emptyList(), setOf("/audio/fic/ch1.mp3")).isEmpty())
+    }
 }

@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.download
 
+import dk.perspektiva.ttsroad.data.StreamingCacheUnlimited
 import java.util.Locale
 
 /** Binary units, because that is what the filesystem and Media3's cache actually count in. */
@@ -38,3 +39,16 @@ fun formatStorageSize(bytes: Long): String {
  */
 fun downloadedBytes(downloads: Collection<ChapterDownload>): Long =
     downloads.sumOf { it.bytesDownloaded.coerceAtLeast(0L) }
+
+/**
+ * A streaming-cache cap as its button in Settings reads.
+ *
+ * Not [formatStorageSize]: these are chosen sizes, not measured ones, so "1 GB" is the honest label
+ * where "1.0 GB" reads like a reading off a disk. [StreamingCacheUnlimited] has no size to print at
+ * all — it is the absence of a cap, and saying so is the point.
+ */
+fun streamingCacheChoiceLabel(bytes: Long): String = when {
+    bytes == StreamingCacheUnlimited -> "NO LIMIT"
+    bytes >= 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L * 1024L)} GB"
+    else -> "${bytes / (1024L * 1024L)} MB"
+}
