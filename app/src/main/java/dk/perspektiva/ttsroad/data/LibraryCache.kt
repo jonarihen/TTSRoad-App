@@ -154,6 +154,34 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         }
     }
 
+    /**
+     * Put an edited fiction into both lists, keeping each list's own view of the shelf.
+     *
+     * [fiction] is the server's copy, so its title, cover, description and tags are authoritative —
+     * but `following` is not: the browse list and the shelf disagree about it by design, and a
+     * PATCH answers with whatever the fiction's row happens to say. Overwriting it here would have
+     * an edit made from the browse screen quietly unfollow the book.
+     *
+     * A fiction neither list holds is left alone rather than inserted: what the shelf contains is
+     * the server's decision, not an editor's.
+     */
+    fun applyFiction(fiction: FictionSummary) {
+        _library.value = _library.value.copy(
+            value = _library.value.value?.let { response ->
+                response.copy(fictions = response.fictions.replacing(fiction))
+            },
+        )
+        _browseAll.value = _browseAll.value.copy(
+            value = _browseAll.value.value?.let { response ->
+                response.copy(fictions = response.fictions.replacing(fiction))
+            },
+        )
+    }
+
+    /** Untouched rows come back by identity, so Compose skips redrawing them. */
+    private fun List<FictionSummary>.replacing(fiction: FictionSummary): List<FictionSummary> =
+        map { row -> if (row.id == fiction.id) fiction.copy(following = row.following) else row }
+
     fun ensureChapters(fictionId: Int) {
         if (chapterState(fictionId).value.hasContent || chapterJobs[fictionId]?.isActive == true) return
         refreshChapters(fictionId)

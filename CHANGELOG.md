@@ -2,6 +2,32 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- **Fix a fiction's details from the phone.** Admin accounts get an **EDIT DETAILS** button on the
+  fiction screen: title, author, synopsis, tags, and a new cover image picked from the gallery.
+  Scraped metadata is often not what you want to look at for the next three hundred chapters — a
+  title with the author's release-schedule note stapled to it, a marketing blurb where a synopsis
+  should be, a Patreon import whose cover is the creator's avatar — and correcting any of it used to
+  mean reaching for the database.
+  ([jonarihen/TTSRoad#133](https://github.com/jonarihen/TTSRoad/issues/133))
+- **The correction sticks.** A field you edit stops being refreshed from the source, so a fixed
+  title is not quietly restored by the next poll. Fields being held that way are marked
+  **HAND-EDITED** in the editor, and **USE SOURCE VALUES** hands them back. That lifts the
+  protection only — it does not bring the old text back, and the confirmation says so before you
+  agree to it.
+- **The cover is an image you pick, not a link you paste.** JPEG, PNG, WEBP or GIF up to 10 MB,
+  uploaded to the server and used everywhere the cover appears. A file of the wrong type or over the
+  limit is refused on the phone rather than after it has been pushed up a mobile connection.
+- Only the fields you actually changed are sent, so opening the editor to read it and closing it
+  again never freezes a fiction's metadata against its own updates.
+- The button is hidden entirely for non-admin accounts and for servers without fiction management.
+  On a server that predates hand-edited metadata the title and author are still editable, while the
+  synopsis, tags and cover art are disabled with a line saying why — rather than accepting edits
+  that would silently go nowhere.
+
 ## 0.12.0 — 2026-08-17
 
 Signed with the same pinned key as 0.7.0 through 0.11.0, so this installs directly over any of them
