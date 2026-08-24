@@ -212,6 +212,7 @@ import dk.perspektiva.ttsroad.nav.saveKey
 import dk.perspektiva.ttsroad.nav.withFiction
 import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
+import dk.perspektiva.ttsroad.player.jumpBackOptions
 import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.breadcrumbSnapshot
@@ -5263,23 +5264,6 @@ private fun formatSleepTimerDefault(minutes: Int): String =
 private fun formatSpeed(speed: Float): String {
     val text = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')
     return "${text}×"
-}
-
-/**
- * Thin the recorded position history into a short, evenly-spaced list of "jump back" targets
- * (newest first, at least 5 minutes apart, skipping the last minute) for the player sheet.
- */
-private fun jumpBackOptions(history: List<HistorySnapshot>, now: Long): List<HistorySnapshot> {
-    val out = mutableListOf<HistorySnapshot>()
-    var lastTs = Long.MAX_VALUE
-    for (snap in history.asReversed()) {
-        if (now - snap.timestamp < 60_000L) continue
-        if (lastTs - snap.timestamp < 5 * 60_000L) continue
-        out.add(snap)
-        lastTs = snap.timestamp
-        if (out.size >= 24) break
-    }
-    return out
 }
 
 private fun relativeAgo(deltaMs: Long): String {

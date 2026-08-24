@@ -68,6 +68,14 @@ Notable changes to the TTSRoad Android client.
   unreachable now that read-through looks elsewhere, and chapters the download index does not claim
   are exactly the ones nobody asked for by name. Every download is left untouched, and the sweep is
   abandoned entirely if the index cannot be read.
+- **Jump back reaches most of the night instead of the last two hours.** The history has held about
+  eight and a half hours since 0.6.0, but the sheet spent all two dozen of its rows at a flat
+  five-minute spacing — so someone who fell asleep at midnight and reached for it at six was offered
+  nothing older than four in the morning, which is the wrong two hours for the one case the feature
+  exists for. The steps now widen with age: five minutes inside the last half hour, where a rewind
+  is a correction, fifteen out to two hours, half an hour beyond that. Same two dozen rows, and the
+  oldest now sits just under eight hours back.
+  ([#68](https://github.com/jonarihen/TTSRoad-App/issues/68))
 
 ## 0.12.0 — 2026-08-17
 
