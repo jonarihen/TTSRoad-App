@@ -172,6 +172,8 @@ import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSkipSilence
 import dk.perspektiva.ttsroad.data.DownloadPrefs
+import dk.perspektiva.ttsroad.data.StreamingCacheChoices
+import dk.perspektiva.ttsroad.data.StreamingCacheUnlimited
 import dk.perspektiva.ttsroad.data.KeepAheadChoices
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.SessionState
@@ -198,6 +200,7 @@ import dk.perspektiva.ttsroad.download.fictionDownloadSummary
 import dk.perspektiva.ttsroad.download.formatStorageSize
 import dk.perspektiva.ttsroad.download.handledChapterIds
 import dk.perspektiva.ttsroad.download.nextChaptersToDownload
+import dk.perspektiva.ttsroad.download.streamingCacheChoiceLabel
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.nav.AppScreen
 import dk.perspektiva.ttsroad.nav.navigateTo
@@ -2205,6 +2208,8 @@ private fun SettingsScreen(
     val downloadPrefs by downloadPreferences.prefs
         .collectAsStateWithLifecycle(initialValue = DownloadPrefs())
     val cacheBytes by downloads.cacheBytes.collectAsStateWithLifecycle()
+    val downloadCacheBytes by downloads.downloadCacheBytes.collectAsStateWithLifecycle()
+    val streamedBytes by downloads.streamingCacheBytes.collectAsStateWithLifecycle()
     var confirmDeleteDownloads by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
 
@@ -2472,12 +2477,57 @@ private fun SettingsScreen(
 
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
-                SettingsItem(label = "Storage used", value = formatStorageSize(cacheBytes))
+                MetaText(text = "Keep streamed audio")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StreamingCacheChoices.forEach { option ->
+                        val selected = option == downloadPrefs.streamingCacheBytes
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    downloadPreferences.setStreamingCacheBytes(option)
+                                }
+                            },
+                            shape = RectangleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(streamingCacheChoiceLabel(option))
+                        }
+                    }
+                }
                 MetaText(
-                    text = "Covers both chapters you downloaded and chapters kept from streaming. " +
-                        "Nothing you downloaded is deleted automatically.",
+                    text = if (downloadPrefs.streamingCacheBytes == StreamingCacheUnlimited) {
+                        "Everything you play is kept, so replaying it never touches the server. " +
+                            "Nothing is ever dropped, so this grows for as long as you use the app."
+                    } else {
+                        "Chapters you play are kept so replaying them is free. Past " +
+                            "${formatStorageSize(downloadPrefs.streamingCacheBytes)} the ones you " +
+                            "have not touched in longest are dropped, and play again from the " +
+                            "server if you want them. Downloads are in a separate store and are " +
+                            "never touched by this."
+                    },
                     color = AarisColor.Dim,
                 )
+
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
+                SettingsItem(label = "Storage used", value = formatStorageSize(cacheBytes))
+                SettingsItem(label = "— Downloaded", value = formatStorageSize(downloadCacheBytes))
+                SettingsItem(label = "— Streamed", value = formatStorageSize(streamedBytes))
+                MetaText(
+                    text = "Downloaded chapters are never deleted automatically. Streamed audio is, " +
+                        "once it is over the size above.",
+                    color = AarisColor.Dim,
+                )
+                OutlinedButton(
+                    onClick = { downloads.clearStreamingCache() },
+                    enabled = streamedBytes > 0,
+                    shape = RectangleShape,
+                ) {
+                    Text("CLEAR STREAMED AUDIO")
+                }
                 OutlinedButton(
                     onClick = { confirmDeleteDownloads = true },
                     enabled = cacheBytes > 0,

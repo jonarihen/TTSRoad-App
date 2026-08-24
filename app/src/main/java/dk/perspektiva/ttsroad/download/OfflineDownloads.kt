@@ -11,7 +11,6 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.Cache
-import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheKeyFactory
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
@@ -21,6 +20,7 @@ import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.DefaultStreamingCacheBytes
 import dk.perspektiva.ttsroad.data.DownloadPrefs
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.TokenStore
@@ -34,10 +34,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -48,12 +51,17 @@ import kotlinx.coroutines.withContext
  * directory a second time — the playback service and the download service must share it or neither
  * works.
  *
- * Two things it deliberately does *not* do, because the policy has not been decided:
- * - evict anything automatically. The evictor is [NoOpCacheEvictor] and there is no size cap, so
- *   nothing the user listened to or downloaded disappears behind their back. The cost is that the
- *   read-through cache grows until "delete all downloads" is used.
- * - distinguish a read-through cache entry from an explicit download in terms of storage budget.
- *   Both live in one cache; only the download index knows which chapters were asked for by name.
+ * There are **two** caches, and which one a byte lands in is the whole storage policy — see
+ * [readThroughFactory] and the file comment on `MediaCaches.kt`:
+ * - [downloadCache] holds chapters asked for by name, is written only by [DownloadManager], and
+ *   keeps [NoOpCacheEvictor]. Nothing in it is ever removed automatically, which is what lets the
+ *   app promise that a chapter downloaded for a flight is still there on the plane.
+ * - [streamingCache] holds whatever playback read through it, and is capped by
+ *   [ResizableLruCacheEvictor] from `DownloadPrefs.streamingCacheBytes`. Everything in it is
+ *   re-fetchable by definition, so evicting costs a re-buffer.
+ *
+ * Before 0.13.0 there was one cache holding both, which is exactly why there could be no cap: an
+ * LRU evictor over the shared store cannot tell the two apart and would have deleted real downloads.
  *
  * Opted in once for the class: the cache, download and datasource APIs are all still marked
  * unstable in media3 1.10.0.
@@ -91,12 +99,29 @@ class OfflineDownloads(
     private val databaseProvider: DatabaseProvider by lazy { StandaloneDatabaseProvider(context) }
 
     /**
+     * Chapters the user asked for by name. Never evicted.
+     *
      * Deliberately under `filesDir`, not `cacheDir`: the OS empties `cacheDir` under storage
      * pressure, and silently deleting the chapters someone downloaded for a flight is the exact
      * failure this feature exists to prevent.
      */
-    private val cache: Cache by lazy {
+    private val downloadCache: Cache by lazy {
         SimpleCache(File(context.filesDir, CacheDirName), NoOpCacheEvictor(), databaseProvider)
+    }
+
+    /** The ceiling on [streamingCache], held here so Settings can move it without a restart. */
+    private val streamingEvictor = ResizableLruCacheEvictor(DefaultStreamingCacheBytes)
+
+    /**
+     * Whatever playback streamed through. Capped, and safe to lose.
+     *
+     * Also under `filesDir` rather than `cacheDir`, despite being the disposable one. The OS empties
+     * `cacheDir` at moments it chooses, and this cache existing is what makes rewinding an hour of
+     * overnight playback free — having it vanish under storage pressure would turn that back into an
+     * hour of re-fetching, silently. This app decides what to drop, and says so in Settings.
+     */
+    private val streamingCache: Cache by lazy {
+        SimpleCache(File(context.filesDir, StreamCacheDirName), streamingEvictor, databaseProvider)
     }
 
     /**
@@ -125,7 +150,7 @@ class OfflineDownloads(
         DownloadManager(
             context,
             databaseProvider,
-            cache,
+            downloadCache,
             upstreamFactory,
             // Two at a time: enough to keep a phone's link busy without starving playback of the
             // chapter the user is actually listening to.
@@ -183,28 +208,50 @@ class OfflineDownloads(
                     }
                 }
         }
+        // The cap is applied to the live evictor rather than only at construction, so lowering it
+        // frees space now — someone who has just chosen a smaller number is usually trying to get
+        // disk back, and "restart the app" is not an answer to that.
+        scope.launch {
+            downloadPrefs
+                .map { it.streamingCacheBytes }
+                .distinctUntilChanged()
+                .collect { bytes ->
+                    withContext(Dispatchers.IO) {
+                        runCatching { streamingEvictor.setMaxBytes(streamingCache, bytes) }
+                        refreshCacheBytes()
+                    }
+                }
+        }
         // Touching the manager is what makes it read the persisted index, which is what makes
         // yesterday's downloads show up in the chapter rows again. Done off the main thread because
         // opening the cache scans its directory, and it is not worth janking the first frame.
-        scope.launch(Dispatchers.IO) { downloadManager }
+        //
+        // The split's one-off sweep goes here, after it, rather than in the cache's own lazy
+        // initialiser: the sweep needs the download index, reaching the index opens the manager, and
+        // opening the manager needs the cache. Hanging that off the cache's initialiser would have
+        // it re-enter the very lazy that is still running.
+        scope.launch(Dispatchers.IO) {
+            downloadManager
+            dropStrandedStreamSpans(downloadCache)
+        }
     }
 
     /**
-     * Wrap [upstream] so the player reads through the cache first.
+     * Wrap [upstream] so the player reads through both caches before the network.
      *
      * The caller passes its own auth-injecting source rather than this class's, so the service keeps
      * one resolver for playback and there is no second place that knows how the header is built.
-     * Writes go through the same cache the downloads use, which is what makes a chapter that was
-     * merely streamed replay without touching the server.
+     * A read miss is written to [streamingCache] only, which is what makes a chapter that was merely
+     * streamed replay without touching the server — and what keeps replaying a *downloaded* chapter
+     * from spending capped space on bytes that are already on disk.
      */
     fun readThroughFactory(upstream: DataSource.Factory): DataSource.Factory =
-        CacheDataSource.Factory()
-            .setCache(cache)
-            .setUpstreamDataSourceFactory(upstream)
-            .setCacheKeyFactory(cacheKeyFactory)
-            // A cache that cannot be written (full disk, revoked permission) must degrade to plain
-            // streaming rather than stopping playback.
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        readThroughFactory(
+            downloadCache = downloadCache,
+            streamingCache = streamingCache,
+            upstream = upstream,
+            cacheKeyFactory = cacheKeyFactory,
+        )
 
     /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
     fun download(
@@ -289,8 +336,9 @@ class OfflineDownloads(
     /**
      * Delete every download *and* everything the read-through cache picked up while streaming.
      *
-     * Both live in one cache, so this is the only honest "free the space" action available until the
-     * budget question is decided.
+     * Still one button, because "free the space" is one intent. The two stores are separated for
+     * eviction policy, not to make emptying them a two-step chore, and [clearStreamingCache] is
+     * there for anyone who only wants the disposable half back.
      */
     fun removeAll() {
         DownloadService.sendRemoveAllDownloads(
@@ -299,9 +347,23 @@ class OfflineDownloads(
             /* foreground= */ false,
         )
         scope.launch(Dispatchers.IO) {
-            // removeAllDownloads only clears what the index knows about; chapters that were merely
-            // streamed have cache spans but no download record.
-            runCatching { cache.keys.toList().forEach(cache::removeResource) }
+            // removeAllDownloads only clears what the index knows about; a download cache upgraded
+            // from before the split can still hold spans no record claims.
+            runCatching { downloadCache.keys.toList().forEach(downloadCache::removeResource) }
+            runCatching { streamingCache.keys.toList().forEach(streamingCache::removeResource) }
+            refreshCacheBytes()
+        }
+    }
+
+    /**
+     * Drop everything that was merely streamed, keeping every download.
+     *
+     * The action the split makes possible: before it, the only way to reclaim streamed audio was to
+     * delete the chapters someone had downloaded for a flight along with it.
+     */
+    fun clearStreamingCache() {
+        scope.launch(Dispatchers.IO) {
+            runCatching { streamingCache.keys.toList().forEach(streamingCache::removeResource) }
             refreshCacheBytes()
         }
     }
@@ -323,16 +385,61 @@ class OfflineDownloads(
         }
     }
 
-    private val _cacheBytes = MutableStateFlow(0L)
+    private val _downloadCacheBytes = MutableStateFlow(0L)
+    private val _streamingCacheBytes = MutableStateFlow(0L)
 
-    /** Total bytes the media cache occupies — downloads and streamed-through audio together. */
-    val cacheBytes: StateFlow<Long> = _cacheBytes.asStateFlow()
+    /** Bytes held by chapters downloaded on purpose. Nothing reclaims these but the user. */
+    val downloadCacheBytes: StateFlow<Long> = _downloadCacheBytes.asStateFlow()
 
-    /** Re-read the cache size. Touches the disk, so it is kept off the main thread. */
+    /** Bytes held by audio that was streamed through. Capped, and evicted oldest-first. */
+    val streamingCacheBytes: StateFlow<Long> = _streamingCacheBytes.asStateFlow()
+
+    /**
+     * Both together, which is what the phone's storage settings would show.
+     *
+     * Kept alongside the split figures rather than replaced by them: "how much is this app using"
+     * is still a question with one answer, and it is the one worth leading with.
+     */
+    val cacheBytes: StateFlow<Long> = combine(
+        _downloadCacheBytes,
+        _streamingCacheBytes,
+        Long::plus,
+    ).stateIn(scope, SharingStarted.Eagerly, 0L)
+
+    /** Re-read both cache sizes. Touches the disk, so it is kept off the main thread. */
     fun refreshCacheBytes() {
         scope.launch(Dispatchers.IO) {
-            _cacheBytes.value = runCatching { cache.cacheSpace }.getOrDefault(0L)
+            _downloadCacheBytes.value = runCatching { downloadCache.cacheSpace }.getOrDefault(0L)
+            _streamingCacheBytes.value = runCatching { streamingCache.cacheSpace }.getOrDefault(0L)
         }
+    }
+
+    /**
+     * Everything the download cache holds that no download record claims.
+     *
+     * Runs once, when the download cache is first opened. An install upgraded from before the split
+     * carries a store with both kinds of audio in it and no way to tell them apart except this: the
+     * index names every chapter someone asked for by name, and the rest is what playback left behind
+     * on its way past. Those bytes are now unreachable — read-through looks in the streaming cache —
+     * so they are freed rather than left to sit there forever, which is the failure the cap exists to
+     * end.
+     *
+     * A failed index read aborts the whole sweep. An unopenable database answers "nothing is
+     * downloaded", and acting on that would delete every download on the phone.
+     */
+    private fun dropStrandedStreamSpans(cache: Cache) {
+        val indexed = runCatching {
+            downloadManager.downloadIndex.getDownloads().use { cursor ->
+                buildSet<String?> {
+                    while (cursor.moveToNext()) add(cursor.download.request.customCacheKey)
+                }
+            }
+        }.getOrNull() ?: return
+
+        runCatching {
+            strandedStreamKeys(cache.keys.toList(), indexed).forEach(cache::removeResource)
+        }
+        refreshCacheBytes()
     }
 
     private fun send(request: DownloadRequest) {
@@ -381,7 +488,8 @@ class OfflineDownloads(
             // chapter simply streams once more if it is played.
             val indexed = stale.mapTo(mutableSetOf()) { it.customCacheKey }
             runCatching {
-                orphanedCacheKeys(cache.keys, indexed).forEach(cache::removeResource)
+                orphanedCacheKeys(downloadCache.keys, indexed)
+                    .forEach(downloadCache::removeResource)
             }
 
             // Wrapped like resumeUnfinished: this can run while the process is in the background
@@ -455,6 +563,14 @@ class OfflineDownloads(
 
     private companion object {
         const val CacheDirName = "media_downloads"
+
+        /**
+         * A new directory, so the split needs no data migration: what is already on disk stays the
+         * download cache and the streaming one starts empty. The cost is one re-buffer of whatever
+         * had been streamed, and the alternative — sorting a mixed store into two — cannot be done,
+         * because nothing on disk records which kind a span was.
+         */
+        const val StreamCacheDirName = "media_stream_cache"
         const val MaxParallelDownloads = 2
     }
 }

@@ -39,3 +39,26 @@ internal fun orphanedCacheKeys(
     cacheKeys: Collection<String>,
     indexedKeys: Set<String?>,
 ): List<String> = cacheKeys.filter { !DownloadCacheKeys.isScoped(it) && it !in indexedKeys }
+
+/**
+ * Cache keys left in the download cache by streaming, from before the two stores were split.
+ *
+ * Until 0.13.0 one cache held both kinds of audio, so an upgraded install arrives with a mix and no
+ * record of which span is which. The download index is the record: a key it claims is a chapter
+ * somebody asked for by name and must survive untouched, and everything else is what playback wrote
+ * there on its way past. Those bytes are now unreachable — the streaming cache is a different
+ * directory, and nothing will look for them in this one again — so they are dropped, and the chapter
+ * simply streams once more if it is ever played.
+ *
+ * Unlike [orphanedCacheKeys] this does not care whether a key is scoped. Both keyspaces can be
+ * present at once on a phone mid-way through the 0.8.0 identity migration, and a stranded stream
+ * span is stranded in either.
+ *
+ * **Only ever call this with an index read that actually succeeded.** An empty [indexedKeys] because
+ * the database could not be opened is indistinguishable here from an empty one because nothing is
+ * downloaded, and acting on the first would delete every download on the phone.
+ */
+internal fun strandedStreamKeys(
+    cacheKeys: Collection<String>,
+    indexedKeys: Set<String?>,
+): List<String> = cacheKeys.filter { it !in indexedKeys }

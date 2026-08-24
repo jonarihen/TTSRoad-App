@@ -27,6 +27,30 @@ Notable changes to the TTSRoad Android client.
   On a server that predates hand-edited metadata the title and author are still editable, while the
   synopsis, tags and cover art are disabled with a line saying why — rather than accepting edits
   that would silently go nowhere.
+- **A size cap on cached streaming audio.** Settings → Offline gains **Keep streamed audio**: 256 MB
+  through 5 GB, or no limit. Past the cap the chapters you have not touched in longest are dropped
+  and play again from the server if you want them. One gigabyte by default.
+- **Storage is broken out into what was downloaded and what was streamed**, because the two now
+  behave differently, and **CLEAR STREAMED AUDIO** frees the disposable half on its own. Until now
+  the only way to reclaim streamed audio was to delete the chapters you had downloaded for a flight
+  along with it. ([#93](https://github.com/jonarihen/TTSRoad-App/issues/93), closing the last item
+  of [#14](https://github.com/jonarihen/TTSRoad-App/issues/14) and
+  [#60](https://github.com/jonarihen/TTSRoad-App/issues/60))
+
+### Changed
+
+- **Downloads and streaming no longer share one cache.** They could not have separate policies while
+  they did: Media3's LRU evictor cannot tell a downloaded span from a streamed one, so any cap on the
+  shared store would eventually have deleted a chapter someone downloaded on purpose — the exact
+  failure offline downloads exist to prevent, discovered in a tunnel. Downloads keep a store with no
+  evictor at all and are still never removed automatically. Playback reads the download store first,
+  then the streamed one, then the network.
+- Replaying a downloaded chapter no longer copies it into the streaming cache, so it costs no capped
+  space and pushes nothing else out.
+- Upgrading frees whatever streaming left in the download store before the split. Those bytes are
+  unreachable now that read-through looks elsewhere, and chapters the download index does not claim
+  are exactly the ones nobody asked for by name. Every download is left untouched, and the sweep is
+  abandoned entirely if the index cannot be read.
 
 ## 0.12.0 — 2026-08-17
 
