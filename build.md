@@ -297,6 +297,82 @@ Response:
 }
 ```
 
+### Fiction Metadata Editing
+
+Admin-only. `is_admin` on `GET /api/mobile/me` says whether this account may use any of it; the
+`fiction_management` capability says whether the server has the routes at all. A client needs both
+before it offers the controls — the server enforces admin either way, so hiding them only avoids
+offering a button that 403s.
+
+```http
+PATCH /api/mobile/fictions/{fiction_id}
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "title": "Ashfall",
+  "author": "R. Vane",
+  "description": "A city under ash.",
+  "tags": ["Fantasy", "Slow burn"],
+  "clear_overrides": ["description"]
+}
+```
+
+Every field is optional, and an absent or `null` field is left alone. An **empty string** clears
+`author` and `description`; an **empty array** clears `tags`. A blank `title` is a `400` — a fiction
+has to be called something. The server trims tags, drops duplicates case-insensitively, and caps
+them at 50 of 100 characters, so echo its answer rather than the request.
+
+The response is the fiction as the server now holds it:
+
+```json
+{
+  "api_version": 1,
+  "status": "ok",
+  "fiction": {
+    "id": 7,
+    "title": "Ashfall",
+    "metadata_overrides": ["title", "description"]
+  }
+}
+```
+
+**`metadata_overrides` is the point of the feature.** It lists the fields a human has edited —
+drawn from `title`, `author`, `description`, `cover_image_url`, `tags` — and the server stops
+refilling exactly those from the source on every poll. It rides on every fiction payload, not just
+this one.
+
+Two consequences for a client:
+
+- **Send only what changed.** A `PATCH` marks each field it *sets* as hand-edited. Sending an
+  untouched field freezes it against its own updates, for every account, until someone clears it.
+- **`clear_overrides` is the undo, and it is not a revert.** It removes names from the list so the
+  next poll may refill them. It does not restore the previous value: what is stored now stays until
+  the source replaces it. Say so before doing it.
+
+Cover art is an upload, not a URL field — a pasted link renders in a browser and then fails to
+embed in any MP3, because the ID3 writer only fetches art from hosts a source adapter allows:
+
+```http
+POST /api/mobile/fictions/{fiction_id}/cover
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+
+file=<jpeg|png|webp|gif, 10 MB max>
+```
+
+The part must be named exactly `file`. Answers the same `{api_version, status, fiction}` envelope,
+with the new `cover_image_url`. A non-image is a `400`, and anything over the ceiling is a `413`, so
+check the type and size before spending a mobile connection on them.
+
+This is all additive — `api_version` stays `1`. Against an older server:
+
+- the cover route `404`s, which means "no cover uploads here", not "no such fiction";
+- the `PATCH` accepts `description`, `tags` and `clear_overrides`, drops them, and answers `ok`.
+  The echoed fiction is the only place the difference shows: **no `metadata_overrides` key means the
+  server cannot hold a hand-edited field**, and a client should not offer one. Note that absent and
+  `[]` are different answers — the second means "nothing has been edited yet".
+
 ### Save Playback Progress
 
 ```http

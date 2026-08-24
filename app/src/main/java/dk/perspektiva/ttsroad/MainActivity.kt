@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.VisibleForTesting
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -142,8 +143,20 @@ import dk.perspektiva.ttsroad.data.Bookmark
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.DeviceSession
 import dk.perspektiva.ttsroad.data.FictionAddResult
+import dk.perspektiva.ttsroad.data.FictionEditResult
+import dk.perspektiva.ttsroad.data.FictionMetadataDraft
 import dk.perspektiva.ttsroad.data.FictionSummary
+import dk.perspektiva.ttsroad.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.data.HighlightGranularity
+import dk.perspektiva.ttsroad.data.MetadataFieldAuthor
+import dk.perspektiva.ttsroad.data.MetadataFieldCoverImageUrl
+import dk.perspektiva.ttsroad.data.MetadataFieldDescription
+import dk.perspektiva.ttsroad.data.MetadataFieldTags
+import dk.perspektiva.ttsroad.data.MetadataFieldTitle
+import dk.perspektiva.ttsroad.data.PickedCover
+import dk.perspektiva.ttsroad.data.fictionMetadataPatch
+import dk.perspektiva.ttsroad.data.formatFictionTags
+import dk.perspektiva.ttsroad.data.readPickedCover
 import dk.perspektiva.ttsroad.data.formatExpiresIn
 import dk.perspektiva.ttsroad.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.data.LoginResult
@@ -193,6 +206,7 @@ import dk.perspektiva.ttsroad.nav.readerFollowTarget
 import dk.perspektiva.ttsroad.nav.replaceTop
 import dk.perspektiva.ttsroad.nav.rootBackStack
 import dk.perspektiva.ttsroad.nav.saveKey
+import dk.perspektiva.ttsroad.nav.withFiction
 import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
 import dk.perspektiva.ttsroad.player.formatListeningSpan
@@ -219,8 +233,10 @@ import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdateState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Server the user signed in to, so cover URLs built from the backend's BASE_URL can be pointed at
@@ -352,6 +368,10 @@ private fun TtsRoadApp(
                 canGoBack = backStack.size > 1,
                 onScreenChange = { backStack = backStack.navigateTo(it) },
                 onReplaceScreen = { backStack = backStack.replaceTop(it) },
+                // A fiction rides *in* the stack, so an edit has to be written back into every entry
+                // holding it — otherwise the screen under the editor, and the top bar that reads its
+                // title, keep showing what the source used to say.
+                onFictionUpdated = { backStack = backStack.withFiction(it) },
                 onBack = { backStack = backStack.popScreen() },
                 repository = repository,
                 playbackController = playbackController,
@@ -570,6 +590,8 @@ private fun MainScaffold(
     canGoBack: Boolean,
     onScreenChange: (AppScreen) -> Unit,
     onReplaceScreen: (AppScreen) -> Unit,
+    /** Rewrite the stack around an edited fiction, without navigating anywhere. */
+    onFictionUpdated: (FictionSummary) -> Unit,
     onBack: () -> Unit,
     repository: TtsRoadRepository,
     playbackController: PlaybackController,
@@ -601,6 +623,7 @@ private fun MainScaffold(
     }.collectAsStateWithLifecycle(initialValue = false)
     val title = when (screen) {
         is AppScreen.Fiction -> screen.fiction.title
+        is AppScreen.FictionEdit -> "Edit details"
         AppScreen.Library -> session.serverName
         AppScreen.Fictions -> "All fictions"
         AppScreen.Player -> "Now playing"
@@ -693,8 +716,19 @@ private fun MainScaffold(
                     isAdmin = session.isAdmin,
                     onOpenPlayer = { onScreenChange(AppScreen.Player) },
                     onOpenReader = { onScreenChange(it) },
+                    onEditDetails = { onScreenChange(AppScreen.FictionEdit(screen.fiction)) },
                     // The screen is about a fiction that no longer exists, so it cannot stay open.
                     onDeleted = popBackStack,
+                )
+
+                is AppScreen.FictionEdit -> FictionEditScreen(
+                    padding = padding,
+                    fiction = screen.fiction,
+                    repository = repository,
+                    // Every accepted write lands here, cover uploads included, so the fiction
+                    // screen behind the editor is already correct when the editor closes.
+                    onFictionChanged = onFictionUpdated,
+                    onDone = popBackStack,
                 )
 
                 AppScreen.Player -> PlayerScreen(
@@ -942,6 +976,7 @@ private fun FictionScreen(
     isAdmin: Boolean = false,
     onOpenPlayer: () -> Unit,
     onOpenReader: (AppScreen.Reader) -> Unit,
+    onEditDetails: () -> Unit = {},
     onDeleted: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
@@ -1109,6 +1144,7 @@ private fun FictionScreen(
                             // Two gates, both needed: the server has to have the routes, and this
                             // account has to be the admin they are restricted to. The server does
                             // the enforcing either way — hiding it just avoids offering a 403.
+                            onEdit = onEditDetails.takeIf { capabilities.fictionManagement && isAdmin },
                             onDelete = if (capabilities.fictionManagement && isAdmin) {
                                 { confirmDelete = true }
                             } else {
@@ -3880,6 +3916,8 @@ private fun FictionDetailHeader(
     isFollowBusy: Boolean = false,
     listeningSummary: FictionListeningSummary = FictionListeningSummary(),
     playbackSpeed: Float = 1f,
+    /** Null unless this account is an admin on a server that can edit fictions. */
+    onEdit: (() -> Unit)? = null,
     /** Null unless this account is an admin on a server that can delete fictions. */
     onDelete: (() -> Unit)? = null,
     isDeleting: Boolean = false,
@@ -4067,6 +4105,19 @@ private fun FictionDetailHeader(
             }
         }
 
+        // Admin housekeeping from here down, below everything anyone reaches for mid-listen.
+        // Correcting a title or a synopsis is a rare, deliberate act, and it should not sit next to
+        // RESUME.
+        onEdit?.let { edit ->
+            OutlinedButton(
+                onClick = edit,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("EDIT DETAILS")
+            }
+        }
+
         // Last in the header, and the only destructive control on the screen. Deleting is admin
         // housekeeping, not something anyone does mid-listen, so it sits below everything that is.
         onDelete?.let { delete ->
@@ -4080,6 +4131,399 @@ private fun FictionDetailHeader(
                 Text(if (isDeleting) "DELETING" else "DELETE FICTION")
             }
         }
+    }
+}
+
+/**
+ * Correct what the source got wrong: title, author, synopsis, tags and cover art.
+ *
+ * Admin-only. The entry point is hidden for anyone else and the server refuses them anyway; this
+ * screen simply is not offered rather than being offered and 403ing.
+ *
+ * Three things shape it. Saving sends **only the fields that changed**, because the server records
+ * every field a PATCH sets as hand-edited and stops refreshing it from the source — so a form that
+ * was opened, read and saved would quietly freeze a whole fiction against its own updates. The
+ * cover is uploaded the moment it is picked, since it is its own route and its own request, and
+ * there is nothing left to save afterwards. And what the server answers with is what is adopted:
+ * the trimmed title, the de-duplicated tags and the rehosted cover URL are all its decisions, not
+ * this screen's.
+ */
+@Composable
+private fun FictionEditScreen(
+    padding: PaddingValues,
+    fiction: FictionSummary,
+    repository: TtsRoadRepository,
+    /** Called with the server's copy after every accepted write — an edit or a cover alike. */
+    onFictionChanged: (FictionSummary) -> Unit,
+    onDone: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val cache = remember { ServiceLocator.libraryCache(context) }
+    // Keyed on the fiction rather than on the whole row: an accepted cover upload hands a new
+    // FictionSummary in while the form is still open, and that must not throw away typing.
+    var title by rememberSaveable(fiction.id) { mutableStateOf(fiction.title) }
+    var author by rememberSaveable(fiction.id) { mutableStateOf(fiction.author.orEmpty()) }
+    var description by rememberSaveable(fiction.id) { mutableStateOf(fiction.description.orEmpty()) }
+    var tagText by rememberSaveable(fiction.id) { mutableStateOf(formatFictionTags(fiction.tags)) }
+    var isSaving by remember { mutableStateOf(false) }
+    var isUploading by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var isError by remember { mutableStateOf(false) }
+    var confirmRevert by remember { mutableStateOf(false) }
+
+    val draft = FictionMetadataDraft(
+        title = title,
+        author = author,
+        description = description,
+        tags = tagText,
+    )
+    val patch = remember(fiction, draft) { fictionMetadataPatch(fiction, draft) }
+    val overridden = fiction.overriddenFields
+    val isBusy = isSaving || isUploading
+    // Whether this server understands hand-edited metadata at all. An older one accepts a
+    // description, drops it and answers "ok", so offering the field would be offering a lie; the
+    // title and author it has always been able to store are still editable.
+    val editsEverything = fiction.supportsMetadataEditing
+
+    /**
+     * Adopt whatever the server answered with, and say so.
+     *
+     * The echoed fiction is the only trustworthy account of what a write did, and it has to reach
+     * three places: the library lists, the back stack, and the form's own baseline for "what has
+     * changed". Answers true when the write landed.
+     */
+    fun adopt(result: FictionEditResult, done: String, unsupported: String): Boolean = when (result) {
+        is FictionEditResult.Saved -> {
+            result.fiction?.let { saved ->
+                cache.applyFiction(saved)
+                onFictionChanged(saved)
+            }
+            isError = false
+            message = done
+            true
+        }
+
+        is FictionEditResult.Refused -> {
+            isError = true
+            message = result.message
+            false
+        }
+
+        FictionEditResult.Unsupported -> {
+            isError = true
+            message = unsupported
+            false
+        }
+    }
+
+    fun save() {
+        val changes = patch ?: return
+        scope.launch {
+            isSaving = true
+            message = null
+            val result = runCatching { repository.updateFiction(fiction.id, changes) }
+                .getOrElse { FictionEditResult.Refused(it.message ?: "Could not save those details.") }
+            val saved = adopt(result, "Saved.", "This server cannot edit fictions.")
+            isSaving = false
+            // Only on success: a refusal has to stay on screen with the text that caused it, so it
+            // can be corrected rather than retyped.
+            if (saved) onDone()
+        }
+    }
+
+    /**
+     * Hand the edited fields back to the source.
+     *
+     * This drops the protection, not the text. Nothing on screen changes until the fiction is next
+     * polled, which is exactly what the confirmation says.
+     */
+    fun revert() {
+        scope.launch {
+            isSaving = true
+            message = null
+            val result = runCatching {
+                repository.updateFiction(fiction.id, FictionUpdateRequest(clearOverrides = overridden))
+            }.getOrElse { FictionEditResult.Refused(it.message ?: "Could not hand those fields back.") }
+            adopt(
+                result,
+                "Handed back. The next poll may replace them.",
+                "This server cannot edit fictions.",
+            )
+            isSaving = false
+        }
+    }
+
+    val pickCover = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        // A cancelled picker is not an event: no message, no state change.
+        if (uri != null) {
+            scope.launch {
+                isUploading = true
+                message = null
+                // Off the main thread: the bytes may be coming from a cloud provider, not a file.
+                val picked = withContext(Dispatchers.IO) {
+                    readPickedCover(context.contentResolver, uri)
+                }
+                when (picked) {
+                    is PickedCover.Rejected -> {
+                        isError = true
+                        message = picked.message
+                    }
+
+                    is PickedCover.Ready -> {
+                        val result = runCatching {
+                            repository.uploadFictionCover(fiction.id, picked.bytes, picked.mimeType)
+                        }.getOrElse {
+                            FictionEditResult.Refused(it.message ?: "Could not upload that image.")
+                        }
+                        adopt(
+                            result,
+                            "Cover updated.",
+                            "This server is older than cover uploads. Update the backend to change " +
+                                "cover art from here.",
+                        )
+                    }
+                }
+                isUploading = false
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        if (isBusy) {
+            ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+        }
+
+        MetaText(text = "// Cover", color = AarisColor.Accent)
+        AarisCard {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                CoverThumb(imageUrl = fiction.coverImageUrl, fallback = fiction.title, size = 96)
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (fiction.isMetadataOverridden(MetadataFieldCoverImageUrl)) {
+                        AarisTag(text = "Hand-picked")
+                    }
+                    MetaText(
+                        text = "JPEG, PNG, WEBP or GIF, up to 10 MB. It replaces the cover " +
+                            "everywhere, for everyone.",
+                        color = AarisColor.Dim,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            pickCover.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                        enabled = !isBusy && editsEverything,
+                        shape = RectangleShape,
+                    ) {
+                        Text(if (isUploading) "UPLOADING" else "CHOOSE IMAGE")
+                    }
+                }
+            }
+        }
+
+        MetaText(text = "// Details", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                if (!editsEverything) {
+                    MetaText(
+                        text = "This server can only edit the title and author. Update the backend " +
+                            "for the synopsis, tags and cover art.",
+                        color = AarisColor.Warning,
+                    )
+                }
+                MetadataField(
+                    label = "Title",
+                    value = title,
+                    onValueChange = { title = it },
+                    enabled = !isBusy,
+                    isOverridden = fiction.isMetadataOverridden(MetadataFieldTitle),
+                )
+                if (!draft.hasUsableTitle) {
+                    MetaText(text = "A fiction has to be called something.", color = AarisColor.Danger)
+                }
+                MetadataField(
+                    label = "Author",
+                    value = author,
+                    onValueChange = { author = it },
+                    enabled = !isBusy,
+                    isOverridden = fiction.isMetadataOverridden(MetadataFieldAuthor),
+                    supporting = "Leave it empty to clear it.",
+                )
+                MetadataField(
+                    label = "Synopsis",
+                    value = description,
+                    onValueChange = { description = it },
+                    enabled = !isBusy && editsEverything,
+                    isOverridden = fiction.isMetadataOverridden(MetadataFieldDescription),
+                    singleLine = false,
+                    minLines = 4,
+                    supporting = "Leave it empty to clear it.",
+                )
+                MetadataField(
+                    label = "Tags",
+                    value = tagText,
+                    onValueChange = { tagText = it },
+                    enabled = !isBusy && editsEverything,
+                    isOverridden = fiction.isMetadataOverridden(MetadataFieldTags),
+                    supporting = "Separated by commas. Up to 50, and duplicates are dropped.",
+                )
+                // The chips are what will actually be stored — same trimming, same de-duplication
+                // the server does — so the field is a preview rather than a promise.
+                if (draft.parsedTags.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        draft.parsedTags.forEach { tag -> AarisTag(text = tag) }
+                    }
+                }
+            }
+        }
+
+        Button(
+            onClick = ::save,
+            // Nothing changed means nothing to send: a PATCH carrying an untouched field would
+            // freeze it against the source for no reason at all.
+            enabled = !isBusy && patch != null && draft.hasUsableTitle,
+            shape = RectangleShape,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (isSaving) "SAVING" else "SAVE CHANGES")
+        }
+
+        message?.let {
+            MetaText(text = it, color = if (isError) AarisColor.Danger else AarisColor.Muted)
+        }
+
+        if (editsEverything) {
+            MetaText(text = "// Hand-edited", color = AarisColor.Accent)
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (overridden.isEmpty()) {
+                        MetaText(
+                            text = "Nothing has been edited here. Every field still follows the " +
+                                "source, and changes there arrive with the next poll.",
+                            color = AarisColor.Dim,
+                        )
+                    } else {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            overridden.forEach { field -> AarisTag(text = metadataFieldLabel(field)) }
+                        }
+                        MetaText(
+                            text = "The source no longer overwrites these. Everything else is still " +
+                                "refreshed when the fiction is polled.",
+                            color = AarisColor.Dim,
+                        )
+                        OutlinedButton(
+                            onClick = { confirmRevert = true },
+                            enabled = !isBusy,
+                            shape = RectangleShape,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("USE SOURCE VALUES")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (confirmRevert) {
+        ConfirmDialog(
+            title = "USE SOURCE VALUES?",
+            // Specific about what it does *not* do. "Revert" reads as an undo, and this is not one:
+            // the text on screen stays until the fiction is polled and the source replaces it.
+            body = "The source is allowed to overwrite " +
+                overridden.joinToString(", ") { metadataFieldLabel(it).lowercase() } +
+                " again from the next poll. It does not bring the old values back — what is here " +
+                "now stays until the source replaces it.",
+            confirmLabel = "HAND THEM BACK",
+            onConfirm = {
+                confirmRevert = false
+                revert()
+            },
+            onDismiss = { confirmRevert = false },
+        )
+    }
+}
+
+/** What a `metadata_overrides` name is called on screen. */
+private fun metadataFieldLabel(field: String): String = when (field) {
+    MetadataFieldTitle -> "Title"
+    MetadataFieldAuthor -> "Author"
+    MetadataFieldDescription -> "Synopsis"
+    MetadataFieldCoverImageUrl -> "Cover"
+    MetadataFieldTags -> "Tags"
+    // A field name from a server newer than this build. Showing it plainly is more use than
+    // dropping it: whatever it is, the user is being told it is no longer following the source.
+    else -> field.replace('_', ' ')
+}
+
+/**
+ * One labelled field in the metadata editor, marked when the source no longer owns it.
+ *
+ * The marker is not decoration. "Why is this fiction's description still the old one" and "why did
+ * my correction survive the poll" are the same question from opposite sides, and this tag is the
+ * answer to both.
+ */
+@Composable
+private fun MetadataField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean,
+    isOverridden: Boolean = false,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    supporting: String? = null,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(text = label, color = AarisColor.Accent)
+            if (isOverridden) AarisTag(text = "Hand-edited")
+        }
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            enabled = enabled,
+            singleLine = singleLine,
+            minLines = minLines,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        supporting?.let { MetaText(text = it, color = AarisColor.Dim) }
     }
 }
 

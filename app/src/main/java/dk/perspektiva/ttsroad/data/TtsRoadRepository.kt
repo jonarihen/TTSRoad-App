@@ -9,7 +9,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -42,6 +45,24 @@ sealed interface FictionAddResult {
     data class Refused(val message: String) : FictionAddResult
     /** This server has no fiction management. The control should not have been shown. */
     data object Unsupported : FictionAddResult
+}
+
+/**
+ * Outcome of editing a fiction's metadata, or of replacing its cover.
+ *
+ * Shaped like [FictionAddResult] and for the same reason: the user is standing in front of a form
+ * waiting to hear whether it took, and the server's own words — "title must not be empty", "that
+ * file is not an image" — are more use than any message this client could invent.
+ *
+ * [Saved] carries the fiction *as the server now holds it*, which is the only trustworthy account of
+ * what an edit did. It is also how a server too old to know a field is detected: it echoes a fiction
+ * with no `metadata_overrides` rather than failing.
+ */
+sealed interface FictionEditResult {
+    data class Saved(val fiction: FictionSummary?) : FictionEditResult
+    data class Refused(val message: String) : FictionEditResult
+    /** This server cannot do this at all — no fiction management, or no cover route. */
+    data object Unsupported : FictionEditResult
 }
 
 /** Outcome of a mobile login attempt. */
@@ -316,6 +337,75 @@ class TtsRoadRepository(
                 detailMessage(e.response()?.errorBody()?.string())
                     ?: "The server would not add that fiction.",
             )
+        }
+    }
+
+    /**
+     * Correct a fiction's metadata by hand, or hand a field back to the source.
+     *
+     * [changes] must carry only what actually changed — `fictionMetadataPatch` is where that is
+     * decided — because the server marks every field a PATCH sets as hand-edited and stops
+     * refreshing it. [FictionUpdateRequest.clearOverrides] is the reverse, and is deliberately a
+     * field on the same request rather than a route of its own: it is the same edit, from the other
+     * direction.
+     *
+     * Admin-only server-side. The editor is hidden for a non-admin account, so a [Refused] here
+     * means the session lost admin since it signed in.
+     */
+    suspend fun updateFiction(fictionId: Int, changes: FictionUpdateRequest): FictionEditResult {
+        if (!_currentCapabilities.value.fictionManagement) return FictionEditResult.Unsupported
+        return try {
+            FictionEditResult.Saved(
+                withAuthorizedApi { it.updateFiction(fictionId, changes) }.fiction,
+            )
+        } catch (e: HttpException) {
+            if (e.code() == 401) throw e
+            FictionEditResult.Refused(
+                detailMessage(e.response()?.errorBody()?.string())
+                    ?: "The server would not save that change.",
+            )
+        }
+    }
+
+    /**
+     * Replace the cover with an image from the device.
+     *
+     * The size and type are checked here as well as on the screen, because this is the last place
+     * before the bytes leave the phone: the ceiling matches the server's, and a mobile connection is
+     * the wrong place to discover a 413.
+     *
+     * [FictionEditResult.Unsupported] covers a 404, which on this route almost always means the
+     * server predates cover uploads — the fiction was loaded a moment ago, and the PATCH route
+     * shares its id space. The caller says so rather than reporting a failure the user can act on.
+     */
+    suspend fun uploadFictionCover(
+        fictionId: Int,
+        bytes: ByteArray,
+        mimeType: String,
+        filename: String = coverFilename(mimeType),
+    ): FictionEditResult {
+        if (!_currentCapabilities.value.fictionManagement) return FictionEditResult.Unsupported
+        coverRejectionReason(mimeType, bytes.size.toLong())
+            ?.let { return FictionEditResult.Refused(it) }
+        val part = MultipartBody.Part.createFormData(
+            // The server looks for a part with exactly this name; anything else is a 422.
+            "file",
+            filename,
+            bytes.toRequestBody(mimeType.toMediaTypeOrNull()),
+        )
+        return try {
+            FictionEditResult.Saved(
+                withAuthorizedApi { it.uploadFictionCover(fictionId, part) }.fiction,
+            )
+        } catch (e: HttpException) {
+            when (e.code()) {
+                401 -> throw e
+                404 -> FictionEditResult.Unsupported
+                else -> FictionEditResult.Refused(
+                    detailMessage(e.response()?.errorBody()?.string())
+                        ?: "The server would not accept that image.",
+                )
+            }
         }
     }
 

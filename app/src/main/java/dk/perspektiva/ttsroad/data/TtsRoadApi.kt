@@ -1,13 +1,16 @@
 package dk.perspektiva.ttsroad.data
 
+import okhttp3.MultipartBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.Headers
+import retrofit2.http.Multipart
 import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -121,6 +124,36 @@ interface TtsRoadApi {
      */
     @POST("api/mobile/fictions")
     suspend fun addFiction(@Body request: AddFictionRequest): FictionWriteResponse
+
+    /**
+     * Correct scraped metadata by hand. Admin-only, and answers the fiction as it now stands.
+     *
+     * The reply is the only way to tell an edit that was applied from one a server too old to know
+     * the field quietly dropped, so callers read the echoed fiction rather than the status.
+     */
+    @PATCH("api/mobile/fictions/{fiction_id}")
+    suspend fun updateFiction(
+        @Path("fiction_id") fictionId: Int,
+        @Body request: FictionUpdateRequest,
+    ): FictionWriteResponse
+
+    /**
+     * Replace the cover with an image from the device. Admin-only.
+     *
+     * An upload rather than a URL field on the PATCH above, because a pasted link renders in a
+     * browser and then fails to embed in any MP3: the ID3 writer only fetches art from hosts a
+     * source adapter allows. Uploading puts the bytes on the server, where every consumer of the
+     * cover can reach them.
+     *
+     * The part must be named `file`, and 404 here means the server predates the route — not that
+     * the fiction is missing.
+     */
+    @Multipart
+    @POST("api/mobile/fictions/{fiction_id}/cover")
+    suspend fun uploadFictionCover(
+        @Path("fiction_id") fictionId: Int,
+        @Part file: MultipartBody.Part,
+    ): FictionWriteResponse
 
     /** Destroys the fiction, its chapters and its audio, for every account on the server. */
     @DELETE("api/mobile/fictions/{fiction_id}")

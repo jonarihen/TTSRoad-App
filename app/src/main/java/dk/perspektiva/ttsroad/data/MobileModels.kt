@@ -113,11 +113,61 @@ data class FictionSummary(
      * is never read on a server that cannot honour it.
      */
     val following: Boolean = true,
+    /**
+     * Which metadata fields a human has edited, from [EditableMetadataFields].
+     *
+     * The server stops refilling these from the source on every poll, which is the whole point of
+     * editing one. Null rather than empty on a server that predates manual editing: "we were not
+     * told" and "nothing has been edited" call for different UI, and reading the first as the second
+     * would offer a description box whose contents the next poll silently discards. See
+     * [supportsMetadataEditing].
+     */
+    @param:Json(name = "metadata_overrides") val metadataOverrides: List<String>? = null,
 ) {
     /** Fraction of chapters with audio ready, for progress indicators. */
     val readyFraction: Float
         get() = if (totalChapters > 0) (doneChapters.toFloat() / totalChapters).coerceIn(0f, 1f) else 0f
+
+    /**
+     * Whether the server that sent this row understands hand-edited metadata.
+     *
+     * The key's *presence* is the signal, and there is no capability flag standing in for it: the
+     * body of `PATCH /api/mobile/fictions/{id}` is additive, so an older server accepts a
+     * description, drops it, and answers the same `status: ok` as a newer one. The echoed fiction is
+     * the only place the difference shows.
+     */
+    val supportsMetadataEditing: Boolean
+        get() = metadataOverrides != null
+
+    /** True when [field] is one the source no longer gets to overwrite. */
+    fun isMetadataOverridden(field: String): Boolean =
+        metadataOverrides?.any { it.equals(field, ignoreCase = true) } == true
+
+    /** The edited fields in presentation order, ignoring any name this build has never heard of. */
+    val overriddenFields: List<String>
+        get() = EditableMetadataFields.filter(::isMetadataOverridden)
 }
+
+/**
+ * The field names `metadata_overrides` and `clear_overrides` speak in.
+ *
+ * `cover_image_url` has no text box of its own — it is set by uploading an image — but it is
+ * overridable like the rest, so handing metadata back to the source has to be able to name it.
+ */
+const val MetadataFieldTitle: String = "title"
+const val MetadataFieldAuthor: String = "author"
+const val MetadataFieldDescription: String = "description"
+const val MetadataFieldCoverImageUrl: String = "cover_image_url"
+const val MetadataFieldTags: String = "tags"
+
+/** In the order the editor shows them, which is the order they are listed back to the user in. */
+val EditableMetadataFields: List<String> = listOf(
+    MetadataFieldTitle,
+    MetadataFieldAuthor,
+    MetadataFieldDescription,
+    MetadataFieldCoverImageUrl,
+    MetadataFieldTags,
+)
 
 data class ChapterSummary(
     val id: Int = 0,
@@ -568,4 +618,27 @@ data class FictionDeleteResponse(
     val status: String = "",
     @param:Json(name = "fiction_id") val fictionId: Int = 0,
     val deleted: Boolean = false,
+)
+
+/**
+ * `PATCH /api/mobile/fictions/{id}` — correct what the source got wrong.
+ *
+ * Every field is optional and Moshi omits nulls, so a null here means "leave this alone" and lines
+ * the wire up exactly with what the server checks. Two consequences worth keeping in mind:
+ *
+ * - An *empty string* is not null. It is how [author] and [description] are cleared, and the server
+ *   stores null for it.
+ * - Sending a field marks it hand-edited, so the next poll stops refilling it. Send only what
+ *   actually changed — see `fictionMetadataPatch`, which is where that decision is made — or saving
+ *   a form nobody touched would quietly freeze every field on it.
+ *
+ * [clearOverrides] is the undo: it removes names from the fiction's `metadata_overrides` so the
+ * source may write them again. It does not restore the old text; only the next poll can do that.
+ */
+data class FictionUpdateRequest(
+    val title: String? = null,
+    val author: String? = null,
+    val description: String? = null,
+    val tags: List<String>? = null,
+    @param:Json(name = "clear_overrides") val clearOverrides: List<String>? = null,
 )

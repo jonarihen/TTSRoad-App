@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.nav
 import dk.perspektiva.ttsroad.data.FictionSummary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class AppNavigationTest {
@@ -165,5 +166,56 @@ class AppNavigationTest {
     @Test
     fun `replacing the root entry is a no-op`() {
         assertEquals(rootBackStack, rootBackStack.replaceTop(AppScreen.Settings))
+    }
+
+    @Test
+    fun `an edited fiction is written into every entry that carries it`() {
+        // The editor and the screen under it both hold a copy of the same row, and the top bar
+        // reads its title out of the stack. Updating one of them would leave the other stale.
+        val stack = rootBackStack
+            .navigateTo(AppScreen.Fictions)
+            .navigateTo(AppScreen.Fiction(fiction(1)))
+            .navigateTo(AppScreen.FictionEdit(fiction(1)))
+
+        val edited = fiction(1).copy(title = "Ashfall: Book One")
+        val updated = stack.withFiction(edited)
+
+        assertEquals(AppScreen.FictionEdit(edited), updated.last())
+        assertEquals(AppScreen.Fiction(edited), updated.popScreen().last())
+        assertEquals(AppScreen.Fictions, updated.popScreen().popScreen().last())
+    }
+
+    @Test
+    fun `another fiction on the stack is left exactly as it was`() {
+        val other = AppScreen.Fiction(fiction(2))
+        val stack = rootBackStack.navigateTo(other).navigateTo(AppScreen.Fiction(fiction(1)))
+
+        val updated = stack.withFiction(fiction(1).copy(title = "Ashfall: Book One"))
+
+        assertSame(other, updated[1])
+    }
+
+    @Test
+    fun `an edit does not move the stack or reset the screen under it`() {
+        val stack = rootBackStack
+            .navigateTo(AppScreen.Fiction(fiction(1)))
+            .navigateTo(AppScreen.FictionEdit(fiction(1)))
+        val keys = stack.map { it.saveKey }
+
+        val updated = stack.withFiction(fiction(1).copy(title = "Ashfall: Book One"))
+
+        assertEquals(stack.size, updated.size)
+        // Saved per-entry state hangs off these, so a rename must not change them: the chapter list
+        // behind the editor would jump back to the top of a 500-row fiction.
+        assertEquals(keys, updated.map { it.saveKey })
+    }
+
+    @Test
+    fun `the editor is its own entry, so back returns to the fiction`() {
+        val fictionScreen = AppScreen.Fiction(fiction(1))
+        val stack = rootBackStack.navigateTo(fictionScreen).navigateTo(AppScreen.FictionEdit(fiction(1)))
+
+        assertEquals(fictionScreen, stack.popScreen().last())
+        assertNotEquals(fictionScreen.saveKey, AppScreen.FictionEdit(fiction(1)).saveKey)
     }
 }

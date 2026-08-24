@@ -72,6 +72,7 @@ priorities here are not the usual ones:
 | **Find a chapter** | Filter a several-hundred-chapter serial by title or number, on the fiction screen and in the player's queue. |
 | **Server search** | Fiction titles, chapter titles and the narration text itself, alongside the instant offline filter. |
 | **Follow / unfollow** | Your shelf is yours, and it agrees with the browser's. |
+| **Fix the metadata** | Admins can correct a scraped title, author, synopsis or tags from the phone, and upload a proper cover from the gallery. The correction survives the next poll instead of being overwritten by it. |
 | **Resilient progress** | Positions recorded offline are queued and timestamped, so a reconnect never overwrites newer progress from another device. |
 
 ### Care taken

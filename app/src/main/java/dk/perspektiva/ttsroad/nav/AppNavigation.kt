@@ -7,6 +7,16 @@ sealed interface AppScreen {
     data object Library : AppScreen
     data object Fictions : AppScreen
     data class Fiction(val fiction: FictionSummary) : AppScreen
+
+    /**
+     * The metadata editor for one fiction — admin-only, reached from the fiction screen.
+     *
+     * Carries the whole [FictionSummary] rather than an id because the form is filled from it, and
+     * the screen it was opened from already holds the same row. [withFiction] is what keeps the two
+     * copies in step after a save.
+     */
+    data class FictionEdit(val fiction: FictionSummary) : AppScreen
+
     data object Player : AppScreen
 
     /**
@@ -38,6 +48,9 @@ val AppScreen.saveKey: String
         AppScreen.Library -> "Library"
         AppScreen.Fictions -> "Fictions"
         is AppScreen.Fiction -> "Fiction:${fiction.id}"
+        // Keyed by fiction and not by its contents, so saving an edit does not throw away the form
+        // state of the screen that is still open behind the save.
+        is AppScreen.FictionEdit -> "FictionEdit:${fiction.id}"
         AppScreen.Player -> "Player"
         // Keyed by chapter, so reading on to the next one starts at the top of the new chapter
         // rather than restoring the scroll position of the one just finished.
@@ -81,3 +94,23 @@ fun List<AppScreen>.popScreen(): List<AppScreen> =
  */
 fun List<AppScreen>.replaceTop(screen: AppScreen): List<AppScreen> =
     if (size > 1) subList(0, size - 1) + screen else this
+
+/**
+ * Rewrite every entry carrying [fiction] so an edit is visible everywhere it is already on screen.
+ *
+ * A fiction travels *in* the back stack, so after a title is changed the screen underneath the
+ * editor — and the top bar, which reads its title from the entry — would otherwise keep showing the
+ * old one until the user navigated away and back. Entries for other fictions are returned by
+ * identity, and [saveKey] does not change, so nothing scrolls or reloads.
+ */
+fun List<AppScreen>.withFiction(fiction: FictionSummary): List<AppScreen> = map { screen ->
+    when {
+        screen is AppScreen.Fiction && screen.fiction.id == fiction.id ->
+            AppScreen.Fiction(fiction)
+
+        screen is AppScreen.FictionEdit && screen.fiction.id == fiction.id ->
+            AppScreen.FictionEdit(fiction)
+
+        else -> screen
+    }
+}
