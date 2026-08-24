@@ -4,6 +4,7 @@ import android.content.Context
 import dk.perspektiva.ttsroad.data.AccountPreferenceSync
 import dk.perspektiva.ttsroad.data.ChapterListPreferences
 import dk.perspektiva.ttsroad.data.DownloadPreferences
+import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.LibraryCache
 import dk.perspektiva.ttsroad.data.LocalReaderPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
@@ -45,6 +46,7 @@ object ServiceLocator {
 
     @Volatile
     private var playbackPreferences: PlaybackPreferences? = null
+    private var fictionSpeedPreferences: FictionSpeedPreferences? = null
 
     @Volatile
     private var libraryCache: LibraryCache? = null
@@ -115,6 +117,7 @@ object ServiceLocator {
                 context = context.applicationContext,
                 tokenStore = tokenStore(context),
                 preferences = playbackPreferences(context),
+                fictionSpeeds = fictionSpeedPreferences(context),
             ).also { playbackController = it }
         }
 
@@ -132,6 +135,14 @@ object ServiceLocator {
         playbackPreferences ?: synchronized(this) {
             playbackPreferences
                 ?: PlaybackPreferences(context.applicationContext).also { playbackPreferences = it }
+        }
+
+    /** Per-fiction speed overrides. Device-local — see [FictionSpeedPreferences]. */
+    fun fictionSpeedPreferences(context: Context): FictionSpeedPreferences =
+        fictionSpeedPreferences ?: synchronized(this) {
+            fictionSpeedPreferences
+                ?: FictionSpeedPreferences(context.applicationContext)
+                    .also { fictionSpeedPreferences = it }
         }
 
     fun downloadPreferences(context: Context): DownloadPreferences =

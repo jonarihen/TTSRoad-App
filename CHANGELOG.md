@@ -45,6 +45,14 @@ Notable changes to the TTSRoad Android client.
 - The ceiling survives a seek: rewinding twenty minutes no longer buys back the twenty minutes the
   ceiling was there to refuse. Shaking to add five minutes drops it, because that is an explicit
   answer to the question it was asking.
+- **A playback speed per book.** The player's speed sheet gains **Only for this book**: on, the pace
+  you pick applies to this fiction and nowhere else; off, it follows the global speed again,
+  including later changes to it. Different voices and different narrators want different paces, and
+  switching between two books used to mean re-setting the speed every time.
+  ([#68](https://github.com/jonarihen/TTSRoad-App/issues/68))
+- The override follows the book rather than the screen, so auto-advancing into a different fiction —
+  or starting one from Android Auto or the notification, with no UI running at all — plays it at its
+  own pace.
 
 ### Changed
 

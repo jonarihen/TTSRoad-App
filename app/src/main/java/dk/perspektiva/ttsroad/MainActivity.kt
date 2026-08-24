@@ -1512,6 +1512,10 @@ private fun PlayerScreen(
     }
     var showSleepTimer by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
+    // Which books have a pace of their own. Read here rather than in the sheet so the switch shows
+    // the stored answer the moment the sheet opens, with no flash of the wrong state.
+    val fictionSpeeds by remember { ServiceLocator.fictionSpeedPreferences(context).overrides }
+        .collectAsStateWithLifecycle(initialValue = emptyMap())
     // Confirmation for the bookmark button. A mark made while listening gives no other sign that
     // anything happened, and the alternative — opening the list — is the thing this avoids.
     var bookmarkFeedback by remember { mutableStateOf<String?>(null) }
@@ -1761,6 +1765,50 @@ private fun PlayerScreen(
                 color = AarisColor.Accent,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
             )
+            // Null when nothing is playing, or when the item carries no fiction id — either way
+            // there is no book to pin a speed to, so the switch is not offered at all.
+            val speedFictionId = playerState.fictionId
+            val isPinnedToBook = speedFictionId != null && fictionSpeeds.containsKey(speedFictionId)
+            if (speedFictionId != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        MetaText(text = "Only for this book")
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(
+                            text = if (isPinnedToBook) {
+                                "This book plays at ${formatSpeed(playerState.speed)} whatever the " +
+                                    "speed is elsewhere. Turning this off hands it back."
+                            } else {
+                                "Different narrators want different paces. On, the speed you pick " +
+                                    "applies here and nowhere else."
+                            },
+                            color = AarisColor.Dim,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = isPinnedToBook,
+                        onCheckedChange = { pin ->
+                            if (pin) {
+                                // Pinned at whatever is playing now, so turning the switch on is
+                                // never itself a change in pace.
+                                playbackController.setSpeedForFiction(
+                                    speedFictionId,
+                                    playerState.speed,
+                                )
+                            } else {
+                                playbackController.clearSpeedForFiction(speedFictionId)
+                            }
+                        },
+                    )
+                }
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+            }
             speedOptions(playerState.speed).forEach { preset ->
                 val selected = kotlin.math.abs(preset - playerState.speed) < 0.01f
                 Column {
@@ -1768,7 +1816,13 @@ private fun PlayerScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                playbackController.setSpeed(preset)
+                                // Which store the tap lands in is the switch's whole job: pinned,
+                                // it edits this book's override; otherwise the global speed.
+                                if (isPinnedToBook && speedFictionId != null) {
+                                    playbackController.setSpeedForFiction(speedFictionId, preset)
+                                } else {
+                                    playbackController.setSpeed(preset)
+                                }
                                 showSpeed = false
                             }
                             .padding(horizontal = 20.dp, vertical = 14.dp),

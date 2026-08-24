@@ -37,11 +37,13 @@ import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DownloadPreferences
+import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.QueueStatusPlaying
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
+import dk.perspektiva.ttsroad.data.effectiveSpeed
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.PendingProgressStore
@@ -63,7 +65,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
@@ -84,6 +88,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private lateinit var session: MediaLibrarySession
     private lateinit var sleepTimer: SleepTimerController
+    private lateinit var fictionSpeeds: FictionSpeedPreferences
+
+    /** The book currently playing, or null. Drives the per-fiction speed; see [effectiveSpeed]. */
+    private val currentFictionId = MutableStateFlow<Int?>(null)
     private lateinit var pendingProgress: PendingProgressStore
     private lateinit var progressSync: ProgressSync
     private var shakeDetector: ShakeDetector? = null
@@ -115,6 +123,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         tokenStore = ServiceLocator.tokenStore(this)
         repository = ServiceLocator.repository(this)
         sleepTimer = ServiceLocator.sleepTimer()
+        fictionSpeeds = ServiceLocator.fictionSpeedPreferences(this)
         preferences = ServiceLocator.playbackPreferences(this)
         downloadPreferences = ServiceLocator.downloadPreferences(this)
         pendingProgress = ServiceLocator.pendingProgress(this)
@@ -130,9 +139,17 @@ class TtsRoadMediaService : MediaLibraryService() {
         // Speed lives in the service, not the UI: the player is recreated on a swipe-away, a
         // process kill, or a reboot, and the car can start playback with no UI running at all.
         // Applying it here is what makes it survive all three.
+        //
+        // Three sources, because a book may have a pace of its own: the global speed, the override
+        // map, and which book is playing. Combining them here rather than resolving the speed when
+        // it is chosen is what makes moving to a different book — by auto-advance, from the car, or
+        // from a notification — change the pace without anything having to ask.
         serviceScope.launch {
-            preferences.prefs
-                .map { it.speed }
+            combine(
+                preferences.prefs.map { it.speed },
+                fictionSpeeds.overrides,
+                currentFictionId,
+            ) { global, overrides, fictionId -> effectiveSpeed(global, overrides, fictionId) }
                 .distinctUntilChanged()
                 .collect { player.setPlaybackSpeed(it) }
         }
@@ -166,6 +183,19 @@ class TtsRoadMediaService : MediaLibraryService() {
                     if (!isPlaying) {
                         serviceScope.launch { saveCurrentProgress(forcePlayed = false) }
                     }
+                }
+
+                /**
+                 * Which book is playing, for the per-fiction speed above.
+                 *
+                 * Fires for a queue being set and for auto-advance alike, so moving from one book
+                 * to another applies the new book's pace without the UI being involved — which is
+                 * the case that matters, since the car and the notification can both do it.
+                 */
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    currentFictionId.value = mediaItem?.mediaMetadata?.extras
+                        ?.getInt("fiction_id")
+                        ?.takeIf { it > 0 }
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
