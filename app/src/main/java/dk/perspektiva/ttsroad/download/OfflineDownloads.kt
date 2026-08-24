@@ -107,7 +107,6 @@ class OfflineDownloads(
      */
     private val downloadCache: Cache by lazy {
         SimpleCache(File(context.filesDir, CacheDirName), NoOpCacheEvictor(), databaseProvider)
-            .also { scope.launch(Dispatchers.IO) { dropStrandedStreamSpans(it) } }
     }
 
     /** The ceiling on [streamingCache], held here so Settings can move it without a restart. */
@@ -226,7 +225,15 @@ class OfflineDownloads(
         // Touching the manager is what makes it read the persisted index, which is what makes
         // yesterday's downloads show up in the chapter rows again. Done off the main thread because
         // opening the cache scans its directory, and it is not worth janking the first frame.
-        scope.launch(Dispatchers.IO) { downloadManager }
+        //
+        // The split's one-off sweep goes here, after it, rather than in the cache's own lazy
+        // initialiser: the sweep needs the download index, reaching the index opens the manager, and
+        // opening the manager needs the cache. Hanging that off the cache's initialiser would have
+        // it re-enter the very lazy that is still running.
+        scope.launch(Dispatchers.IO) {
+            downloadManager
+            dropStrandedStreamSpans(downloadCache)
+        }
     }
 
     /**
