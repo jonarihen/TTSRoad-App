@@ -1456,7 +1456,9 @@ private fun BulkAction(
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
-                color = if (enabled) AarisColor.Ink else AarisColor.Dim,
+                // Disabled, not de-emphasised: Dim is readable body text now, and reusing it here
+                // would leave the row looking available.
+                color = if (enabled) AarisColor.Ink else AarisColor.Disabled,
             )
             Spacer(modifier = Modifier.height(2.dp))
             MetaText(text = subtitle, color = AarisColor.Dim)
