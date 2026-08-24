@@ -36,6 +36,15 @@ Notable changes to the TTSRoad Android client.
   along with it. ([#93](https://github.com/jonarihen/TTSRoad-App/issues/93), closing the last item
   of [#14](https://github.com/jonarihen/TTSRoad-App/issues/14) and
   [#60](https://github.com/jonarihen/TTSRoad-App/issues/60))
+- **"End of chapter, or 30 minutes", whichever is sooner.** The sleep timer's boundary mode is what
+  you want at night right up until the chapter has fifty minutes left, at which point it is not a
+  sleep timer but a promise to be awake at one in the morning. The new option appears in the
+  sleep-timer sheet only when the current chapter is actually longer than half an hour, since below
+  that it would do exactly what the row above it already does.
+  ([#68](https://github.com/jonarihen/TTSRoad-App/issues/68))
+- The ceiling survives a seek: rewinding twenty minutes no longer buys back the twenty minutes the
+  ceiling was there to refuse. Shaking to add five minutes drops it, because that is an explicit
+  answer to the question it was asking.
 
 ### Changed
 

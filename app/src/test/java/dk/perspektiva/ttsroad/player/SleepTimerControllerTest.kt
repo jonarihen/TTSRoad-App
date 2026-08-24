@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.player
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -140,5 +141,126 @@ class SleepTimerControllerTest {
         controller.armDuration(30 * 60_000L)
         controller.armDuration(0L)
         assertFalse(controller.state.value.isArmed)
+    }
+
+    // --- end of chapter, with a ceiling -------------------------------------------------------
+
+    @Test
+    fun `a chapter shorter than the ceiling still stops at its own end`() {
+        // The ceiling is a maximum, not a target: it must never make a timer run longer.
+        controller.armEndOfChapter(chapterRemainingMs = 600_000L, capMs = 30 * 60_000L)
+
+        assertEquals(600_000L, controller.state.value.remainingMs)
+        assertFalse("the chapter ends first here", controller.state.value.willStopAtCap)
+    }
+
+    @Test
+    fun `a chapter longer than the ceiling counts down to the ceiling`() {
+        controller.armEndOfChapter(chapterRemainingMs = 90 * 60_000L, capMs = 30 * 60_000L)
+
+        assertEquals(30 * 60_000L, controller.state.value.remainingMs)
+        assertTrue(controller.state.value.willStopAtCap)
+    }
+
+    @Test
+    fun `the ceiling fires, and the chapter keeps playing until it does`() {
+        controller.armEndOfChapter(chapterRemainingMs = 90 * 60_000L, capMs = 60_000L)
+        controller.tick(0L, isPlaying = true, chapterRemainingMs = 90 * 60_000L)
+
+        val midway = controller.tick(30_000L, isPlaying = true, chapterRemainingMs = 89 * 60_000L)
+        assertNotEquals(SleepTimerAction.Expire, midway)
+        assertEquals(30_000L, controller.state.value.remainingMs)
+
+        val expired = controller.tick(60_000L, isPlaying = true, chapterRemainingMs = 88 * 60_000L)
+        assertEquals(SleepTimerAction.Expire, expired)
+        assertFalse(controller.state.value.isArmed)
+    }
+
+    @Test
+    fun `a chapter ending before the ceiling still stops at the boundary`() {
+        controller.armEndOfChapter(chapterRemainingMs = 20 * 60_000L, capMs = 30 * 60_000L)
+        controller.tick(0L, isPlaying = true, chapterRemainingMs = 20 * 60_000L)
+
+        val action = controller.tick(60_000L, isPlaying = false, chapterRemainingMs = 0L)
+
+        assertEquals(SleepTimerAction.Expire, action)
+    }
+
+    @Test
+    fun `seeking backwards cannot push the stop past the ceiling`() {
+        // The reason the ceiling is tracked through tick rather than resolved when arming. A
+        // boundary timer follows the real position, so rewinding would otherwise buy back exactly
+        // the time the ceiling was there to refuse.
+        controller.armEndOfChapter(chapterRemainingMs = 40 * 60_000L, capMs = 30 * 60_000L)
+        controller.tick(0L, isPlaying = true, chapterRemainingMs = 40 * 60_000L)
+
+        controller.tick(60_000L, isPlaying = true, chapterRemainingMs = 120 * 60_000L)
+
+        assertEquals(29 * 60_000L, controller.state.value.remainingMs)
+        assertTrue(controller.state.value.willStopAtCap)
+    }
+
+    @Test
+    fun `a pause freezes the ceiling rather than spending it`() {
+        controller.armEndOfChapter(chapterRemainingMs = 90 * 60_000L, capMs = 30 * 60_000L)
+
+        // Stepped rather than jumped, because the service ticks twice a second and the freeze is
+        // implemented by charging only the time between ticks. A test that skipped from minute one
+        // to minute twenty would be measuring an interval that never happens on a phone.
+        run(fromMs = 0L, forMs = 60_000L, chapterRemainingMs = 90 * 60_000L)
+        run(
+            fromMs = 60_000L,
+            forMs = 19 * 60_000L,
+            isPlaying = false,
+            chapterRemainingMs = 90 * 60_000L,
+        )
+        run(fromMs = 20 * 60_000L, forMs = 1_000L, chapterRemainingMs = 90 * 60_000L)
+
+        // Only the minute that was actually played has gone, plus the second after resuming.
+        assertEquals(29 * 60_000L - 1_000L, controller.state.value.remainingMs)
+    }
+
+    @Test
+    fun `the ceiling fades out like any other countdown`() {
+        controller.armEndOfChapter(chapterRemainingMs = 90 * 60_000L, capMs = 60_000L)
+        controller.tick(0L, isPlaying = true, chapterRemainingMs = 90 * 60_000L)
+
+        val action = controller.tick(50_000L, isPlaying = true, chapterRemainingMs = 89 * 60_000L)
+
+        assertTrue(controller.state.value.isFading)
+        assertTrue(action is SleepTimerAction.SetVolume)
+    }
+
+    @Test
+    fun `shaking to extend drops the ceiling with the mode`() {
+        controller.armEndOfChapter(chapterRemainingMs = 90 * 60_000L, capMs = 60_000L)
+        controller.tick(0L, isPlaying = true, chapterRemainingMs = 90 * 60_000L)
+
+        controller.extend(SleepTimerController.ExtendMs)
+
+        assertEquals(SleepTimerMode.Duration, controller.state.value.mode)
+        // Re-applying the ceiling here would take the five minutes straight back.
+        assertFalse(controller.state.value.isCapped)
+        assertEquals(60_000L + SleepTimerController.ExtendMs, controller.state.value.remainingMs)
+    }
+
+    @Test
+    fun `an uncapped end of chapter timer is unchanged`() {
+        controller.armEndOfChapter(chapterRemainingMs = 90 * 60_000L)
+
+        assertFalse(controller.state.value.isCapped)
+        assertFalse(controller.state.value.willStopAtCap)
+        assertEquals(90 * 60_000L, controller.state.value.remainingMs)
+    }
+
+    @Test
+    fun `a nonsense ceiling expires at once rather than running forever`() {
+        controller.armEndOfChapter(chapterRemainingMs = 90 * 60_000L, capMs = -1L)
+
+        assertEquals(0L, controller.state.value.remainingMs)
+        assertEquals(
+            SleepTimerAction.Expire,
+            controller.tick(0L, isPlaying = true, chapterRemainingMs = 90 * 60_000L),
+        )
     }
 }

@@ -1949,10 +1949,18 @@ private fun PlayerScreen(
             }
             if (sleepTimerState.isArmed) {
                 MetaText(
-                    text = when (sleepTimerState.mode) {
-                        SleepTimerMode.EndOfChapter ->
+                    text = when {
+                        // The ceiling is what will fire, so saying "at the end of this chapter"
+                        // would be telling the user the opposite of what is about to happen.
+                        sleepTimerState.mode == SleepTimerMode.EndOfChapter &&
+                            sleepTimerState.willStopAtCap ->
+                            "// Stopping in ${formatDuration(sleepTimerState.remainingMs)}, " +
+                                "before this chapter ends"
+
+                        sleepTimerState.mode == SleepTimerMode.EndOfChapter ->
                             "// Stopping at the end of this chapter · " +
                                 "${formatDuration(sleepTimerState.remainingMs)} left"
+
                         else -> "// Stopping in ${formatDuration(sleepTimerState.remainingMs)}"
                     },
                     color = AarisColor.Muted,
@@ -1962,11 +1970,28 @@ private fun PlayerScreen(
             // Only offered once the chapter's duration is known — without it there is no boundary
             // to stop at, and the timer would fire the moment it was armed.
             if (playerState.durationMs > 0L) {
+                val chapterRemainingMs =
+                    (playerState.durationMs - playerState.positionMs).coerceAtLeast(0L)
                 SleepTimerOption(label = "End of current chapter") {
-                    sleepTimer.armEndOfChapter(
-                        (playerState.durationMs - playerState.positionMs).coerceAtLeast(0L),
-                    )
+                    sleepTimer.armEndOfChapter(chapterRemainingMs)
                     showSleepTimer = false
+                }
+                // Only when the chapter is actually longer than the ceiling. Below it the two rows
+                // would do exactly the same thing, and offering the same stop twice under different
+                // names is worse than not offering it: the row appearing is itself the signal that
+                // this chapter is long enough for the question to matter.
+                if (chapterRemainingMs > SleepTimerController.ChapterEndCapMs) {
+                    SleepTimerOption(
+                        label = "End of chapter, or 30 minutes",
+                        supporting = "This chapter has ${formatDuration(chapterRemainingMs)} left, " +
+                            "so it will stop after 30m.",
+                    ) {
+                        sleepTimer.armEndOfChapter(
+                            chapterRemainingMs,
+                            capMs = SleepTimerController.ChapterEndCapMs,
+                        )
+                        showSleepTimer = false
+                    }
                 }
             }
             SleepTimerController.DurationOptionsMinutes.forEach { minutes ->
@@ -2099,7 +2124,13 @@ private fun PlayerScreen(
 
 /** One row of the sleep-timer sheet, styled like the chapter rows above it. */
 @Composable
-private fun SleepTimerOption(label: String, isDefault: Boolean = false, onClick: () -> Unit) {
+private fun SleepTimerOption(
+    label: String,
+    isDefault: Boolean = false,
+    /** A second line under the label, for a row whose behaviour the label cannot fully carry. */
+    supporting: String? = null,
+    onClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2107,12 +2138,17 @@ private fun SleepTimerOption(label: String, isDefault: Boolean = false, onClick:
             .padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
-            color = if (isDefault) AarisColor.Accent else AarisColor.Ink,
-            modifier = Modifier.weight(1f),
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (isDefault) AarisColor.Accent else AarisColor.Ink,
+            )
+            supporting?.let {
+                Spacer(modifier = Modifier.height(2.dp))
+                MetaText(text = it, color = AarisColor.Dim)
+            }
+        }
         if (isDefault) {
             MetaText(text = "Default", color = AarisColor.Accent)
         }
