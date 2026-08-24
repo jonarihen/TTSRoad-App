@@ -14,8 +14,26 @@ data class SleepTimerState(
     val mode: SleepTimerMode = SleepTimerMode.Off,
     val remainingMs: Long = 0L,
     val isFading: Boolean = false,
+    /**
+     * How much of the ceiling on an end-of-chapter timer is left, or null when it has none.
+     *
+     * "Finish this chapter, then stop" is the mode people arm at night, and it has one bad case: a
+     * chapter with fifty minutes left is not a sleep timer, it is a promise to be awake at one in
+     * the morning. A ceiling makes the mode mean *whichever comes first*.
+     *
+     * Tracked here rather than resolved when the timer is armed because the boundary moves: an
+     * end-of-chapter timer follows the real playback position, so rewinding twenty minutes would
+     * otherwise push the stop twenty minutes past a ceiling the user asked for.
+     */
+    val capRemainingMs: Long? = null,
 ) {
     val isArmed: Boolean get() = mode != SleepTimerMode.Off
+
+    /** True when this timer will stop at a ceiling if the chapter has not ended by then. */
+    val isCapped: Boolean get() = capRemainingMs != null
+
+    /** True when the ceiling, rather than the chapter's own end, is what will stop playback. */
+    val willStopAtCap: Boolean get() = capRemainingMs != null && capRemainingMs <= remainingMs
 }
 
 /** What the media service should do to the player after a [SleepTimerController] call. */
@@ -61,12 +79,19 @@ class SleepTimerController {
     /**
      * Stop at the end of the chapter being played. [chapterRemainingMs] seeds the countdown shown
      * in the UI; the service keeps it in step with the real playback position on every tick.
+     *
+     * [capMs] is the ceiling for the hybrid mode — "finish this chapter, unless that is another
+     * fifty minutes, in which case stop sooner". Null is the plain boundary timer, which is what
+     * every caller before 0.13.0 wanted and still gets by default.
      */
-    fun armEndOfChapter(chapterRemainingMs: Long) {
+    fun armEndOfChapter(chapterRemainingMs: Long, capMs: Long? = null) {
         lastTickMs = null
+        val cap = capMs?.coerceAtLeast(0L)
+        val toChapterEnd = chapterRemainingMs.coerceAtLeast(0L)
         _state.value = SleepTimerState(
             mode = SleepTimerMode.EndOfChapter,
-            remainingMs = chapterRemainingMs.coerceAtLeast(0L),
+            remainingMs = if (cap != null) minOf(toChapterEnd, cap) else toChapterEnd,
+            capRemainingMs = cap,
         )
     }
 
@@ -78,6 +103,10 @@ class SleepTimerController {
     /**
      * Add more time — the half-awake shake during the fade-out. An "end of chapter" timer becomes
      * a plain countdown, since past the chapter boundary there is nothing left to count to.
+     *
+     * The ceiling goes with it, and deliberately: someone who has just asked for five more minutes
+     * has answered the question the ceiling was there to ask, and re-applying it would take the
+     * five minutes straight back.
      */
     fun extend(extraMs: Long) {
         val current = _state.value
@@ -115,9 +144,15 @@ class SleepTimerController {
         }
 
         val elapsedMs = previousTickMs?.let { (nowMs - it).coerceAtLeast(0L) } ?: 0L
+        // The ceiling is wall-clock, like a plain countdown, so it is spent by playing rather than
+        // by where the position happens to be. That is what makes it survive a seek.
+        val capRemainingMs = current.capRemainingMs?.let { (it - elapsedMs).coerceAtLeast(0L) }
         val remainingMs = when (current.mode) {
             // Track the real position: seeking within the chapter moves the boundary.
-            SleepTimerMode.EndOfChapter -> chapterRemainingMs ?: (current.remainingMs - elapsedMs)
+            SleepTimerMode.EndOfChapter -> {
+                val toChapterEnd = chapterRemainingMs ?: (current.remainingMs - elapsedMs)
+                if (capRemainingMs != null) minOf(toChapterEnd, capRemainingMs) else toChapterEnd
+            }
             else -> current.remainingMs - elapsedMs
         }
 
@@ -128,7 +163,11 @@ class SleepTimerController {
             return SleepTimerAction.Expire
         }
 
-        _state.value = current.copy(remainingMs = remainingMs, isFading = remainingMs <= FadeMs)
+        _state.value = current.copy(
+            remainingMs = remainingMs,
+            isFading = remainingMs <= FadeMs,
+            capRemainingMs = capRemainingMs,
+        )
         return if (remainingMs <= FadeMs) {
             applyVolume(remainingMs.toFloat() / FadeMs)
         } else {
@@ -154,5 +193,14 @@ class SleepTimerController {
 
         /** Offered in the player's sleep-timer sheet, in minutes. */
         val DurationOptionsMinutes = listOf(5, 15, 30, 45, 60)
+
+        /**
+         * The ceiling on the hybrid "end of chapter, or this, whichever is sooner" option.
+         *
+         * Thirty minutes because that is what the mode is for. Anyone still awake after half an
+         * hour did not want a sleep timer, and the plain end-of-chapter option is one row up for
+         * the nights when finishing the chapter is the point.
+         */
+        const val ChapterEndCapMs = 30 * 60_000L
     }
 }
