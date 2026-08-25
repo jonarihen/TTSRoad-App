@@ -127,6 +127,15 @@ data class ServerCapabilities(
      */
     val listeningStateBackup: Boolean = false,
 
+    /**
+     * Change the password and enrol or drop a second factor, without a browser (#118).
+     *
+     * The app has always handled the 2FA *login* challenge and could never be the thing that turns
+     * the factor on. An admin who set the server up from a phone is soft-gated by `auth_middleware`
+     * toward an account page that only exists in one.
+     */
+    val accountSecurity: Boolean = false,
+
     /** The server can plan a download batch: which chapters, in what order, how many bytes. */
     val offlineDownloads: Boolean = false,
 
@@ -186,6 +195,7 @@ data class ServerCapabilities(
                 fictionMaintenance = flags.flag("fiction_maintenance"),
                 feedUrls = flags.flag("feed_urls"),
                 listeningStateBackup = flags.flag("listening_state_backup"),
+                accountSecurity = flags.flag("account_security"),
                 offlineDownloads = flags.flag("offline_downloads"),
                 signedAudioUrls = flags.flag("signed_audio_urls"),
                 liveEvents = flags.flag("live_events"),
