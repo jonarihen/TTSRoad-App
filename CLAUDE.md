@@ -22,9 +22,10 @@ server. `CHANGELOG.md` records what shipped in each version.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`app/src/test` is a real JVM test source set — 394 tests as of 0.9.0, JUnit + Robolectric +
-MockWebServer, all wired in `app/build.gradle.kts`. **Run `./gradlew test` before claiming a change
-works.** There is still no `app/src/androidTest` (no instrumented tests).
+`app/src/test` is a real JVM test source set — 847 tests as of 0.13.0, JUnit + Robolectric +
+MockWebServer + Compose UI test, all wired in `app/build.gradle.kts`. **Run `./gradlew test` before
+claiming a change works.** `app/src/androidTest` exists but holds only the R8 startup smoke test,
+which needs a device and the keystore — see below.
 
 CI runs `./gradlew test lint` on every PR and every push to `main` (`.github/workflows/ci.yml`).
 It deliberately has no `debug.keystore` — that file stays gitignored and out of CI secrets, so
@@ -33,6 +34,19 @@ it; `verifyTtsRoadSigningKey` only gates the assemble tasks. Do not add signing 
 
 Robolectric tests must carry `@Config(sdk = [34])`: Robolectric 4.16.1 tops out at SDK 36 while
 this app targets 37, and without it the runner fails at initialisation rather than at a test.
+
+**Compose layout and accessibility are testable on the JVM**, no device needed — Robolectric
+supplies the `Configuration`, Compose measures against it, and the semantics tree reports the
+bounds. `ui/ComposeUiTestHarnessTest` proves the harness so that a failing layout test is failing
+about layout. Three things to know:
+
+- Use `androidx.compose.ui.test.junit4.v2.createComposeRule`. The non-`v2` one is deprecated and
+  runs on `UnconfinedTestDispatcher`, which hides ordering bugs the real app would have.
+- State the viewport with Robolectric qualifiers — `@Config(sdk = [34], qualifiers = "w320dp-h640dp")`.
+  Without them a "narrow phone" test silently runs at the default device width and asserts nothing.
+- A bounds assertion measures *the semantics node it matched*. `onNodeWithText` on a glyph inside a
+  48 dp button reports the glyph, so touch-target tests must match the target — give it a
+  `testTag`, or match on the content description the button actually carries.
 
 Prefer `SimpleBasePlayer` (in `media3-common`) over a hand-written `Player` stub when a test needs
 a player — see `app/src/test/.../player/FakePlayer.kt`. Media3 derives `hasNextMediaItem`,
