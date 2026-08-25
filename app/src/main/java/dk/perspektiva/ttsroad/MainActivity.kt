@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -243,6 +244,9 @@ import dk.perspektiva.ttsroad.player.lastHeardSnapshot
 import dk.perspektiva.ttsroad.player.listeningSpanAtSpeed
 import dk.perspektiva.ttsroad.player.remainingMs
 import dk.perspektiva.ttsroad.player.remainingMsAtSpeed
+import dk.perspektiva.ttsroad.player.BookmarkMarker
+import dk.perspektiva.ttsroad.player.bookmarkMarkers
+import dk.perspektiva.ttsroad.player.markerAt
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlayerUiState
 import dk.perspektiva.ttsroad.player.queueRows
@@ -1066,6 +1070,22 @@ private fun FictionScreen(
 
     LaunchedEffect(fiction.id) { cache.ensureChapters(fiction.id) }
 
+    // The marks in *this* book (#121). `bookmarks()` has taken a fiction id since bookmarks
+    // shipped and had never been passed one, so the only view of a mark was a flat account-wide
+    // list in Settings — while "the marks in this book" is the question you actually have once you
+    // have marks across several. Scoped server-side rather than filtered here.
+    var fictionBookmarks by remember(fiction.id) { mutableStateOf<List<Bookmark>>(emptyList()) }
+    LaunchedEffect(fiction.id, capabilities.bookmarks) {
+        fictionBookmarks = if (!capabilities.bookmarks) {
+            emptyList()
+        } else {
+            // A failure leaves the section absent, which is what it always was. Nothing to report:
+            // this is not the list the user opened the screen for.
+            runCatching { repository.bookmarks(fictionId = fiction.id).orEmpty() }
+                .getOrDefault(emptyList())
+        }
+    }
+
     // Only the completed downloads: a chapter still transferring has no bytes to be wrong about,
     // and a failed one has none at all.
     val downloadedChapterIds = remember(downloadState) {
@@ -1240,6 +1260,27 @@ private fun FictionScreen(
                                     }
                                     staleDownloads.markUpdating(outdated.map { it.resolvedChapterId })
                                     downloads.download(outdated, serverUrl)
+                                },
+                            )
+                        }
+                        if (fictionBookmarks.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            FictionBookmarksSection(
+                                bookmarks = fictionBookmarks,
+                                // Read-along is where a bookmark leads: the point of marking a line
+                                // is going back to read it. Same gate the Settings list uses.
+                                onOpen = if (capabilities.readAlong) {
+                                    { bookmark ->
+                                        onOpenReader(
+                                            AppScreen.Reader(
+                                                chapterId = bookmark.chapterId,
+                                                title = bookmark.chapterTitle
+                                                    ?: bookmark.resolvedLabel,
+                                            ),
+                                        )
+                                    }
+                                } else {
+                                    null
                                 },
                             )
                         }
@@ -1605,6 +1646,75 @@ private fun PlayerTitleBlock(
 }
 
 /**
+ * Where in this chapter you have marked something, drawn under the scrub bar (#121).
+ *
+ * The 0.12.0 car action opened a loop this closes: you press BOOKMARK at the wheel precisely so you
+ * can come back to that spot, and coming back meant Settings → Bookmarks → tap → the reader. Now the
+ * spot is on the bar in front of you, and tapping it seeks there.
+ *
+ * Three deliberate choices:
+ *
+ * - **A lane of its own, not an overlay on the track.** Drawing on the slider means competing with
+ *   its drag gesture for the same pixels, and the thing that must keep working there is scrubbing.
+ * - **A tap that misses every mark does nothing.** The lane is not a second scrubber; a mistimed
+ *   tap must not jump the playhead. [markerAt] returns null outside the tolerance and this honours
+ *   that rather than falling back to "nearest".
+ * - **No marks means no lane.** The strip costs no height when it is empty, so a player with
+ *   nothing marked looks exactly as it did.
+ */
+@Composable
+private fun BookmarkMarkerLane(markers: List<BookmarkMarker>, onSeek: (Long) -> Unit) {
+    if (markers.isEmpty()) return
+    // The tap has to be resolved against the bar's own width, which is only known once measured.
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            // Below Android's 48 dp floor on purpose: this is not a control in its own right but an
+            // annotation on the slider above it, which is the thing with the touch target. Every
+            // mark it draws is reachable by the ordinary means — the list in Settings, and the
+            // reader — so a missed tap here costs nothing.
+            .height(20.dp),
+    ) {
+        val width = maxWidth
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(markers, width) {
+                    detectTapGestures { offset ->
+                        val fraction = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                        markerAt(markers, fraction)?.let { onSeek(it.positionMs) }
+                    }
+                }
+                // One description for the lane rather than one per mark: the marks overlap at a
+                // finger's width, so per-mark nodes would be a set of targets a screen reader user
+                // could not separate. The list in Settings is the accessible route to a given mark.
+                .semantics {
+                    contentDescription = if (markers.size == 1) {
+                        "1 bookmark in this chapter"
+                    } else {
+                        "${markers.size} bookmarks in this chapter"
+                    }
+                },
+        ) {
+            markers.forEach { marker ->
+                Box(
+                    modifier = Modifier
+                        // Half the tick's width back, so the line sits *on* the position rather
+                        // than starting at it — otherwise every mark reads a little late.
+                        .offset(x = width * marker.fraction - MarkerWidth / 2)
+                        .width(MarkerWidth)
+                        .fillMaxHeight()
+                        .background(AarisColor.Accent),
+                )
+            }
+        }
+    }
+}
+
+/** Wide enough to see against the track, narrow enough that two close marks stay two marks. */
+private val MarkerWidth = 2.dp
+
+/**
  * One of the player's tertiary actions — speed, sleep, read, bookmark, jump back, chapters.
  *
  * A `TextButton` stops at Material's 40 dp minimum height, which is a density decision rather than
@@ -1649,6 +1759,13 @@ internal fun PlayerScreenBody(
     canRead: Boolean,
     canBookmark: Boolean,
     canJumpBack: Boolean,
+    /**
+     * Marks in the chapter that is playing, for the strip under the scrub bar (#121).
+     *
+     * Empty is the ordinary case and draws nothing at all — the lane costs no height when there is
+     * nothing in it, so a player with no marks looks exactly as it did.
+     */
+    bookmarkMarkers: List<BookmarkMarker> = emptyList(),
     /** The server has a cross-library queue, so there is an Up Next worth opening (#108). */
     canOpenQueue: Boolean,
     onRetry: () -> Unit,
@@ -1767,6 +1884,10 @@ internal fun PlayerScreenBody(
             enabled = playerState.durationMs > 0L,
             modifier = Modifier.fillMaxWidth(),
         )
+        // Its own strip rather than an overlay on the slider. Drawing on the track would mean
+        // competing with the slider's drag for the same pixels, and the thing that must keep
+        // working there is scrubbing.
+        BookmarkMarkerLane(markers = bookmarkMarkers, onSeek = onSeek)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1954,6 +2075,30 @@ private fun PlayerScreen(
     // Confirmation for the bookmark button. A mark made while listening gives no other sign that
     // anything happened, and the alternative — opening the list — is the thing this avoids.
     var bookmarkFeedback by remember { mutableStateOf<String?>(null) }
+    // The marks in *this* chapter, for the strip under the scrub bar (#121). Scoped server-side:
+    // `bookmarks()` takes a chapter id and had never been passed one, so the app was fetching the
+    // whole account to render one chapter's worth.
+    var chapterBookmarks by remember { mutableStateOf<List<Bookmark>>(emptyList()) }
+    // Re-fetched when the chapter changes and when a mark is made, which is exactly when the answer
+    // can differ. Not on a timer: a bookmark list nobody has touched does not change under you.
+    LaunchedEffect(playingChapterId, capabilities.bookmarks, bookmarkFeedback) {
+        val chapterId = playingChapterId?.takeIf { capabilities.bookmarks }
+        chapterBookmarks = if (chapterId == null) {
+            emptyList()
+        } else {
+            runCatching { repository.bookmarks(chapterId = chapterId).orEmpty() }
+                // A failure here leaves the bar unmarked, which is what it always was. There is
+                // nothing to tell the user: they did not ask for this list.
+                .getOrDefault(emptyList())
+        }
+    }
+    val markers = remember(chapterBookmarks, playingChapterId, playerState.durationMs) {
+        bookmarkMarkers(
+            bookmarks = chapterBookmarks,
+            chapterId = playingChapterId,
+            durationMs = playerState.durationMs,
+        )
+    }
     LaunchedEffect(bookmarkFeedback) {
         // Clears itself: it is a confirmation, not a state the screen should settle into.
         if (bookmarkFeedback != null) {
@@ -1970,6 +2115,7 @@ private fun PlayerScreen(
         canBookmark = capabilities.bookmarks && playingChapterId != null,
         canJumpBack = jumpBackOptions.isNotEmpty(),
         canOpenQueue = capabilities.queue,
+        bookmarkMarkers = markers,
         onRetry = playbackController::retry,
         onSeek = playbackController::seekTo,
         onPreviousChapter = playbackController::skipToPreviousChapter,
@@ -4304,6 +4450,76 @@ private fun downloadAction(state: ChapterDownloadState): String = when (state) {
     ChapterDownloadState.Removing -> "Deleting download"
     else -> "Cancel download"
 }
+
+/**
+ * The marks made in this book, on the screen for this book (#121).
+ *
+ * Settings → Bookmarks answers "every mark on the account, newest first". Once you have marks
+ * across several books that is the wrong question — "the marks in *this* one" is the one you have,
+ * and the API has always been able to answer it.
+ *
+ * Collapsed to a count with the newest few showing, rather than the whole list: this sits above the
+ * chapter list on a screen whose job is the chapter list, and a heavily marked book would otherwise
+ * push the chapters off the screen entirely.
+ */
+@Composable
+private fun FictionBookmarksSection(
+    bookmarks: List<Bookmark>,
+    onOpen: ((Bookmark) -> Unit)?,
+) {
+    var expanded by rememberSaveable(bookmarks.size) { mutableStateOf(false) }
+    val shown = if (expanded) bookmarks else bookmarks.take(FictionBookmarkPreviewCount)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeader(
+            kicker = "BM",
+            title = if (bookmarks.size == 1) "1 bookmark" else "${bookmarks.size} bookmarks",
+        )
+        shown.forEach { bookmark ->
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (onOpen != null) {
+                                Modifier.clickable { onOpen(bookmark) }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = bookmark.resolvedLabel,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AarisColor.Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val meta = listOfNotNull(
+                        bookmark.chapterTitle?.takeIf {
+                            // Already the headline when there is no label of its own; saying it
+                            // twice in two type sizes is noise.
+                            it.isNotBlank() && it != bookmark.resolvedLabel
+                        },
+                        bookmark.positionLabel?.takeIf { it.isNotBlank() }
+                            ?: formatDuration((bookmark.positionSeconds * 1000).toLong()),
+                    ).joinToString("  ·  ")
+                    MetaText(text = meta, color = AarisColor.Dim, maxLines = 1)
+                }
+            }
+        }
+        if (bookmarks.size > FictionBookmarkPreviewCount) {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "SHOW FEWER" else "SHOW ALL ${bookmarks.size}")
+            }
+        }
+    }
+}
+
+/** How many marks show before the section asks to be expanded. */
+private const val FictionBookmarkPreviewCount = 3
 
 /**
  * "The copies you have are not the ones the server has any more" (#109).

@@ -6,6 +6,13 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **Bookmarks show up where you would look for them.** The only place to see a mark was Settings →
+  Bookmarks — a flat, account-wide, newest-first list. The fiction screen now has a bookmarks section
+  scoped to that book with a count, and the player draws every mark in the current chapter as a tick
+  under the scrub bar, tappable to seek there. That closes the loop the car action opened: you press
+  BOOKMARK at the wheel precisely so you can come back to that spot, and coming back used to mean
+  Settings → Bookmarks → tap → the reader.
+  ([#121](https://github.com/jonarihen/TTSRoad-App/issues/121))
 - **The Up Next queue is a screen you can look at.** Since 0.11.0 the app could put a chapter on
   the cross-library queue from two places and show it in none: added the wrong one and you could
   neither correct it nor empty it without plugging the phone into a car or opening a browser. The
