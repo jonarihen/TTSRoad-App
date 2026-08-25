@@ -79,6 +79,16 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **Every settings group now says where it is actually kept.** The reader's sheet had claimed
+  "Kept on this phone only" since before those settings started following the account, so it told
+  you the opposite of what it did — someone avoiding an account-wide change was reassured wrongly,
+  and someone wanting the browser to match thought sync was broken. It now says which it is, and
+  says it honestly on an older server that genuinely cannot hold them.
+  ([#103](https://github.com/jonarihen/TTSRoad-App/issues/103))
+- **Speed, skip interval, skip silence and volume boost say they are phone-only**, which they have
+  always been and deliberately are — earbuds and speakers want different settings. The old wording
+  said only that they survived a restart, which left you to guess the rest.
+  ([#126](https://github.com/jonarihen/TTSRoad-App/issues/126))
 - **A downloaded chapter can now be read offline, not just heard.** Downloads fetched the audio and
   nothing else, so pressing READ on a plane showed an empty reader for every chapter you had not
   happened to open beforehand — the half of the feature you cannot arrange in advance, missing
