@@ -48,6 +48,7 @@ import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.PlaybackFailure
+import dk.perspektiva.ttsroad.player.PlayedThreshold
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.ShakeDetector
 import dk.perspektiva.ttsroad.player.SleepTimerAction
@@ -552,9 +553,18 @@ class TtsRoadMediaService : MediaLibraryService() {
         )
 
         if (fictionId == null || chapterId == null) return
-        val nearComplete = duration?.let { total ->
-            position >= total - 20_000L || position.toDouble() / total.toDouble() >= 0.96
-        } ?: false
+        // The account's `auto_mark_played`. The web player has honoured it since it was introduced
+        // and this client did not, marking past 96% regardless — and because the phone writes
+        // is_played to the same rows the browser reads, unticking the box in a browser was being
+        // overridden by the device doing most of the listening (#119).
+        //
+        // forcePlayed is deliberately outside the gate: the preference is about the automatic path,
+        // which is how the web reads it too. Pressing "mark played" still marks it played.
+        val nearComplete = PlayedThreshold.reached(
+            positionMs = position,
+            durationMs = duration,
+            autoMarkEnabled = preferences.current().autoMarkPlayed,
+        )
 
         // Queue first, then try to send. The write used to be a bare `runCatching` around the post,
         // so a position recorded with no connection was simply lost — and the next successful write

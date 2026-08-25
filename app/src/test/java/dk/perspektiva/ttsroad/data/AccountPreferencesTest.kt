@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -311,5 +312,57 @@ class AccountPreferencePatchTest {
         assertTrue("skip_interval_seconds" !in AccountPreferenceKeys.Synced)
         assertTrue("skip_silence" !in AccountPreferenceKeys.Synced)
         assertTrue("volume_boost" !in AccountPreferenceKeys.Synced)
+    }
+
+    @Test
+    fun `auto mark played is synced, unlike the device keys`() {
+        // It is not a hardware-shaped preference: whether finishing a chapter marks it played is
+        // about how you keep track of a book, not about earbuds versus speakers.
+        assertTrue("auto_mark_played" in AccountPreferenceKeys.Synced)
+    }
+
+    @Test
+    fun `auto mark played defaults to on, matching the server`() {
+        // A phone that has never synced must behave as the account would have told it to.
+        assertTrue(DefaultAutoMarkPlayed)
+        assertTrue(SyncedPreferences().autoMarkPlayed)
+    }
+
+    @Test
+    fun `the server's auto mark played wins when it has one`() {
+        val local = SyncedPreferences(autoMarkPlayed = true)
+
+        val reconciled = reconcileAccountPreferences(mapOf("auto_mark_played" to false), local)
+
+        assertFalse(reconciled.autoMarkPlayed)
+    }
+
+    @Test
+    fun `a server with no opinion on auto mark played leaves the phone alone`() {
+        // An older server never heard of the key, and adopting its absence as "false" would stop
+        // marking chapters played on every install talking to one.
+        val local = SyncedPreferences(autoMarkPlayed = true)
+
+        assertTrue(reconcileAccountPreferences(emptyMap(), local).autoMarkPlayed)
+        assertFalse(
+            reconcileAccountPreferences(emptyMap(), local.copy(autoMarkPlayed = false))
+                .autoMarkPlayed,
+        )
+    }
+
+    @Test
+    fun `auto mark played is read as permissively as the server writes it`() {
+        // The server coerces "false"/"no"/"off"/0; a client reading the blob back should too.
+        val local = SyncedPreferences(autoMarkPlayed = true)
+
+        assertFalse(reconcileAccountPreferences(mapOf("auto_mark_played" to "false"), local).autoMarkPlayed)
+        assertFalse(reconcileAccountPreferences(mapOf("auto_mark_played" to 0), local).autoMarkPlayed)
+        assertTrue(reconcileAccountPreferences(mapOf("auto_mark_played" to "yes"), local).autoMarkPlayed)
+    }
+
+    @Test
+    fun `the auto mark played patch sends a real boolean`() {
+        assertEquals(mapOf("auto_mark_played" to false), autoMarkPlayedPatch(false))
+        assertEquals(mapOf("auto_mark_played" to true), autoMarkPlayedPatch(true))
     }
 }

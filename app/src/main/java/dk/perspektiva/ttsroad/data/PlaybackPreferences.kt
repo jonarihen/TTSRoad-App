@@ -40,6 +40,15 @@ data class PlaybackPrefs(
      * timer still has a default with no network and on a server too old to hold one.
      */
     val sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes,
+    /**
+     * Whether reaching the end of a chapter marks it played on its own.
+     *
+     * Follows the account, like [sleepTimerDefaultMinutes] and unlike the four device keys above.
+     * Kept locally all the same because the media service reads it on every progress save — often
+     * with no UI running, sometimes with no network — and a chapter's played state is not something
+     * to leave undecided until a sync lands.
+     */
+    val autoMarkPlayed: Boolean = DefaultAutoMarkPlayed,
 )
 
 /**
@@ -149,6 +158,7 @@ class PlaybackPreferences(private val context: Context) {
         val SkipSilence = booleanPreferencesKey("skip_silence")
         val VolumeBoost = stringPreferencesKey("volume_boost")
         val SleepTimerDefaultMinutes = intPreferencesKey("sleep_timer_default_minutes")
+        val AutoMarkPlayed = booleanPreferencesKey("auto_mark_played")
     }
 
     val prefs: Flow<PlaybackPrefs> = context.playbackDataStore.data
@@ -166,6 +176,7 @@ class PlaybackPreferences(private val context: Context) {
                 sleepTimerDefaultMinutes = sanitizeSleepTimerMinutes(
                     stored[Keys.SleepTimerDefaultMinutes] ?: DefaultSleepTimerMinutes,
                 ),
+                autoMarkPlayed = stored[Keys.AutoMarkPlayed] ?: DefaultAutoMarkPlayed,
             )
         }
 
@@ -193,5 +204,9 @@ class PlaybackPreferences(private val context: Context) {
         context.playbackDataStore.edit {
             it[Keys.SleepTimerDefaultMinutes] = sanitizeSleepTimerMinutes(minutes)
         }
+    }
+
+    suspend fun setAutoMarkPlayed(enabled: Boolean) {
+        context.playbackDataStore.edit { it[Keys.AutoMarkPlayed] = enabled }
     }
 }

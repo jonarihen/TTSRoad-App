@@ -23,6 +23,11 @@ import kotlin.math.roundToInt
  * **`sleep_timer_default_minutes` is adopted.** Not "unsynced" but missing outright — the app had
  * no concept of a default duration at all.
  *
+ * **`auto_mark_played` syncs.** The web has honoured it since it was introduced and the app ignored
+ * it, marking a chapter played past 96% regardless. That was not merely unsupported here: the
+ * phone writes `is_played` to the same `ChapterPlaybackState` rows the browser reads, so unticking
+ * the box in a browser was overridden by the device doing most of the listening.
+ *
  * **The four device player keys stay local.** `playback_speed`, `skip_interval_seconds`,
  * `skip_silence` and `volume_boost` remain in [PlaybackPreferences] on this phone. The backend
  * declares them as a cross-repo contract, and following that would be defensible, but a phone on
@@ -48,6 +53,7 @@ import kotlin.math.roundToInt
  */
 object AccountPreferenceKeys {
     const val HidePlayed = "hide_played"
+    const val AutoMarkPlayed = "auto_mark_played"
     const val SleepTimerDefaultMinutes = "sleep_timer_default_minutes"
     const val ReaderFontSize = "reader_font_size"
     const val ReaderTheme = "reader_theme"
@@ -56,6 +62,7 @@ object AccountPreferenceKeys {
     /** Keys this client reads and writes. Anything else on the account is left untouched. */
     val Synced: Set<String> = setOf(
         HidePlayed,
+        AutoMarkPlayed,
         SleepTimerDefaultMinutes,
         ReaderFontSize,
         ReaderTheme,
@@ -75,6 +82,14 @@ val SyncedPlayerKeys: Set<String> = emptySet()
 val SleepTimerDefaultOptions: List<Int> = listOf(0, 5, 15, 30, 45, 60)
 
 const val DefaultSleepTimerMinutes: Int = 0
+
+/**
+ * Whether finishing a chapter marks it played without being asked.
+ *
+ * True to match the server's own default for `auto_mark_played`, so a phone that has never synced
+ * behaves as the account would have told it to.
+ */
+const val DefaultAutoMarkPlayed: Boolean = true
 
 /**
  * The server's `reader_font_size` range, and the size its default corresponds to.
@@ -209,6 +224,7 @@ fun Map<String, Any?>.preferenceString(key: String): String? =
  */
 data class SyncedPreferences(
     val chapterFilter: ChapterFilter = ChapterFilter.All,
+    val autoMarkPlayed: Boolean = DefaultAutoMarkPlayed,
     val sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes,
     val readerFontScale: Float = DefaultReaderFontScale,
     val readerTheme: ReaderTheme = DefaultReaderTheme,
@@ -228,6 +244,7 @@ fun reconcileAccountPreferences(
     local: SyncedPreferences,
 ): SyncedPreferences {
     val hidePlayed = server.preferenceBool(AccountPreferenceKeys.HidePlayed)
+    val autoMarkPlayed = server.preferenceBool(AccountPreferenceKeys.AutoMarkPlayed)
     val sleepMinutes = server.preferenceInt(AccountPreferenceKeys.SleepTimerDefaultMinutes)
     val fontSize = server.preferenceInt(AccountPreferenceKeys.ReaderFontSize)
     val theme = readerThemeFromServer(server.preferenceString(AccountPreferenceKeys.ReaderTheme))
@@ -240,6 +257,9 @@ fun reconcileAccountPreferences(
         } else {
             chapterFilterFromServer(hidePlayed, local.chapterFilter)
         },
+        // A plain boolean with no lossy projection, so the general rule collapses to "take the
+        // server's answer when it has one".
+        autoMarkPlayed = autoMarkPlayed ?: local.autoMarkPlayed,
         sleepTimerDefaultMinutes = sleepMinutes
             ?.let(::sanitizeSleepTimerMinutes)
             ?: local.sleepTimerDefaultMinutes,
@@ -279,6 +299,9 @@ fun reconcileAccountPreferences(
  */
 fun chapterFilterPatch(filter: ChapterFilter): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.HidePlayed to serverHidePlayed(filter))
+
+fun autoMarkPlayedPatch(enabled: Boolean): Map<String, Any?> =
+    mapOf(AccountPreferenceKeys.AutoMarkPlayed to enabled)
 
 fun sleepTimerDefaultPatch(minutes: Int): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.SleepTimerDefaultMinutes to sanitizeSleepTimerMinutes(minutes))

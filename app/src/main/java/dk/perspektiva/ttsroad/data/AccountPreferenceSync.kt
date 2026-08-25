@@ -24,6 +24,7 @@ class AccountPreferenceSync(
         val reader = readerPreferences.current()
         return SyncedPreferences(
             chapterFilter = chapterListPreferences.current(),
+            autoMarkPlayed = playback.autoMarkPlayed,
             sleepTimerDefaultMinutes = playback.sleepTimerDefaultMinutes,
             readerFontScale = reader.fontScale,
             readerTheme = reader.theme,
@@ -48,6 +49,9 @@ class AccountPreferenceSync(
         if (reconciled.chapterFilter != local.chapterFilter) {
             chapterListPreferences.setFilter(reconciled.chapterFilter)
         }
+        if (reconciled.autoMarkPlayed != local.autoMarkPlayed) {
+            playbackPreferences.setAutoMarkPlayed(reconciled.autoMarkPlayed)
+        }
         if (reconciled.sleepTimerDefaultMinutes != local.sleepTimerDefaultMinutes) {
             playbackPreferences.setSleepTimerDefaultMinutes(reconciled.sleepTimerDefaultMinutes)
         }
@@ -70,6 +74,11 @@ class AccountPreferenceSync(
     suspend fun setChapterFilter(filter: ChapterFilter) {
         chapterListPreferences.setFilter(filter)
         repository.updateAccountPreferences(chapterFilterPatch(filter))
+    }
+
+    suspend fun setAutoMarkPlayed(enabled: Boolean) {
+        playbackPreferences.setAutoMarkPlayed(enabled)
+        repository.updateAccountPreferences(autoMarkPlayedPatch(enabled))
     }
 
     suspend fun setSleepTimerDefaultMinutes(minutes: Int) {
