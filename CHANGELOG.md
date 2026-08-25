@@ -79,6 +79,12 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **Line spacing in the reader, and it follows your account.** The reader had text size, page
+  colour and highlight; spacing was the one appearance setting the account could hold and the app
+  could not offer, so it was the one that did not match the browser. Five steps from tight to airy,
+  under **Aa** in the reader. ([#122](https://github.com/jonarihen/TTSRoad-App/issues/122))
+- The default spacing is a shade more open than before — the reader used a fixed ratio of 1.65,
+  and the shared default is 1.75. Anything you set yourself overrides it.
 - **"Mark chapters played automatically" is honoured, and is a setting.** The account has held
   `auto_mark_played` all along and the web player has always respected it; the app ignored it and
   marked a chapter played past 96% regardless. That was worse than not supporting it: the phone

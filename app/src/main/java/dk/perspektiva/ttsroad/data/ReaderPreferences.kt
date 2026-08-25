@@ -33,6 +33,14 @@ private val Context.readerDataStore: DataStore<Preferences> by preferencesDataSt
 
 data class ReaderPrefs(
     val fontScale: Float = DefaultReaderFontScale,
+    /**
+     * Line spacing as a multiple of the font size, matching the server's `reader_line_height`.
+     *
+     * Stored as the server's own multiplier rather than as a scale on top of a local default: it is
+     * the one reader key whose vocabulary the two ends already share exactly, so converting through
+     * a fixed point — as [fontScale] has to — would only introduce rounding.
+     */
+    val lineHeight: Float = DefaultReaderLineHeight,
     val theme: ReaderTheme = DefaultReaderTheme,
     val highlight: HighlightGranularity = DefaultHighlightGranularity,
     val keepScreenOn: Boolean = true,
@@ -46,6 +54,21 @@ data class ReaderPrefs(
 val ReaderFontScales: List<Float> = listOf(0.9f, 1.0f, 1.15f, 1.3f, 1.5f, 1.75f, 2.0f)
 
 const val DefaultReaderFontScale: Float = 1.0f
+
+/**
+ * Line-height steps offered in the reader sheet, spanning the server's declared 1.3–2.4 range.
+ *
+ * Coarser than the web's stepper, which moves in 0.05: a phone screen shows a few hundred words at
+ * a time and the difference between 1.75 and 1.80 is not visible on one, while the difference
+ * between tight and airy very much is.
+ */
+val ReaderLineHeights: List<Float> = listOf(1.3f, 1.5f, 1.75f, 2.0f, 2.4f)
+
+/** The server's declared default for `reader_line_height`. */
+const val DefaultReaderLineHeight: Float = 1.75f
+
+const val MinReaderLineHeight: Float = 1.3f
+const val MaxReaderLineHeight: Float = 2.4f
 
 /** Reader background and text colours. Mapped to actual colours in the ui layer. */
 enum class ReaderTheme(val label: String) {
@@ -85,6 +108,22 @@ val DefaultHighlightGranularity: HighlightGranularity = HighlightGranularity.Sen
 fun sanitizeReaderFontScale(scale: Float): Float =
     if (scale.isNaN()) DefaultReaderFontScale else scale.coerceIn(MinReaderFontScale, MaxReaderFontScale)
 
+/**
+ * Clamped to the range the server declares, so a value set by a build with finer steps survives.
+ *
+ * The server's spec for this key is `on_invalid="default"` rather than "reject" — the reader has to
+ * render *something* — so an unreadable value becomes the default rather than being dropped.
+ */
+fun sanitizeReaderLineHeight(height: Float): Float =
+    if (height.isNaN()) {
+        DefaultReaderLineHeight
+    } else {
+        height.coerceIn(MinReaderLineHeight, MaxReaderLineHeight)
+    }
+
+/** "1.75x" — the label on the reader sheet's spacing chips. */
+fun formatReaderLineHeight(height: Float): String = "${(Math.round(height * 100) / 100.0)}x"
+
 /** Tolerate a name written by a different build rather than failing to read preferences at all. */
 fun readerThemeOf(storedName: String?): ReaderTheme =
     ReaderTheme.entries.firstOrNull { it.name == storedName } ?: DefaultReaderTheme
@@ -108,6 +147,7 @@ interface ReaderPreferenceStore {
     val prefs: Flow<ReaderPrefs>
     suspend fun current(): ReaderPrefs
     suspend fun setFontScale(scale: Float)
+    suspend fun setLineHeight(height: Float)
     suspend fun setTheme(theme: ReaderTheme)
     suspend fun setHighlight(granularity: HighlightGranularity)
 }
@@ -116,6 +156,7 @@ interface ReaderPreferenceStore {
 class LocalReaderPreferences(private val context: Context) : ReaderPreferenceStore {
     private object Keys {
         val FontScale = floatPreferencesKey("reader_font_scale")
+        val LineHeight = floatPreferencesKey("reader_line_height")
         val Theme = stringPreferencesKey("reader_theme")
         val Highlight = stringPreferencesKey("reader_highlight")
         val KeepScreenOn = booleanPreferencesKey("reader_keep_screen_on")
@@ -128,6 +169,9 @@ class LocalReaderPreferences(private val context: Context) : ReaderPreferenceSto
         .map { stored ->
             ReaderPrefs(
                 fontScale = sanitizeReaderFontScale(stored[Keys.FontScale] ?: DefaultReaderFontScale),
+                lineHeight = sanitizeReaderLineHeight(
+                    stored[Keys.LineHeight] ?: DefaultReaderLineHeight,
+                ),
                 theme = readerThemeOf(stored[Keys.Theme]),
                 highlight = highlightGranularityOf(stored[Keys.Highlight]),
                 keepScreenOn = stored[Keys.KeepScreenOn] ?: true,
@@ -138,6 +182,10 @@ class LocalReaderPreferences(private val context: Context) : ReaderPreferenceSto
 
     override suspend fun setFontScale(scale: Float) {
         context.readerDataStore.edit { it[Keys.FontScale] = sanitizeReaderFontScale(scale) }
+    }
+
+    override suspend fun setLineHeight(height: Float) {
+        context.readerDataStore.edit { it[Keys.LineHeight] = sanitizeReaderLineHeight(height) }
     }
 
     override suspend fun setTheme(theme: ReaderTheme) {
@@ -168,6 +216,10 @@ class InMemoryReaderPreferences(initial: ReaderPrefs = ReaderPrefs()) : ReaderPr
 
     override suspend fun setFontScale(scale: Float) {
         state.value = state.value.copy(fontScale = sanitizeReaderFontScale(scale))
+    }
+
+    override suspend fun setLineHeight(height: Float) {
+        state.value = state.value.copy(lineHeight = sanitizeReaderLineHeight(height))
     }
 
     override suspend fun setTheme(theme: ReaderTheme) {

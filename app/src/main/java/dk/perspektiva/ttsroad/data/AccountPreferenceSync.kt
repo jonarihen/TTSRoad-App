@@ -27,6 +27,7 @@ class AccountPreferenceSync(
             autoMarkPlayed = playback.autoMarkPlayed,
             sleepTimerDefaultMinutes = playback.sleepTimerDefaultMinutes,
             readerFontScale = reader.fontScale,
+            readerLineHeight = reader.lineHeight,
             readerTheme = reader.theme,
             readerHighlight = reader.highlight,
         )
@@ -57,6 +58,9 @@ class AccountPreferenceSync(
         }
         if (reconciled.readerFontScale != local.readerFontScale) {
             readerPreferences.setFontScale(reconciled.readerFontScale)
+        }
+        if (reconciled.readerLineHeight != local.readerLineHeight) {
+            readerPreferences.setLineHeight(reconciled.readerLineHeight)
         }
         if (reconciled.readerTheme != local.readerTheme) {
             readerPreferences.setTheme(reconciled.readerTheme)
@@ -89,6 +93,11 @@ class AccountPreferenceSync(
     suspend fun setReaderFontScale(scale: Float) {
         readerPreferences.setFontScale(scale)
         repository.updateAccountPreferences(readerFontScalePatch(scale))
+    }
+
+    suspend fun setReaderLineHeight(height: Float) {
+        readerPreferences.setLineHeight(height)
+        repository.updateAccountPreferences(readerLineHeightPatch(height))
     }
 
     suspend fun setReaderTheme(theme: ReaderTheme) {

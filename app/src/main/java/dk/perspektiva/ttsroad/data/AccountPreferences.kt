@@ -35,8 +35,10 @@ import kotlin.math.roundToInt
  * for the same reason. This is a decision rather than an oversight; reversing it is a change to
  * [SyncedPlayerKeys] and the setters that feed it, not a redesign.
  *
- * **`reader_line_height` is not adopted.** The app has no line-height control to attach it to.
- * Adopting the key means adding that control first.
+ * **`reader_line_height` syncs.** It did not until the reader grew a spacing control to attach it
+ * to (#122). Unlike the theme and highlight mappings below, this one is not lossy in either
+ * direction: both ends store the same multiplier over the same 1.3–2.4 range, so the value that
+ * comes back is the value that was sent.
  *
  * ## Lossy mappings, and why reads do not write
  *
@@ -56,6 +58,7 @@ object AccountPreferenceKeys {
     const val AutoMarkPlayed = "auto_mark_played"
     const val SleepTimerDefaultMinutes = "sleep_timer_default_minutes"
     const val ReaderFontSize = "reader_font_size"
+    const val ReaderLineHeight = "reader_line_height"
     const val ReaderTheme = "reader_theme"
     const val ReaderHighlight = "reader_highlight"
 
@@ -65,6 +68,7 @@ object AccountPreferenceKeys {
         AutoMarkPlayed,
         SleepTimerDefaultMinutes,
         ReaderFontSize,
+        ReaderLineHeight,
         ReaderTheme,
         ReaderHighlight,
     )
@@ -212,6 +216,20 @@ fun Map<String, Any?>.preferenceInt(key: String): Int? = when (val raw = this[ke
     else -> null
 }
 
+/**
+ * A fractional value, for the keys the server declares as `number` rather than `integer`.
+ *
+ * Separate from [preferenceInt] rather than folded into it: truncating a line height of 1.75 to 1
+ * would be silently catastrophic, and the two call sites want genuinely different types.
+ */
+fun Map<String, Any?>.preferenceNumber(key: String): Float? = when (val raw = this[key]) {
+    // A boolean is an int in some languages but never a line height; reject rather than read as 1.
+    is Boolean -> null
+    is Number -> raw.toFloat().takeIf { !it.isNaN() }
+    is String -> raw.trim().toFloatOrNull()?.takeIf { !it.isNaN() }
+    else -> null
+}
+
 fun Map<String, Any?>.preferenceString(key: String): String? =
     (this[key] as? String)?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
 
@@ -227,6 +245,7 @@ data class SyncedPreferences(
     val autoMarkPlayed: Boolean = DefaultAutoMarkPlayed,
     val sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes,
     val readerFontScale: Float = DefaultReaderFontScale,
+    val readerLineHeight: Float = DefaultReaderLineHeight,
     val readerTheme: ReaderTheme = DefaultReaderTheme,
     val readerHighlight: HighlightGranularity = DefaultHighlightGranularity,
 )
@@ -247,6 +266,7 @@ fun reconcileAccountPreferences(
     val autoMarkPlayed = server.preferenceBool(AccountPreferenceKeys.AutoMarkPlayed)
     val sleepMinutes = server.preferenceInt(AccountPreferenceKeys.SleepTimerDefaultMinutes)
     val fontSize = server.preferenceInt(AccountPreferenceKeys.ReaderFontSize)
+    val lineHeight = server.preferenceNumber(AccountPreferenceKeys.ReaderLineHeight)
     val theme = readerThemeFromServer(server.preferenceString(AccountPreferenceKeys.ReaderTheme))
     val highlight =
         readerHighlightFromServer(server.preferenceString(AccountPreferenceKeys.ReaderHighlight))
@@ -260,6 +280,11 @@ fun reconcileAccountPreferences(
         // A plain boolean with no lossy projection, so the general rule collapses to "take the
         // server's answer when it has one".
         autoMarkPlayed = autoMarkPlayed ?: local.autoMarkPlayed,
+        // No projection to compare against: both ends store the same multiplier over the same
+        // range, so "the server has a value" is the whole condition.
+        readerLineHeight = lineHeight
+            ?.let(::sanitizeReaderLineHeight)
+            ?: local.readerLineHeight,
         sleepTimerDefaultMinutes = sleepMinutes
             ?.let(::sanitizeSleepTimerMinutes)
             ?: local.sleepTimerDefaultMinutes,
@@ -308,6 +333,9 @@ fun sleepTimerDefaultPatch(minutes: Int): Map<String, Any?> =
 
 fun readerFontScalePatch(scale: Float): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.ReaderFontSize to readerFontSizeOf(scale))
+
+fun readerLineHeightPatch(height: Float): Map<String, Any?> =
+    mapOf(AccountPreferenceKeys.ReaderLineHeight to sanitizeReaderLineHeight(height))
 
 fun readerThemePatch(theme: ReaderTheme): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.ReaderTheme to serverReaderTheme(theme))

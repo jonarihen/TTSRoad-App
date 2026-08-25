@@ -163,6 +163,7 @@ import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.ReadAlongDocument
 import dk.perspektiva.ttsroad.data.ReadAlongHighlight
 import dk.perspektiva.ttsroad.data.ReaderFontScales
+import dk.perspektiva.ttsroad.data.ReaderLineHeights
 import dk.perspektiva.ttsroad.data.ReaderPrefs
 import dk.perspektiva.ttsroad.data.ReaderTheme
 import dk.perspektiva.ttsroad.data.SearchGroup
@@ -183,6 +184,7 @@ import dk.perspektiva.ttsroad.data.speedOptions
 import dk.perspektiva.ttsroad.data.TextSpan
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.formatReaderFontScale
+import dk.perspektiva.ttsroad.data.formatReaderLineHeight
 import dk.perspektiva.ttsroad.data.formatSkipInterval
 import dk.perspektiva.ttsroad.data.readAlongAvailability
 import dk.perspektiva.ttsroad.data.readerAutoScrollOffsetPx
@@ -5050,6 +5052,7 @@ private fun ReaderScreen(
             palette = palette,
             onDismiss = { showSettings = false },
             onFontScale = { scope.launch { accountPreferenceSync.setReaderFontScale(it) } },
+            onLineHeight = { scope.launch { accountPreferenceSync.setReaderLineHeight(it) } },
             onTheme = { scope.launch { accountPreferenceSync.setReaderTheme(it) } },
             onHighlight = { scope.launch { accountPreferenceSync.setReaderHighlight(it) } },
         )
@@ -5070,10 +5073,14 @@ private fun ReaderPage(
 ) {
     // Multiplies the system font scale rather than replacing it: `sp` already carries the user's
     // accessibility setting, and this is the reader-specific adjustment on top of it.
+    val bodyFontSize = 17.sp * prefs.fontScale
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
         color = palette.ink,
-        fontSize = 17.sp * prefs.fontScale,
-        lineHeight = 28.sp * prefs.fontScale,
+        fontSize = bodyFontSize,
+        // Spacing is a multiple of the font size, which is how the server and the web reader both
+        // express it. This used to be a fixed 28sp against a 17sp body — a ratio of 1.65 — so the
+        // default reading is very slightly airier than before, at the 1.75 the server declares.
+        lineHeight = bodyFontSize * prefs.lineHeight,
     )
 
     LazyColumn(
@@ -5196,6 +5203,7 @@ private fun ReaderSettingsSheet(
     palette: ReaderPalette,
     onDismiss: () -> Unit,
     onFontScale: (Float) -> Unit,
+    onLineHeight: (Float) -> Unit,
     onTheme: (ReaderTheme) -> Unit,
     onHighlight: (HighlightGranularity) -> Unit,
 ) {
@@ -5210,6 +5218,18 @@ private fun ReaderSettingsSheet(
                         label = formatReaderFontScale(scale),
                         selected = selected,
                         onClick = { onFontScale(scale) },
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            MetaText(text = "// Line spacing", color = AarisColor.Accent)
+            Spacer(modifier = Modifier.height(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReaderLineHeights.forEach { height ->
+                    ReaderOptionChip(
+                        label = formatReaderLineHeight(height),
+                        selected = kotlin.math.abs(height - prefs.lineHeight) < 0.001f,
+                        onClick = { onLineHeight(height) },
                     )
                 }
             }
