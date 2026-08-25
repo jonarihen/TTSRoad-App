@@ -2519,6 +2519,11 @@ private fun PlayerScreen(
                         },
                     )
                 }
+                MetaText(
+                    text = PreferenceScope.DevicePlayer,
+                    color = AarisColor.Dim,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             }
             speedOptions(playerState.speed).forEach { preset ->
@@ -3338,7 +3343,7 @@ private fun SettingsScreen(
                             text = "Shortens the long pauses synthesised speech leaves around " +
                                 "headings and scene breaks. Off by default, because the web " +
                                 "player has no equivalent and leaving it on makes the same " +
-                                "chapter finish sooner here.",
+                                "chapter finish sooner here. " + PreferenceScope.DevicePlayer,
                             color = AarisColor.Dim,
                         )
                     }
@@ -3354,7 +3359,7 @@ private fun SettingsScreen(
                 MetaText(text = "Volume boost")
                 MetaText(
                     text = "Lifts chapters converted at a lower level, so a quiet one does not " +
-                        "mean reaching for the volume.",
+                        "mean reaching for the volume. " + PreferenceScope.DevicePlayer,
                     color = AarisColor.Dim,
                 )
                 AarisChoiceRow(
