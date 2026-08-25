@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -49,6 +50,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -117,6 +119,9 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -241,6 +246,7 @@ import dk.perspektiva.ttsroad.ui.AarisChoiceRow
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
+import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.ReaderPalette
 import dk.perspektiva.ttsroad.ui.readerPalette
 import kotlin.math.roundToLong
@@ -1537,6 +1543,30 @@ private fun PlayerTitleBlock(
 }
 
 /**
+ * One of the player's tertiary actions — speed, sleep, read, bookmark, jump back, chapters.
+ *
+ * A `TextButton` stops at Material's 40 dp minimum height, which is a density decision rather than
+ * an accessibility one, so these carry the 48 dp floor explicitly (#104). Six near-identical copies
+ * of the same three arguments became one; `softWrap = false` is the reason they are identical, and
+ * it matters: a squeezed label here once wrapped "CHAPTERS 53/246" into a column one character wide.
+ */
+@Composable
+private fun PlayerActionButton(
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    color: Color = Color.Unspecified,
+) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.heightIn(min = MinTouchTargetSize),
+    ) {
+        Text(text = label, color = color, maxLines = 1, softWrap = false)
+    }
+}
+
+/**
  * Everything the player *shows*, with none of what it is wired to.
  *
  * Split out of [PlayerScreen] so the layout can be rendered in a test at a stated viewport. The
@@ -1762,52 +1792,36 @@ internal fun PlayerScreenBody(
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
                 // cycle-only button.
-                TextButton(onClick = onOpenSpeed) {
-                    Text("SPEED ${formatSpeed(playerState.speed)}", maxLines = 1, softWrap = false)
-                }
-                TextButton(
+                PlayerActionButton(label = "SPEED ${formatSpeed(playerState.speed)}", onClick = onOpenSpeed)
+                PlayerActionButton(
+                    label = if (sleepTimerState.isArmed) {
+                        "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
+                    } else {
+                        "SLEEP"
+                    },
                     onClick = onOpenSleepTimer,
                     enabled = playerState.hasMedia || sleepTimerState.isArmed,
-                ) {
-                    Text(
-                        text = if (sleepTimerState.isArmed) {
-                            "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
-                        } else {
-                            "SLEEP"
-                        },
-                        color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                }
+                    color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
+                )
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Hidden entirely on a server without read-along, rather than shown and then 404ing.
                 if (canRead) {
-                    TextButton(onClick = onRead) {
-                        Text("READ", maxLines = 1, softWrap = false)
-                    }
+                    PlayerActionButton(label = "READ", onClick = onRead)
                 }
                 // Same gating as READ: hidden outright on a server without bookmarks, rather than
                 // offered and then failing.
                 if (canBookmark) {
-                    TextButton(onClick = onBookmark) {
-                        Text("BOOKMARK", maxLines = 1, softWrap = false)
-                    }
+                    PlayerActionButton(label = "BOOKMARK", onClick = onBookmark)
                 }
                 if (canJumpBack) {
-                    TextButton(onClick = onOpenJumpBack) {
-                        Text("JUMP BACK", maxLines = 1, softWrap = false)
-                    }
+                    PlayerActionButton(label = "JUMP BACK", onClick = onOpenJumpBack)
                 }
                 if (playerState.queue.size > 1) {
-                    TextButton(onClick = onOpenChapters) {
-                        Text(
-                            text = "CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}",
-                            maxLines = 1,
-                            softWrap = false,
-                        )
-                    }
+                    PlayerActionButton(
+                        label = "CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}",
+                        onClick = onOpenChapters,
+                    )
                 }
             }
         }
@@ -3437,38 +3451,52 @@ private fun PlaybackErrorBanner(message: String, onRetry: () -> Unit) {
 
 /** Square AARIS transport control: outlined by default, accent-filled for the primary action. */
 @Composable
-private fun TransportIconButton(
+internal fun TransportIconButton(
     icon: ImageVector,
     contentDescription: String?,
     enabled: Boolean,
+    /** The size of the *drawn* button. The area that responds to a finger is at least 48 dp. */
     size: androidx.compose.ui.unit.Dp,
     filled: Boolean = false,
     onClick: () -> Unit,
 ) {
+    // Two boxes, and the split is the whole point (#104). The outer one takes the tap and never
+    // measures under 48 dp; the inner one is the square that gets drawn. Previously they were the
+    // same box, so a 36 dp chapter-row action had a 36 dp target — and its neighbours are Play and
+    // Mark played, where a near miss does something rather than nothing.
     Box(
         modifier = Modifier
-            .size(size)
-            .background(
-                when {
-                    filled && enabled -> AarisColor.Accent
-                    filled -> AarisColor.Line
-                    else -> AarisColor.BgRaise
-                },
-            )
-            .let { if (filled) it else it.border(1.dp, AarisColor.Line) }
-            .clickable(enabled = enabled, onClick = onClick),
+            .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
+            .clickable(enabled = enabled, onClick = onClick, role = Role.Button)
+            // On the node that takes the tap, not on the glyph inside it: TalkBack should land on
+            // the thing that is actually pressable and announce it as a button.
+            .semantics { contentDescription?.let { this.contentDescription = it } },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = when {
-                filled -> AarisColor.Bg
-                enabled -> AarisColor.Muted
-                else -> AarisColor.Dim
-            },
-            modifier = Modifier.size(size / 2),
-        )
+        Box(
+            modifier = Modifier
+                .size(size)
+                .background(
+                    when {
+                        filled && enabled -> AarisColor.Accent
+                        filled -> AarisColor.Line
+                        else -> AarisColor.BgRaise
+                    },
+                )
+                .let { if (filled) it else it.border(1.dp, AarisColor.Line) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = when {
+                    filled -> AarisColor.Bg
+                    enabled -> AarisColor.Muted
+                    else -> AarisColor.Dim
+                },
+                modifier = Modifier.size(size / 2),
+            )
+        }
     }
 }
 
@@ -3698,7 +3726,7 @@ private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChapterRow(
+internal fun ChapterRow(
     chapter: ChapterSummary,
     fiction: FictionSummary?,
     onPlay: () -> Unit,
@@ -3764,6 +3792,10 @@ private fun ChapterRow(
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
+            // No spacers between the actions any more. Each is a 48 dp target around a 36 dp glyph
+            // (#104), so there is already 12 dp of clear space between two drawn buttons; keeping
+            // the old 8 dp gaps as well would take 24 dp off the title for no visible benefit, and
+            // this row is on a 320 dp phone.
             // Offered even for a chapter with no audio yet: the text is worth reading on its own.
             onOpenReader?.let { open ->
                 TransportIconButton(
@@ -3772,7 +3804,6 @@ private fun ChapterRow(
                     enabled = true,
                     size = 36.dp,
                 ) { open() }
-                Spacer(modifier = Modifier.width(8.dp))
             }
             if (!playable) {
                 AarisTag(
@@ -3790,7 +3821,6 @@ private fun ChapterRow(
                         filled = state.isAvailableOffline,
                         onClick = toggle,
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                 }
                 onMarkPlayed?.let { mark ->
                     TransportIconButton(
@@ -3801,7 +3831,6 @@ private fun ChapterRow(
                         filled = isPlayed,
                     ) { mark(!isPlayed) }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
                 TransportIconButton(
                     icon = Icons.Default.PlayArrow,
                     contentDescription = "Play",
@@ -5425,7 +5454,10 @@ private fun ReaderSettingsSheet(
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
             MetaText(text = "// Text size", color = AarisColor.Accent)
             Spacer(modifier = Modifier.height(8.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 ReaderFontScales.forEach { scale ->
                     val selected = kotlin.math.abs(scale - prefs.fontScale) < 0.001f
                     ReaderOptionChip(
@@ -5438,7 +5470,10 @@ private fun ReaderSettingsSheet(
             Spacer(modifier = Modifier.height(16.dp))
             MetaText(text = "// Line spacing", color = AarisColor.Accent)
             Spacer(modifier = Modifier.height(8.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 ReaderLineHeights.forEach { height ->
                     ReaderOptionChip(
                         label = formatReaderLineHeight(height),
@@ -5450,7 +5485,10 @@ private fun ReaderSettingsSheet(
             Spacer(modifier = Modifier.height(20.dp))
             MetaText(text = "// Page", color = AarisColor.Accent)
             Spacer(modifier = Modifier.height(8.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 ReaderTheme.entries.forEach { theme ->
                     ReaderOptionChip(
                         label = theme.label,
@@ -5462,7 +5500,10 @@ private fun ReaderSettingsSheet(
             Spacer(modifier = Modifier.height(20.dp))
             MetaText(text = "// Follow along", color = AarisColor.Accent)
             Spacer(modifier = Modifier.height(8.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 HighlightGranularity.entries.forEach { granularity ->
                     ReaderOptionChip(
                         label = granularity.label,
@@ -5485,16 +5526,29 @@ private fun ReaderSettingsSheet(
 }
 
 @Composable
-private fun ReaderOptionChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        text = label.uppercase(),
-        color = if (selected) AarisColor.Accent else AarisColor.Muted,
-        style = MaterialTheme.typography.labelLarge,
+internal fun ReaderOptionChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    // The chip stays the size it looks; the box around it is what the finger has to find (#104).
+    // Width matters as much as height here and is the half that is easy to miss: these chips are as
+    // wide as their label, and the shortest are "OFF" and "80%".
+    //
+    // `selectable` rather than `clickable` because these are a one-of-N group: the selected chip is
+    // marked by colour alone, so without the role and the selected flag a screen reader reads four
+    // labels and never says which page theme is in force.
+    Box(
         modifier = Modifier
-            .border(1.dp, if (selected) AarisColor.Accent else AarisColor.Line)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-    )
+            .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
+            .selectable(selected = selected, onClick = onClick, role = Role.RadioButton),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label.uppercase(),
+            color = if (selected) AarisColor.Accent else AarisColor.Muted,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier
+                .border(1.dp, if (selected) AarisColor.Accent else AarisColor.Line)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+    }
 }
 
 @Composable
