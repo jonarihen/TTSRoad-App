@@ -2452,6 +2452,30 @@ private fun SettingsScreen(
                         "browser agrees.",
                     color = AarisColor.Dim,
                 )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        MetaText(text = "Mark chapters played automatically")
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(
+                            text = "Finishing a chapter marks it played without being asked. " +
+                                "Turn it off to keep that deliberate. Follows your account, and " +
+                                "marking a chapter yourself still works either way.",
+                            color = AarisColor.Dim,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = prefs.autoMarkPlayed,
+                        onCheckedChange = {
+                            scope.launch { accountPreferenceSync.setAutoMarkPlayed(it) }
+                        },
+                    )
+                }
             }
         }
 

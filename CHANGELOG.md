@@ -79,6 +79,15 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **"Mark chapters played automatically" is honoured, and is a setting.** The account has held
+  `auto_mark_played` all along and the web player has always respected it; the app ignored it and
+  marked a chapter played past 96% regardless. That was worse than not supporting it: the phone
+  writes played state to the same records the browser reads, so unticking the box in a browser was
+  being overridden by the device doing most of the listening. It now follows your account, and
+  there is a switch for it under Settings → Playback.
+  ([#119](https://github.com/jonarihen/TTSRoad-App/issues/119))
+- Marking a chapter played by hand still works with the setting off — it governs the automatic
+  path only, which is how the web reads it too.
 - **A failed chapter says why it failed.** The server has always sent a reason; the app dropped it
   at the parse layer, so every chapter that could not be converted rendered as the bare word
   "error". The reason now appears on the chapter row and in full when you long-press it — which is
