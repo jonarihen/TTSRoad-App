@@ -37,9 +37,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -3766,32 +3769,45 @@ private fun FictionsScreen(
                 error = state.error,
                 onRefresh = refresh,
             ) {
-                Column(modifier = Modifier.fillMaxSize()) {
+                // One scrolling owner for the whole screen (#100). Everything above the grid used
+                // to be eager content in a Column that could not scroll, so a search answering in
+                // three groups pushed its own later hits — and the entire catalogue — past the
+                // bottom of the window with no way to reach them.
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 158.dp),
+                    state = gridState,
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
                     // Adding lives on the browse screen rather than the shelf because this is the
                     // screen that already answers "what is on this server", and a fiction has to
                     // exist here before it can be followed onto a shelf.
                     if (capabilities.fictionManagement && isAdmin) {
-                        AddFictionSection(
-                            onAdd = { url -> repository.addFiction(url) },
-                            onAdded = refresh,
+                        fullWidthItem(key = "add-fiction") {
+                            AddFictionSection(
+                                onAdd = { url -> repository.addFiction(url) },
+                                onAdded = refresh,
+                            )
+                        }
+                    }
+                    fullWidthItem(key = "filter") {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = {
+                                query = it
+                                // Typing starts a new question; last answer's results are stale.
+                                serverResults = null
+                                searchError = null
+                            },
+                            label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = {
-                            query = it
-                            // Typing starts a new question; last answer's results would be stale.
-                            serverResults = null
-                            searchError = null
-                        },
-                        label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                    )
                     if (capabilities.search) {
-                        ServerSearchSection(
+                        serverSearchSection(
                             query = query,
                             results = serverResults,
                             isSearching = isSearching,
@@ -3830,23 +3846,14 @@ private fun FictionsScreen(
                         )
                     }
                     if (filtered.isEmpty()) {
-                        Box(modifier = Modifier.padding(16.dp)) {
+                        fullWidthItem(key = "empty") {
                             EmptyCard(
                                 if (query.isBlank()) "No fictions found" else "No matches for \"$query\"",
                             )
                         }
                     } else {
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 158.dp),
-                            state = gridState,
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.fillMaxSize(),
-                        ) {
-                            items(filtered, key = { it.id }) { fiction ->
-                                FictionGridCard(fiction = fiction, onClick = { onOpenFiction(fiction) })
-                            }
+                        items(filtered, key = { it.id }) { fiction ->
+                            FictionGridCard(fiction = fiction, onClick = { onOpenFiction(fiction) })
                         }
                     }
                 }
@@ -3879,9 +3886,11 @@ private fun AddFictionSection(
     var isError by remember { mutableStateOf(false) }
 
     Column(
+        // No horizontal gutter of its own: this is a full-width row of the browse grid now, and
+        // the grid's contentPadding already holds it off the screen edge (#100).
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 16.dp),
+            .padding(top = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         OutlinedTextField(
@@ -3947,15 +3956,32 @@ private fun AddFictionSection(
 }
 
 /**
+ * A row that spans every column of a [LazyVerticalGrid], for content that is not a grid cell.
+ *
+ * The point of putting headers, search results and empty states through here rather than above the
+ * grid is that a lazy list is the only container on this screen that scrolls (#100). Anything
+ * placed outside it is placed *outside the viewport* once it is taller than the window, with no
+ * gesture that can reach it.
+ */
+internal fun LazyGridScope.fullWidthItem(
+    key: Any,
+    content: @Composable () -> Unit,
+) = item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
+
+/**
  * Server-side search, offered alongside the local filter rather than instead of it.
  *
  * The local filter above is instant, works offline, and matches what is already loaded. This one
  * costs a round trip but can match chapter titles and the narration text itself — "which chapter
  * was the bit about the lighthouse in" is a question with an answer on the server and none in the
  * app. Making it an explicit action keeps the offline case from silently becoming useless.
+ *
+ * Emits into the screen's grid rather than composing a `Column` of its own. A response can carry
+ * three groups of up to twenty hits each, every one of them a card with a snippet, which is far
+ * more than a phone screen holds — so these have to be items of the one scrolling container, and
+ * each hit has to be its own item so the list can recycle them.
  */
-@Composable
-private fun ServerSearchSection(
+internal fun LazyGridScope.serverSearchSection(
     query: String,
     results: SearchResponse?,
     isSearching: Boolean,
@@ -3965,12 +3991,7 @@ private fun ServerSearchSection(
     /** Null when the server has no read-along, which is where a text hit would otherwise land. */
     onOpenChapter: ((SearchHit) -> Unit)?,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
+    fullWidthItem(key = "server-search-action") {
         OutlinedButton(
             onClick = onSearch,
             enabled = query.isNotBlank() && !isSearching,
@@ -3979,53 +4000,77 @@ private fun ServerSearchSection(
         ) {
             Text(if (isSearching) "SEARCHING" else "SEARCH CHAPTERS AND TEXT ON THE SERVER")
         }
-        error?.let { MetaText(text = it, color = AarisColor.Danger) }
+    }
+    error?.let { message ->
+        fullWidthItem(key = "server-search-error") {
+            MetaText(text = message, color = AarisColor.Danger)
+        }
+    }
 
-        results?.let { found ->
-            if (found.total == 0) {
-                MetaText(text = "// Nothing on the server for \"${found.query}\"", color = AarisColor.Muted)
-            } else {
-                // Group order is rank order: fictions, then chapter titles, then narration text.
-                SearchHitGroup(
-                    title = "Fictions",
-                    group = found.fictions,
-                    onOpen = { hit -> hit.fictionId?.let(onOpenFiction) },
-                )
-                SearchHitGroup(
-                    title = "Chapter titles",
-                    group = found.chapters,
-                    onOpen = onOpenChapter,
-                )
-                SearchHitGroup(
-                    title = "In the text",
-                    group = found.text,
-                    onOpen = onOpenChapter,
-                )
-                if (!found.indexed) {
-                    // Worth saying rather than quietly returning less than the server could.
-                    MetaText(
-                        text = "// The full-text index is unavailable, so text matches may be incomplete",
-                        color = AarisColor.Dim,
-                    )
-                }
-            }
+    val found = results ?: return
+    if (found.total == 0) {
+        fullWidthItem(key = "server-search-empty") {
+            MetaText(
+                text = "// Nothing on the server for \"${found.query}\"",
+                color = AarisColor.Muted,
+            )
+        }
+        return
+    }
+
+    // Group order is rank order: fictions, then chapter titles, then narration text.
+    searchHitGroup(
+        id = "fictions",
+        title = "Fictions",
+        group = found.fictions,
+        onOpen = { hit -> hit.fictionId?.let(onOpenFiction) },
+    )
+    searchHitGroup(
+        id = "chapters",
+        title = "Chapter titles",
+        group = found.chapters,
+        onOpen = onOpenChapter,
+    )
+    searchHitGroup(
+        id = "text",
+        title = "In the text",
+        group = found.text,
+        onOpen = onOpenChapter,
+    )
+    if (!found.indexed) {
+        // Worth saying rather than quietly returning less than the server could.
+        fullWidthItem(key = "server-search-unindexed") {
+            MetaText(
+                text = "// The full-text index is unavailable, so text matches may be incomplete",
+                color = AarisColor.Dim,
+            )
         }
     }
 }
 
-@Composable
-private fun SearchHitGroup(
+/**
+ * [id] rather than [title] as the key prefix: the same chapter can be a hit in two groups, and a
+ * lazy list needs keys unique across the whole list, not within a section.
+ */
+internal fun LazyGridScope.searchHitGroup(
+    id: String,
     title: String,
     group: SearchGroup,
     onOpen: ((SearchHit) -> Unit)?,
 ) {
     if (group.items.isEmpty()) return
-    MetaText(
-        // `total` stops counting at the server's cap, so say "20+" rather than an exact-looking 20.
-        text = "// $title (${group.total}${if (group.capped) "+" else ""})",
-        color = AarisColor.Accent,
-    )
-    group.items.forEach { hit ->
+    fullWidthItem(key = "search-heading-$id") {
+        MetaText(
+            // `total` stops at the server's cap, so say "20+" rather than an exact-looking 20.
+            text = "// $title (${group.total}${if (group.capped) "+" else ""})",
+            color = AarisColor.Accent,
+        )
+    }
+    itemsIndexed(
+        items = group.items,
+        span = { _, _ -> GridItemSpan(maxLineSpan) },
+        key = { index, _ -> "search-hit-$id-$index" },
+    ) { _, hit ->
         AarisCard {
             Column(
                 modifier = Modifier
@@ -4053,7 +4098,12 @@ private fun SearchHitGroup(
         }
     }
     if (group.hasMore) {
-        MetaText(text = "// More matches on the server — narrow the search", color = AarisColor.Dim)
+        fullWidthItem(key = "search-more-$id") {
+            MetaText(
+                text = "// More matches on the server — narrow the search",
+                color = AarisColor.Dim,
+            )
+        }
     }
 }
 

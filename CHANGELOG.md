@@ -87,6 +87,12 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **A server search no longer hides the rest of the screen.** Results were drawn above the only
+  part of the browse screen that scrolled, so a search answering in all three groups — fictions,
+  chapter titles, narration text — pushed its own later hits and the entire fiction catalogue past
+  the bottom of the window, with no way to reach either. The screen now has one scrolling owner, so
+  every hit and the catalogue below it stay reachable however much the server found.
+  ([#100](https://github.com/jonarihen/TTSRoad-App/issues/100))
 - **Settings choices wrap instead of running off the side of the card.** Skip interval, sleep-timer
   default, volume boost, keep-chapters-ahead and keep-streamed-audio each laid their options out in
   a row that could not wrap. On a 320 dp phone, in split screen, or at a large display scale, the
