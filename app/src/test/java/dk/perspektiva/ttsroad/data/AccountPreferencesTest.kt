@@ -121,6 +121,43 @@ class AccountPreferenceMappingTest {
         assertEquals(19, mapOf("k" to "19").preferenceInt("k"))
         assertNull(mapOf("k" to "large").preferenceInt("k"))
     }
+
+    @Test
+    fun `auto mark played defaults to on, matching the server`() {
+        // A phone that has never synced must behave as the account would have told it to.
+        assertTrue(DefaultAutoMarkPlayed)
+        assertTrue(SyncedPreferences().autoMarkPlayed)
+    }
+
+    @Test
+    fun `a line height outside the server's range is pulled into it`() {
+        assertEquals(2.4f, sanitizeReaderLineHeight(9f), 0.0001f)
+        assertEquals(1.3f, sanitizeReaderLineHeight(0f), 0.0001f)
+        assertEquals(mapOf("reader_line_height" to 2.4f), readerLineHeightPatch(99f))
+    }
+
+    @Test
+    fun `an unreadable line height falls back to the default rather than to zero`() {
+        // The server declares this key on_invalid="default" rather than "reject", because the
+        // reader has to render something. A NaN reaching the text style would collapse the page.
+        assertEquals(DefaultReaderLineHeight, sanitizeReaderLineHeight(Float.NaN), 0.0001f)
+    }
+
+    @Test
+    fun `a fractional preference is not truncated to an integer`() {
+        // The whole reason preferenceNumber exists separately from preferenceInt: reading 1.75
+        // through the integer path would store 1, which is below the server's own minimum.
+        assertEquals(1.75f, mapOf("k" to 1.75).preferenceNumber("k")!!, 0.0001f)
+        assertEquals(1.75f, mapOf("k" to "1.75").preferenceNumber("k")!!, 0.0001f)
+    }
+
+    @Test
+    fun `a boolean is not read as a line height`() {
+        // true is 1 in some languages and never a line height; rejecting leaves the good value.
+        assertNull(mapOf("k" to true).preferenceNumber("k"))
+        assertNull(mapOf("k" to "airy").preferenceNumber("k"))
+        assertNull(emptyMap<String, Any?>().preferenceNumber("k"))
+    }
 }
 
 /**
@@ -261,6 +298,59 @@ class AccountPreferenceReconcileTest {
 
         assertEquals(ReaderTheme.Paper, reconcileAccountPreferences(server, local).readerTheme)
     }
+
+    @Test
+    fun `the server's auto mark played wins when it has one`() {
+        val local = SyncedPreferences(autoMarkPlayed = true)
+
+        val reconciled = reconcileAccountPreferences(mapOf("auto_mark_played" to false), local)
+
+        assertFalse(reconciled.autoMarkPlayed)
+    }
+
+    @Test
+    fun `a server with no opinion on auto mark played leaves the phone alone`() {
+        // An older server never heard of the key, and adopting its absence as "false" would stop
+        // marking chapters played on every install talking to one.
+        val local = SyncedPreferences(autoMarkPlayed = true)
+
+        assertTrue(reconcileAccountPreferences(emptyMap(), local).autoMarkPlayed)
+        assertFalse(
+            reconcileAccountPreferences(emptyMap(), local.copy(autoMarkPlayed = false))
+                .autoMarkPlayed,
+        )
+    }
+
+    @Test
+    fun `auto mark played is read as permissively as the server writes it`() {
+        // The server coerces "false"/"no"/"off"/0; a client reading the blob back should too.
+        val local = SyncedPreferences(autoMarkPlayed = true)
+
+        assertFalse(reconcileAccountPreferences(mapOf("auto_mark_played" to "false"), local).autoMarkPlayed)
+        assertFalse(reconcileAccountPreferences(mapOf("auto_mark_played" to 0), local).autoMarkPlayed)
+        assertTrue(reconcileAccountPreferences(mapOf("auto_mark_played" to "yes"), local).autoMarkPlayed)
+    }
+
+    @Test
+    fun `line height round-trips exactly, unlike the lossy reader mappings`() {
+        // Both ends store the same multiplier over the same range, so unlike theme and highlight
+        // there is no projection to lose information through. Every offered step survives.
+        for (height in ReaderLineHeights) {
+            val patched = readerLineHeightPatch(height)["reader_line_height"]
+            val readBack = reconcileAccountPreferences(
+                mapOf("reader_line_height" to patched),
+                SyncedPreferences(),
+            ).readerLineHeight
+            assertEquals("step $height", height, readBack, 0.0001f)
+        }
+    }
+
+    @Test
+    fun `a server with no opinion on line height leaves the phone alone`() {
+        val local = SyncedPreferences(readerLineHeight = 2.0f)
+
+        assertEquals(2.0f, reconcileAccountPreferences(emptyMap(), local).readerLineHeight, 0.0001f)
+    }
 }
 
 /** The PATCH bodies. The rule under test is that each carries exactly one key. */
@@ -322,47 +412,13 @@ class AccountPreferencePatchTest {
     }
 
     @Test
-    fun `auto mark played defaults to on, matching the server`() {
-        // A phone that has never synced must behave as the account would have told it to.
-        assertTrue(DefaultAutoMarkPlayed)
-        assertTrue(SyncedPreferences().autoMarkPlayed)
-    }
-
-    @Test
-    fun `the server's auto mark played wins when it has one`() {
-        val local = SyncedPreferences(autoMarkPlayed = true)
-
-        val reconciled = reconcileAccountPreferences(mapOf("auto_mark_played" to false), local)
-
-        assertFalse(reconciled.autoMarkPlayed)
-    }
-
-    @Test
-    fun `a server with no opinion on auto mark played leaves the phone alone`() {
-        // An older server never heard of the key, and adopting its absence as "false" would stop
-        // marking chapters played on every install talking to one.
-        val local = SyncedPreferences(autoMarkPlayed = true)
-
-        assertTrue(reconcileAccountPreferences(emptyMap(), local).autoMarkPlayed)
-        assertFalse(
-            reconcileAccountPreferences(emptyMap(), local.copy(autoMarkPlayed = false))
-                .autoMarkPlayed,
-        )
-    }
-
-    @Test
-    fun `auto mark played is read as permissively as the server writes it`() {
-        // The server coerces "false"/"no"/"off"/0; a client reading the blob back should too.
-        val local = SyncedPreferences(autoMarkPlayed = true)
-
-        assertFalse(reconcileAccountPreferences(mapOf("auto_mark_played" to "false"), local).autoMarkPlayed)
-        assertFalse(reconcileAccountPreferences(mapOf("auto_mark_played" to 0), local).autoMarkPlayed)
-        assertTrue(reconcileAccountPreferences(mapOf("auto_mark_played" to "yes"), local).autoMarkPlayed)
-    }
-
-    @Test
     fun `the auto mark played patch sends a real boolean`() {
         assertEquals(mapOf("auto_mark_played" to false), autoMarkPlayedPatch(false))
         assertEquals(mapOf("auto_mark_played" to true), autoMarkPlayedPatch(true))
+    }
+
+    @Test
+    fun `line height is synced now that there is a control for it`() {
+        assertTrue("reader_line_height" in AccountPreferenceKeys.Synced)
     }
 }
