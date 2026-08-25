@@ -87,6 +87,12 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **Now Playing fits a landscape screen.** The cover took whatever height was spare, and when there
+  was none spare the scrubber, the transport row and every tertiary action were laid out below the
+  window with nothing to scroll them into view — so in landscape, split screen, or at a large
+  display size, pause and the sleep timer could be genuinely unreachable. Short windows now put the
+  cover beside the title instead of above it and scroll, while a phone held upright is unchanged.
+  ([#101](https://github.com/jonarihen/TTSRoad-App/issues/101))
 - **A server search no longer hides the rest of the screen.** Results were drawn above the only
   part of the browse screen that scrolled, so a search answering in all three groups — fictions,
   chapter titles, narration text — pushed its own later hits and the entire fiction catalogue past
