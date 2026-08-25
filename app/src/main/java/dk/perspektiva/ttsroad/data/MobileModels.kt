@@ -490,6 +490,43 @@ data class AudioHash(
     @param:Json(name = "updated_at") val updatedAt: String? = null,
 )
 
+/**
+ * The shape every maintenance action answers with (#107, #112).
+ *
+ * One model for nine endpoints because they genuinely answer the same thing — "accepted, and here
+ * is how much it is about to do" — and the counts differ only in which field carries them. Every
+ * field is nullable or defaulted, so a route that has no count to report simply omits one rather
+ * than needing its own model.
+ *
+ * The counts are the point. "Re-narrate every chapter" and "rewrite the tags" both come back as
+ * `status: "ok"`, and the only thing that distinguishes a no-op from four hundred conversions is a
+ * number the user should be shown.
+ */
+data class MaintenanceResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+    @param:Json(name = "chapter_id") val chapterId: Int? = null,
+    /** Chapters requeued — by `retry-failed`, `retry-all-failed` or `reconvert-all`. */
+    @param:Json(name = "reset_count") val resetCount: Int? = null,
+    /** MP3s whose tags were rewritten by `retag`. */
+    @param:Json(name = "file_count") val fileCount: Int? = null,
+    /** Chapters the filter took out. Never un-excludes: a hand-excluded chapter had a reason. */
+    @param:Json(name = "excluded_count") val excludedCount: Int? = null,
+    /** Fictions touched by the library-wide retry. */
+    val fictions: Int? = null,
+    /** True when `poll` re-ingested the whole chapter list rather than the recent tail. */
+    @param:Json(name = "full_ingest") val fullIngest: Boolean = false,
+    /** How many chapters a partial poll re-read, when it took that branch. */
+    @param:Json(name = "partial_sync") val partialSync: Int? = null,
+    /** Set by `apply-chapter-filter` only, and only when there was no filter to apply. */
+    val detail: String? = null,
+    val excluded: Boolean? = null,
+)
+
+/** `POST /api/mobile/chapters/{id}/exclude` — take a chapter off every feed, or put it back. */
+data class ChapterExcludeRequest(val excluded: Boolean = true)
+
 data class QueueResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
     val items: List<QueueItem> = emptyList(),

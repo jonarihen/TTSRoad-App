@@ -91,6 +91,25 @@ data class ServerCapabilities(
     /** Multipart EPUB import over the mobile surface (#114). Separate from [fictionManagement]. */
     val epubUpload: Boolean = false,
 
+    /**
+     * Repair one chapter: retry it, exclude it, delete it (#107).
+     *
+     * Retry is open to any account and the destructive pair is admin-only, exactly as on the web —
+     * so this flag says the routes exist and [SessionState.isAdmin] says which of them this account
+     * may reach. A client needs both before it draws a button.
+     */
+    val chapterMaintenance: Boolean = false,
+
+    /**
+     * Act on a whole fiction: poll now, requeue its failures, re-run its chapter filter, rewrite
+     * its MP3 tags, re-narrate the lot (#112).
+     *
+     * The counterpart to the metadata editing that shipped in 0.11.0. The app can now put a fiction
+     * into a state — a renamed book whose files still carry the old title — whose fix used to be
+     * reachable only from a browser.
+     */
+    val fictionMaintenance: Boolean = false,
+
     /** The server can plan a download batch: which chapters, in what order, how many bytes. */
     val offlineDownloads: Boolean = false,
 
@@ -146,6 +165,8 @@ data class ServerCapabilities(
                 fictionManagement = flags.flag("fiction_management"),
                 audiobookExport = flags.flag("audiobook_export"),
                 epubUpload = flags.flag("epub_upload"),
+                chapterMaintenance = flags.flag("chapter_maintenance"),
+                fictionMaintenance = flags.flag("fiction_maintenance"),
                 offlineDownloads = flags.flag("offline_downloads"),
                 signedAudioUrls = flags.flag("signed_audio_urls"),
                 liveEvents = flags.flag("live_events"),
