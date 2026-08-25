@@ -214,6 +214,10 @@ object ServiceLocator {
                 // another's cache entries.
                 capabilities = repository(context).currentCapabilities,
                 downloadPrefs = downloadPreferences(context).prefs,
+                // A downloaded chapter keeps its text and cues too, so the reader works on a plane
+                // rather than only on chapters that happened to be opened beforehand.
+                pinReadAlong = { chapterId -> repository(context).pinReadAlong(chapterId) },
+                unpinReadAlong = { chapterId -> repository(context).unpinReadAlong(chapterId) },
             ).also { offlineDownloads = it }
         }
 }

@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -49,7 +50,33 @@ private class FakeReadAlongStore(
         entries[chapterId] = entry
     }
 
-    override fun clear() = entries.clear()
+    override fun clear() {
+        entries.clear()
+        pinned.clear()
+    }
+
+    /**
+     * Pinned ids, kept separately from [entries] the way the file store keeps them under a prefix
+     * eviction cannot see. The fake need not model eviction — [ReadAlongFileStoreTest] does that —
+     * only the distinction the repository asks it about.
+     */
+    private val pinned = mutableSetOf<Int>()
+
+    var pins = 0
+        private set
+
+    override fun pin(chapterId: Int, entry: CachedReadAlong) {
+        pins++
+        pinned += chapterId
+        entries[chapterId] = entry
+    }
+
+    override fun unpin(chapterId: Int) {
+        pinned -= chapterId
+        entries -= chapterId
+    }
+
+    override fun isPinned(chapterId: Int): Boolean = chapterId in pinned
 
     fun seed(chapterId: Int, entry: CachedReadAlong) {
         entries[chapterId] = entry
@@ -333,4 +360,104 @@ class ReadAlongRepositoryTest {
         val thrown = runCatching { repository.readAlong(chapterId = 10) }.exceptionOrNull()
         assertNotNull(thrown)
     }
+
+    @Test
+    fun `pinning fetches the document and holds it`() = runTest {
+        val store = FakeReadAlongStore()
+        val repository = repository(readAlongStore = store)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+
+        assertTrue(repository.pinReadAlong(chapterId = 10))
+
+        assertTrue(store.isPinned(chapterId = 10))
+        assertEquals(1, store.pins)
+        assertEquals("/api/mobile/chapters/10/readalong", server.takeRequest().path)
+    }
+
+    @Test
+    fun `pinning promotes a document already on disk without spending a request`() = runTest {
+        // A chapter read online and then downloaded should cost nothing extra. MockWebServer has
+        // nothing enqueued, so a request here would fail the test rather than pass it quietly.
+        val store = FakeReadAlongStore()
+        val repository = repository(readAlongStore = store)
+        store.seed(chapterId = 10, entry = cachedEntry())
+
+        assertTrue(repository.pinReadAlong(chapterId = 10))
+
+        assertTrue(store.isPinned(chapterId = 10))
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `pinning an already pinned chapter is free`() = runTest {
+        val store = FakeReadAlongStore()
+        val repository = repository(readAlongStore = store)
+        store.pin(chapterId = 10, entry = cachedEntry())
+
+        assertTrue(repository.pinReadAlong(chapterId = 10))
+
+        assertEquals(0, server.requestCount)
+        // Not re-written: the pin it already had is the pin it keeps.
+        assertEquals(1, store.pins)
+    }
+
+    @Test
+    fun `a chapter with no read-along pins nothing and does not fail`() = runTest {
+        // Plenty of chapters were converted before timings existed. Downloading one must not look
+        // like an error, and must not leave a phantom pin behind.
+        val store = FakeReadAlongStore()
+        val repository = repository(readAlongStore = store)
+        server.enqueue(MockResponse().setResponseCode(404))
+
+        assertFalse(repository.pinReadAlong(chapterId = 10))
+
+        assertFalse(store.isPinned(chapterId = 10))
+    }
+
+    @Test
+    fun `a failed prefetch is swallowed rather than failing the download behind it`() = runTest {
+        val store = FakeReadAlongStore()
+        val repository = repository(readAlongStore = store)
+        server.enqueue(MockResponse().setResponseCode(500))
+
+        assertFalse(repository.pinReadAlong(chapterId = 10))
+
+        assertFalse(store.isPinned(chapterId = 10))
+    }
+
+    @Test
+    fun `a revoked token still expires the session, but the prefetch does not throw`() = runTest {
+        // Two halves, and they are easy to conflate. The swallow stops the exception reaching the
+        // download that triggered this — a prefetch must never fail that. It does not, and should
+        // not, stop the expiry: authorized() clears the token before rethrowing, the token really
+        // is invalid, and every other call is about to fail too.
+        val sessionStore = store()
+        val repository = repository(sessionStore = sessionStore, readAlongStore = FakeReadAlongStore())
+        server.enqueue(MockResponse().setResponseCode(401))
+
+        assertFalse(repository.pinReadAlong(chapterId = 10))
+
+        assertEquals(1, sessionStore.clearTokenCalls)
+    }
+
+    @Test
+    fun `unpinning releases the held document`() = runTest {
+        val store = FakeReadAlongStore()
+        val repository = repository(readAlongStore = store)
+        store.pin(chapterId = 10, entry = cachedEntry())
+
+        repository.unpinReadAlong(chapterId = 10)
+
+        assertFalse(store.isPinned(chapterId = 10))
+    }
 }
+
+private fun cachedEntry(etag: String? = "\"abc\""): CachedReadAlong = CachedReadAlong(
+    etag = etag,
+    response = ReadAlongResponse(
+        chapter = ReadAlongChapter(id = 10, fictionId = 1, title = "Chapter 1", audioDuration = 60.0),
+        text = "The knight rode north.",
+        paragraphs = listOf(listOf(0.0, 22.0)),
+        cues = listOf(listOf(0.0, 3.0, 0.0)),
+    ),
+)

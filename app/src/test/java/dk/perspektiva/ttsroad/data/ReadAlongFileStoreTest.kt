@@ -161,4 +161,115 @@ class ReadAlongFileStoreTest {
         assertNull(store.read(chapterId = 10))
         assertFalse(blocked.isDirectory)
     }
+
+    @Test
+    fun `a pinned document survives an eviction that clears the whole browse cache`() {
+        // The property this whole split exists for. Downloading forty chapters for a flight used to
+        // be impossible to serve: the browse cache is bounded, so the earlier documents would be
+        // evicted before the plane left, and the reader would be empty exactly when it was needed.
+        val store = store(maxEntries = 2)
+        store.pin(chapterId = 10, entry = entry("The pinned chapter."))
+
+        for (chapterId in 20..30) {
+            store.write(chapterId = chapterId, entry = entry("Chapter $chapterId"))
+        }
+
+        assertTrue(store.isPinned(chapterId = 10))
+        assertNotNull(store.read(chapterId = 10))
+        assertEquals(2, store.size())
+        assertEquals(1, store.pinnedSize())
+    }
+
+    @Test
+    fun `the bound counts only the evictable half`() {
+        val store = store(maxEntries = 2)
+        for (chapterId in 1..5) store.pin(chapterId = chapterId, entry = entry("Chapter $chapterId"))
+
+        // Five pinned documents do not push each other out, and do not consume the browse bound.
+        assertEquals(5, store.pinnedSize())
+        assertEquals(0, store.size())
+        for (chapterId in 1..5) assertNotNull(store.read(chapterId = chapterId))
+    }
+
+    @Test
+    fun `pinning promotes the browse copy rather than keeping two`() {
+        val store = store()
+        store.write(chapterId = 10, entry = entry("Read while online."))
+        assertEquals(1, store.size())
+
+        store.pin(chapterId = 10, entry = entry("Read while online."))
+
+        assertEquals(0, store.size())
+        assertEquals(1, store.pinnedSize())
+        assertEquals("Read while online.", store.read(chapterId = 10)?.response?.text)
+    }
+
+    @Test
+    fun `revalidating a pinned chapter updates it in place`() {
+        // A write after pinning must not leave the pinned copy stale while a fresher one sits in
+        // the evictable half, which is what a naive "write always goes to the browse cache" does.
+        val store = store()
+        store.pin(chapterId = 10, entry = entry("Original.", etag = "\"v1\""))
+
+        store.write(chapterId = 10, entry = entry("Corrected.", etag = "\"v2\""))
+
+        assertEquals(0, store.size())
+        assertEquals(1, store.pinnedSize())
+        assertEquals("Corrected.", store.read(chapterId = 10)?.response?.text)
+        assertEquals("\"v2\"", store.read(chapterId = 10)?.etag)
+    }
+
+    @Test
+    fun `unpinning releases the document`() {
+        val store = store()
+        store.pin(chapterId = 10, entry = entry("Downloaded."))
+
+        store.unpin(chapterId = 10)
+
+        assertFalse(store.isPinned(chapterId = 10))
+        assertNull(store.read(chapterId = 10))
+        assertEquals(0, store.pinnedSize())
+    }
+
+    @Test
+    fun `unpinning a chapter that was never pinned is harmless`() {
+        val store = store()
+        store.unpin(chapterId = 999)
+        assertFalse(store.isPinned(chapterId = 999))
+    }
+
+    @Test
+    fun `clearing empties both halves`() {
+        // "Free the space" is one intent, as it is for the two audio caches.
+        val store = store()
+        store.write(chapterId = 10, entry = entry("Browsed."))
+        store.pin(chapterId = 11, entry = entry("Downloaded."))
+
+        store.clear()
+
+        assertEquals(0, store.size())
+        assertEquals(0, store.pinnedSize())
+        assertNull(store.read(chapterId = 10))
+        assertNull(store.read(chapterId = 11))
+    }
+
+    @Test
+    fun `a pinned chapter is read in preference to a browse copy of the same chapter`() {
+        // Both can exist if a build wrote one before the other; the pinned copy is the one somebody
+        // asked for, so it wins — the same order playback reads its two audio caches in.
+        val store = store()
+        store.pin(chapterId = 10, entry = entry("Pinned text."))
+        File(folder.root, "readalong_10.json").writeText(
+            File(folder.root, "pinned-readalong_10.json").readText().replace("Pinned text.", "Stale text."),
+        )
+
+        assertEquals("Pinned text.", store.read(chapterId = 10)?.response?.text)
+    }
+
+    @Test
+    fun `the pinned prefix cannot be mistaken for an evictable one`() {
+        // The entire mechanism: eviction lists files by prefix, so a pinned name that started with
+        // the evictable prefix would be deleted by the very bound it is meant to be exempt from.
+        assertFalse("pinned-readalong_".startsWith("readalong_"))
+    }
 }

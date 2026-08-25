@@ -79,6 +79,15 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **A downloaded chapter can now be read offline, not just heard.** Downloads fetched the audio and
+  nothing else, so pressing READ on a plane showed an empty reader for every chapter you had not
+  happened to open beforehand — the half of the feature you cannot arrange in advance, missing
+  exactly when it is needed. Downloading a chapter now keeps its text and cues with it.
+  ([#123](https://github.com/jonarihen/TTSRoad-App/issues/123))
+- **They are held rather than cached**, so a flight's worth of chapters cannot push each other out.
+  The reader's ordinary cache is bounded and drops the oldest; documents belonging to a download are
+  exempt from that, and are released when the download is deleted. Deleting downloads frees them
+  too. Chapters you only read stay bounded exactly as before.
 - **Line spacing in the reader, and it follows your account.** The reader had text size, page
   colour and highlight; spacing was the one appearance setting the account could hold and the app
   could not offer, so it was the one that did not match the browser. Five steps from tight to airy,

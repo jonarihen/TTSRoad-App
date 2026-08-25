@@ -16,11 +16,30 @@ interface ReadAlongStore {
     fun write(chapterId: Int, entry: CachedReadAlong)
     fun clear()
 
+    /**
+     * Keep [chapterId]'s document until it is explicitly released, exempt from eviction.
+     *
+     * For a chapter the user downloaded on purpose. The browse cache is bounded and evicts by age,
+     * which is right for chapters merely visited and wrong for a flight's worth of downloads: the
+     * app already learned this with audio, where a single LRU-evicted store meant any cap would
+     * eventually delete something someone had asked for by name.
+     */
+    fun pin(chapterId: Int, entry: CachedReadAlong)
+
+    /** Release a pinned document. The browse cache's copy, if any, is left alone. */
+    fun unpin(chapterId: Int)
+
+    /** Whether [chapterId] is pinned — so a caller can skip re-fetching what it already holds. */
+    fun isPinned(chapterId: Int): Boolean
+
     /** Persists nothing. The default, so a repository built without a files directory still works. */
     object None : ReadAlongStore {
         override fun read(chapterId: Int): CachedReadAlong? = null
         override fun write(chapterId: Int, entry: CachedReadAlong) = Unit
         override fun clear() = Unit
+        override fun pin(chapterId: Int, entry: CachedReadAlong) = Unit
+        override fun unpin(chapterId: Int) = Unit
+        override fun isPinned(chapterId: Int): Boolean = false
     }
 }
 
@@ -42,26 +61,61 @@ class ReadAlongFileStore(
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val adapter = moshi.adapter(CachedReadAlong::class.java)
 
+    /**
+     * The pinned copy first, then the browse cache — the same order playback reads its two audio
+     * caches in, and for the same reason: the pinned one is the copy somebody asked for.
+     */
     override fun read(chapterId: Int): CachedReadAlong? =
         runCatching {
-            val file = fileFor(chapterId)
-            if (file.isFile) adapter.fromJson(file.readText()) else null
+            val file = listOf(pinnedFileFor(chapterId), fileFor(chapterId)).firstOrNull { it.isFile }
+            file?.let { adapter.fromJson(it.readText()) }
         }.getOrNull()
 
     override fun write(chapterId: Int, entry: CachedReadAlong) {
         runCatching {
             if (!directory.isDirectory && !directory.mkdirs()) return
+            // A pinned chapter is revalidated in place rather than gaining a second copy: writing
+            // to the browse cache instead would leave the pinned file stale and double the bytes.
+            if (pinnedFileFor(chapterId).isFile) {
+                pinnedFileFor(chapterId).writeText(adapter.toJson(entry))
+                return
+            }
             fileFor(chapterId).writeText(adapter.toJson(entry))
             evictOldest()
         }
     }
 
-    override fun clear() {
-        runCatching { cachedFiles().forEach(File::delete) }
+    override fun pin(chapterId: Int, entry: CachedReadAlong) {
+        runCatching {
+            if (!directory.isDirectory && !directory.mkdirs()) return
+            pinnedFileFor(chapterId).writeText(adapter.toJson(entry))
+            // The browse copy is now redundant, and leaving it would keep occupying a slot in a
+            // bound meant for chapters that have no pinned copy.
+            runCatching { fileFor(chapterId).delete() }
+        }
     }
 
-    /** Cached chapter count — the bound is what keeps a long series off the phone's storage. */
+    override fun unpin(chapterId: Int) {
+        runCatching { pinnedFileFor(chapterId).delete() }
+    }
+
+    override fun isPinned(chapterId: Int): Boolean = pinnedFileFor(chapterId).isFile
+
+    /** Both halves: "free the space" is one intent, as it is for the two audio caches. */
+    override fun clear() {
+        runCatching { (cachedFiles() + pinnedFiles()).forEach(File::delete) }
+    }
+
+    /**
+     * Cached chapter count — the bound is what keeps a long series off the phone's storage.
+     *
+     * Counts the evictable half only, because that is what the bound applies to. Pinned documents
+     * are not "cache" in the sense this number is about.
+     */
     fun size(): Int = cachedFiles().size
+
+    /** How many documents are held for downloaded chapters, and so exempt from the bound. */
+    fun pinnedSize(): Int = pinnedFiles().size
 
     /**
      * Drop the least recently written chapters. Last-modified is a good enough recency signal here:
@@ -75,15 +129,35 @@ class ReadAlongFileStore(
             .forEach { runCatching { it.delete() } }
     }
 
+    /**
+     * The evictable half only.
+     *
+     * The pinned prefix deliberately does not start with [Prefix], so this filter cannot see a
+     * pinned file and eviction cannot reach one. That is the whole mechanism — there is no index to
+     * fall out of step with the files on disk.
+     */
     private fun cachedFiles(): List<File> =
         directory.listFiles { file: File -> file.isFile && file.name.startsWith(Prefix) }
             ?.toList()
             ?: emptyList()
 
+    private fun pinnedFiles(): List<File> =
+        directory.listFiles { file: File -> file.isFile && file.name.startsWith(PinnedPrefix) }
+            ?.toList()
+            ?: emptyList()
+
     private fun fileFor(chapterId: Int) = File(directory, "$Prefix$chapterId.json")
+
+    private fun pinnedFileFor(chapterId: Int) = File(directory, "$PinnedPrefix$chapterId.json")
 
     private companion object {
         const val Prefix = "readalong_"
+
+        /**
+         * Must not begin with [Prefix], or eviction would list pinned files and delete them — the
+         * exact failure this split exists to prevent.
+         */
+        const val PinnedPrefix = "pinned-readalong_"
 
         /** Roughly a fortnight of reading before anything is dropped, at a few hundred kB each. */
         const val DefaultMaxEntries = 40
