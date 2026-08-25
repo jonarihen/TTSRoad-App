@@ -172,6 +172,7 @@ class TouchTargetTest {
                     canRead = true,
                     canBookmark = true,
                     canJumpBack = true,
+                    canOpenQueue = true,
                     onRetry = {},
                     onSeek = {},
                     onPreviousChapter = {},
@@ -185,6 +186,7 @@ class TouchTargetTest {
                     onBookmark = {},
                     onOpenJumpBack = {},
                     onOpenChapters = {},
+                    onOpenQueue = {},
                 )
             }
         }

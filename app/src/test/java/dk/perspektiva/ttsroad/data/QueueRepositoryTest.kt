@@ -149,6 +149,52 @@ class QueueRepositoryTest {
     }
 
     @Test
+    fun `reorder sends the whole order, head first`() = runTest {
+        // The endpoint takes the complete order rather than a move instruction, and it takes *row*
+        // ids. Sending chapter ids here would rearrange nothing and report success.
+        val repository = repository(queue = true)
+        server.enqueue(json("""{"status": "ok", "items": [], "total": 0}"""))
+
+        repository.reorderQueue(listOf(12, 11, 13))
+
+        server.takeRequest()
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body, """"action":"reorder"""" in body)
+        assertTrue(body, """"item_ids":[12,11,13]""" in body)
+    }
+
+    @Test
+    fun `queue_when_empty is written to the account, not to a device store`() = runTest {
+        // The server acts on this inside `advance`, so the phone's copy would be an opinion about
+        // a decision it does not make. It PATCHes the account and re-reads.
+        val repository = repository(queue = true)
+        server.enqueue(json("""{"preferences": {"queue_when_empty": "continue"}}"""))
+
+        assertTrue(repository.setQueueWhenEmpty(QueueWhenEmptyContinue))
+
+        server.takeRequest()
+        val request = server.takeRequest()
+        assertEquals("/api/me/preferences", request.path)
+        assertEquals("PATCH", request.method)
+        val body = request.body.readUtf8()
+        assertTrue(body, """"queue_when_empty":"continue"""" in body)
+    }
+
+    @Test
+    fun `an unknown queue_when_empty value is never written back`() = runTest {
+        // A newer server could grow a third option. Guessing at it here would overwrite that
+        // account setting with "stop" the moment someone opened the screen and touched the chips.
+        val repository = repository(queue = true)
+        server.enqueue(json("""{"preferences": {}}"""))
+
+        repository.setQueueWhenEmpty("shuffle")
+
+        server.takeRequest()
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body, """"queue_when_empty":"stop"""" in body)
+    }
+
+    @Test
     fun `advance reports what should play next and where it came from`() = runTest {
         val repository = repository(queue = true)
         server.enqueue(
@@ -218,6 +264,8 @@ class QueueRepositoryTest {
         assertNull(repository.removeFromQueue(listOf(11)))
         assertNull(repository.clearQueue())
         assertNull(repository.advanceQueue())
+        assertNull(repository.reorderQueue(listOf(11, 12)))
+        assertFalse(repository.setQueueWhenEmpty(QueueWhenEmptyContinue))
 
         server.takeRequest()
         assertEquals(1, server.requestCount)
@@ -229,6 +277,7 @@ class QueueRepositoryTest {
 
         assertNull(repository.addToQueue(emptyList()))
         assertNull(repository.removeFromQueue(emptyList()))
+        assertNull(repository.reorderQueue(emptyList()))
 
         server.takeRequest()
         assertEquals(1, server.requestCount)

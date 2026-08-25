@@ -62,6 +62,18 @@ object AccountPreferenceKeys {
     const val ReaderTheme = "reader_theme"
     const val ReaderHighlight = "reader_highlight"
 
+    /**
+     * What playback does when the cross-library queue runs dry: `stop`, or keep going with the
+     * oldest unplayed chapter in the library.
+     *
+     * Not in [Synced], and not an oversight. Every other key here has a local copy this phone shows
+     * with no network; this one has none, because the decision is made *server-side* inside
+     * `advance` — which is the point of calling `advance` rather than picking the next chapter
+     * locally. So the app reads the current value off the queue payload and writes it with a plain
+     * PATCH, and there is nothing to reconcile.
+     */
+    const val QueueWhenEmpty = "queue_when_empty"
+
     /** Keys this client reads and writes. Anything else on the account is left untouched. */
     val Synced: Set<String> = setOf(
         HidePlayed,
@@ -342,3 +354,27 @@ fun readerThemePatch(theme: ReaderTheme): Map<String, Any?> =
 
 fun readerHighlightPatch(granularity: HighlightGranularity): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.ReaderHighlight to serverReaderHighlight(granularity))
+
+/** Stop at the end of the queue. The server's default: waking to an unrelated book is a surprise. */
+const val QueueWhenEmptyStop: String = "stop"
+
+/** Keep going with the oldest unplayed chapter in the library. */
+const val QueueWhenEmptyContinue: String = "continue"
+
+/**
+ * Snap to a value the server declares, so an unknown spelling cannot be written back.
+ *
+ * The server would reject or clamp it anyway; refusing here means a queue payload from a newer
+ * server that grew a third option shows as [QueueWhenEmptyStop] rather than as a blank control —
+ * and, more importantly, that opening the picker and closing it cannot overwrite that third option
+ * with a guess.
+ */
+fun sanitizeQueueWhenEmpty(value: String?): String =
+    if (value?.trim()?.lowercase() == QueueWhenEmptyContinue) {
+        QueueWhenEmptyContinue
+    } else {
+        QueueWhenEmptyStop
+    }
+
+fun queueWhenEmptyPatch(value: String): Map<String, Any?> =
+    mapOf(AccountPreferenceKeys.QueueWhenEmpty to sanitizeQueueWhenEmpty(value))

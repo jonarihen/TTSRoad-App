@@ -40,6 +40,15 @@ sealed interface AppScreen {
 
     /** Every bookmark on the account, newest first. Reached from Settings and from the player. */
     data object Bookmarks : AppScreen
+
+    /**
+     * The cross-library Up Next queue. Reached from the player and from Settings.
+     *
+     * The queue has been writable since 0.11.0 and had nowhere to be looked at: a chapter could be
+     * added from the long-press sheet to a list that could not be seen, corrected or emptied
+     * without a car or a browser (#108).
+     */
+    data object Queue : AppScreen
 }
 
 /** Stable key for per-entry saved UI state (scroll offsets, search text). */
@@ -58,6 +67,7 @@ val AppScreen.saveKey: String
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Devices"
         AppScreen.Bookmarks -> "Bookmarks"
+        AppScreen.Queue -> "Queue"
     }
 
 /** The stack every session starts from. */
