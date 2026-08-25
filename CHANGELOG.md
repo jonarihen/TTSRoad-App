@@ -94,6 +94,16 @@ Notable changes to the TTSRoad Android client.
   it. Every one of them is now at least Android's 48 dp minimum, without anything looking bigger.
   Reader chips also announce themselves as a choice with one selected, which colour alone never
   told a screen reader. ([#104](https://github.com/jonarihen/TTSRoad-App/issues/104))
+- **A downloaded chapter can no longer be silently out of date.** Chapter audio is not immutable —
+  re-converting, retrying, retagging or re-narrating after a text rule change all rewrite the MP3
+  in place, and the URL does not change when they do. A chapter already on the phone therefore kept
+  playing the old narration indefinitely, and nothing gave anyone a reason to delete it. The app now
+  asks the server what each downloaded chapter's audio hashes to, marks the ones that no longer
+  match as **Outdated copy**, and offers to fetch them again — one line on the fiction screen when
+  a re-convert touched twenty of them at once. It reports and offers rather than acting: re-fetching
+  a book's worth of audio is the user's decision and possibly their mobile data. Downloads made
+  before this shipped are adopted as-is rather than assumed stale, so upgrading does not re-download
+  a library. ([#109](https://github.com/jonarihen/TTSRoad-App/issues/109))
 - **Now Playing fits a landscape screen.** The cover took whatever height was spare, and when there
   was none spare the scrubber, the transport row and every tertiary action were laid out below the
   window with nothing to scroll them into view — so in landscape, split screen, or at a large

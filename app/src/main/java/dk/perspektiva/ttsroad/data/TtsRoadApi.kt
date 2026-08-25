@@ -65,6 +65,19 @@ interface TtsRoadApi {
     ): ChaptersResponse
 
     /**
+     * Content hashes for one fiction's converted chapters — what a download index needs and nothing
+     * else (#109).
+     *
+     * Deliberately not the chapter list. That carries titles, statuses, per-user playback and
+     * read-along flags, and on a several-hundred-chapter serial it is a lot of bytes to re-fetch in
+     * order to be told nothing changed. This is the same question asked directly.
+     *
+     * Gated on the `audio_content_hash` capability: an older server has no route here at all.
+     */
+    @GET("api/mobile/fictions/{fiction_id}/audio-hashes")
+    suspend fun audioHashes(@Path("fiction_id") fictionId: Int): AudioHashesResponse
+
+    /**
      * Returns the raw [Response] rather than the body so the caller can see the `ETag` and a `304`.
      * Chapter text never changes after conversion, so revalidation is the normal path for any
      * chapter opened twice, and re-downloading a megabyte of cues to be told nothing changed is

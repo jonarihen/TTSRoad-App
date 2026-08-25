@@ -437,6 +437,20 @@ class TtsRoadRepository(
         )
     }
 
+    /**
+     * What each converted chapter of [fictionId] currently hashes to, or null when this server
+     * cannot answer.
+     *
+     * Null rather than an exception for both refusals — an older server without the capability, and
+     * a request that failed — because the caller is a background freshness check. Every answer it
+     * cannot get means "carry on with what is on disk", which is also the answer when nothing has
+     * changed, so a failure here must not surface as an error on a screen the user opened to read.
+     */
+    suspend fun audioHashes(fictionId: Int): AudioHashesResponse? {
+        if (!_currentCapabilities.value.audioContentHash) return null
+        return runCatching { withAuthorizedApi { it.audioHashes(fictionId) } }.getOrNull()
+    }
+
     suspend fun saveProgress(
         fictionId: Int,
         chapterId: Int,
