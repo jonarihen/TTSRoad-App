@@ -56,6 +56,14 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- **Third-rank text is readable.** The `Dim` token was 2.19:1 against the hover surface and 2.39:1
+  on a card, well under the 4.5:1 floor — so remaining time, chapter metadata, bookmark notes,
+  search snippets and every Settings explanation were effectively decorative for anyone with
+  imperfect sight or an imperfect screen. It now clears WCAG AA on all four surfaces, at the same
+  value the desktop client moved to. Error text moved with it: `Danger` was 4.27:1 on the hover
+  surface. ([#102](https://github.com/jonarihen/TTSRoad-App/issues/102))
+- Disabled controls have a token of their own instead of borrowing the one used for body text, so
+  raising that one did not leave an unavailable row looking available.
 - **Downloads and streaming no longer share one cache.** They could not have separate policies while
   they did: Media3's LRU evictor cannot tell a downloaded span from a streamed one, so any cap on the
   shared store would eventually have deleted a chapter someone downloaded on purpose — the exact

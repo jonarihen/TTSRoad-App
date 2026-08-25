@@ -38,14 +38,42 @@ object AarisColor {
     val BgInput = Color(0xFF0B0D11)
     val Ink = Color(0xFFE9ECEF)
     val Muted = Color(0xFF8B939E)
-    val Dim = Color(0xFF4D545E)
+
+    /**
+     * Third-rank text — durations, status hints, the line under a setting explaining it.
+     *
+     * Third rank, but still text. The old `#4D545E` was 2.19:1 on the hover surface and 2.39:1 on a
+     * card, which is not a de-emphasis but an erasure: at the 10–11sp `MetaText` uses, it made
+     * remaining time, chapter metadata, bookmark notes, search snippets and every Settings
+     * explanation effectively decorative for anyone with imperfect sight or an imperfect screen.
+     * The hierarchy has to come from emphasis, not from unreadability.
+     *
+     * This is the lowest AARIS foreground clearing WCAG AA 4.5:1 against [Bg], [BgRaise], [BgHover]
+     * and [BgInput] — the same value the desktop client moved to, so the two read alike.
+     * `TtsRoadThemeContrastTest` holds it there.
+     *
+     * **Not for disabled controls.** [Disabled] is that, and is deliberately below AA.
+     */
+    val Dim = Color(0xFF808995)
+
+    /**
+     * A control that cannot be used right now.
+     *
+     * The old [Dim], kept for the one thing it was legitimately doing. Disabled controls are exempt
+     * from the contrast floor precisely because looking unavailable is the message, so this stays
+     * out of the contrast test — and out of anything a user is meant to read.
+     */
+    val Disabled = Color(0xFF4D545E)
+
     val Line = Color(0xFF232830)
     val LineSoft = Color(0xFF1A1E25)
     val Accent = Color(0xFFFF5A1F)
     val AccentHover = Color(0xFFFF7A44)
     val Ok = Color(0xFF3FD97F)
     val Warning = Color(0xFFFFB224)
-    val Danger = Color(0xFFE5484D)
+    // 4.27:1 on the hover surface as #E5484D, and error text is the last thing that should be hard
+    // to read. Raised to the desktop client's corrected value, which clears AA on every surface.
+    val Danger = Color(0xFFEC555A)
 }
 
 /** IBM Plex Mono carries the design's labels; the system monospace stands in on-device. */
