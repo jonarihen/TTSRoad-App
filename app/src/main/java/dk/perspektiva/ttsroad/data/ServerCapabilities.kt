@@ -79,6 +79,39 @@ data class ServerCapabilities(
      * for that half.
      */
     val fictionManagement: Boolean = false,
+
+    /**
+     * Whole-fiction M4B exports can be listed and downloaded (#113).
+     *
+     * Says the API surface exists, not that the server can currently produce one — that depends on
+     * ffmpeg, which `/api/mobile/exports` reports per request.
+     */
+    val audiobookExport: Boolean = false,
+
+    /** Multipart EPUB import over the mobile surface (#114). Separate from [fictionManagement]. */
+    val epubUpload: Boolean = false,
+
+    /** The server can plan a download batch: which chapters, in what order, how many bytes. */
+    val offlineDownloads: Boolean = false,
+
+    /** Short-lived signed audio URLs, for players that cannot attach a header. Android can. */
+    val signedAudioUrls: Boolean = false,
+
+    /** A server-push event stream. Browser-only by design; listed so the panel can say so. */
+    val liveEvents: Boolean = false,
+
+    /** Per-fiction voice selection and preview exist server-side. No mobile client yet (#111). */
+    val voicePreview: Boolean = false,
+
+    /**
+     * Every flag the server advertised, exactly as sent, including ones this build has never heard
+     * of.
+     *
+     * Kept alongside the typed fields rather than instead of them: the fields are what gates UI,
+     * and this is what the Settings panel lists. A newer server's flag has no field to land in, and
+     * dropping it would make the panel quietly wrong about what the server can do (#120).
+     */
+    val advertised: Map<String, Boolean> = emptyMap(),
     val maxChaptersPerPage: Int? = null,
     /**
      * How many items `/playback/sync` accepts in one batch. Null on a server that does not say, in
@@ -86,6 +119,8 @@ data class ServerCapabilities(
      * having a whole flush rejected with a 400.
      */
     val maxPlaybackSyncItems: Int? = null,
+    /** The largest EPUB the server will accept, for checking a file before uploading it (#114). */
+    val maxEpubBytes: Long? = null,
 ) {
     companion object {
         /** What an older server — or an unreachable one — is assumed to support. */
@@ -109,8 +144,21 @@ data class ServerCapabilities(
                 follows = flags.flag("follows"),
                 playerPreferences = flags.flag("player_preferences"),
                 fictionManagement = flags.flag("fiction_management"),
+                audiobookExport = flags.flag("audiobook_export"),
+                epubUpload = flags.flag("epub_upload"),
+                offlineDownloads = flags.flag("offline_downloads"),
+                signedAudioUrls = flags.flag("signed_audio_urls"),
+                liveEvents = flags.flag("live_events"),
+                voicePreview = flags.flag("voice_preview"),
+                // Only entries that are actually booleans. A server sending something else for a
+                // key is saying something this build cannot read, and listing it as "off" would be
+                // a guess presented as fact.
+                advertised = flags.mapNotNull { (key, value) ->
+                    (value as? Boolean)?.let { key to it }
+                }.toMap(),
                 maxChaptersPerPage = response.limits.intLimit("max_chapters_per_page"),
                 maxPlaybackSyncItems = response.limits.intLimit("max_playback_sync_items"),
+                maxEpubBytes = response.limits.longLimit("max_epub_bytes"),
             )
         }
 
@@ -122,5 +170,8 @@ data class ServerCapabilities(
 
         /** Moshi parses every JSON number as a Double, so accept any [Number] and drop the rest. */
         private fun Map<String, Any?>.intLimit(key: String): Int? = (this[key] as? Number)?.toInt()
+
+        /** As [intLimit], for a limit that can exceed what an Int holds — a byte count. */
+        private fun Map<String, Any?>.longLimit(key: String): Long? = (this[key] as? Number)?.toLong()
     }
 }

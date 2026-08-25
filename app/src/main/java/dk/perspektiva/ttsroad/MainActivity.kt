@@ -140,6 +140,7 @@ import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.Bookmark
+import dk.perspektiva.ttsroad.data.CapabilityCatalog
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.DeviceSession
 import dk.perspektiva.ttsroad.data.FictionAddResult
@@ -2364,6 +2365,65 @@ private fun SettingsScreen(
                     )
                     OutlinedButton(onClick = onOpenBookmarks, shape = RectangleShape) {
                         Text("BOOKMARKS")
+                    }
+                }
+            }
+        }
+
+        MetaText(text = "// Server", color = AarisColor.Accent)
+        AarisCard {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                SettingsItem(
+                    label = "Version",
+                    value = capabilities.serverVersion ?: "Not reported",
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(
+                    text = "What this server can do. The app hides anything it cannot back, so a " +
+                        "control you expected and cannot find is usually explained here.",
+                    color = AarisColor.Dim,
+                )
+                val rows = remember(capabilities.advertised) {
+                    CapabilityCatalog.rows(capabilities.advertised)
+                }
+                if (rows.isEmpty()) {
+                    // A server too old to answer /capabilities at all, or one not reached yet.
+                    // Listing every feature as unsupported would be a guess presented as fact.
+                    MetaText(
+                        text = "This server did not say. Anything added since it was built is " +
+                            "assumed unavailable.",
+                        color = AarisColor.Muted,
+                    )
+                } else {
+                    rows.forEach { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            MetaText(
+                                text = row.label,
+                                color = if (row.supported) AarisColor.Ink else AarisColor.Dim,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            MetaText(
+                                text = when {
+                                    row.note != null -> row.note
+                                    row.supported -> "Yes"
+                                    else -> "No"
+                                },
+                                color = when {
+                                    row.note != null -> AarisColor.Muted
+                                    row.supported -> AarisColor.Ok
+                                    else -> AarisColor.Dim
+                                },
+                            )
+                        }
                     }
                 }
             }
