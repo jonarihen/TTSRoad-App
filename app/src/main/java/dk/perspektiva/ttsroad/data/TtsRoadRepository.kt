@@ -675,6 +675,58 @@ class TtsRoadRepository(
         return runCatching { withAuthorizedApi { it.updateAccountPreferences(patch) } }.isSuccess
     }
 
+    /**
+     * Every podcast URL this account can hand to a podcast app, or null on a server without them.
+     *
+     * Null is not "no feeds" — it means this server has no way to *tell* the app what the URLs are,
+     * so nothing should be drawn rather than a share button that shares nothing.
+     */
+    suspend fun feeds(scope: String = LibraryScopeFollowed): FeedsResponse? {
+        if (!_currentCapabilities.value.feedUrls) return null
+        return withAuthorizedApi { it.feeds(scope) }
+    }
+
+    /** Revoke and reissue this account's combined feed and OPML links. Self-service. */
+    suspend fun rotateLibraryFeed(): LibraryFeedRotateResponse? {
+        if (!_currentCapabilities.value.feedUrls) return null
+        return withAuthorizedApi { it.rotateLibraryFeed() }
+    }
+
+    /**
+     * Revoke and reissue one fiction's feed link. Admin only, server-side.
+     *
+     * Gated on `fiction_maintenance` rather than `feed_urls`: the route lives with the other
+     * whole-fiction admin actions, and a server could advertise the read-only feed list without it.
+     */
+    suspend fun rotateFictionFeedToken(fictionId: Int): MaintenanceResponse? {
+        if (!_currentCapabilities.value.fictionMaintenance) return null
+        return withAuthorizedApi { it.rotateFictionFeedToken(fictionId) }
+    }
+
+    /**
+     * This account's positions and marks, as the server's own document.
+     *
+     * Returned as the opaque map the server sent. Nothing here reads or rewrites it: a document
+     * from a newer server has to survive a round trip through an older app, and the only way to
+     * guarantee that is never to parse it.
+     */
+    suspend fun exportListeningState(): Map<String, Any?>? {
+        if (!_currentCapabilities.value.listeningStateBackup) return null
+        return withAuthorizedApi { it.exportListeningState() }.document
+    }
+
+    /**
+     * Merge a previously exported document back into this account.
+     *
+     * Never destructive server-side — a position only moves forward and bookmarks are added rather
+     * than reconciled — so restoring a six-month-old backup over a live account cannot undo six
+     * months of listening. The report is what says whether it did anything.
+     */
+    suspend fun importListeningState(document: Map<String, Any?>): Map<String, Any?>? {
+        if (!_currentCapabilities.value.listeningStateBackup) return null
+        return withAuthorizedApi { it.importListeningState(mapOf("document" to document)) }.report
+    }
+
     // Maintenance (#107, #112). Every call answers a [MaintenanceResponse] or null, and null means
     // exactly one thing: this server does not have the route. A *failure* throws, because unlike the
     // background freshness check these are actions the user pressed a button for and expects to be

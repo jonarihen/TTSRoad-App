@@ -522,10 +522,92 @@ data class MaintenanceResponse(
     /** Set by `apply-chapter-filter` only, and only when there was no filter to apply. */
     val detail: String? = null,
     val excluded: Boolean? = null,
+    /** The new URL, after `feed-token/rotate`. Saves re-fetching the feed list to read it back. */
+    @param:Json(name = "feed_token_version") val feedTokenVersion: Int? = null,
+    @param:Json(name = "feed_url") val feedUrl: String? = null,
 )
 
 /** `POST /api/mobile/chapters/{id}/exclude` — take a chapter off every feed, or put it back. */
 data class ChapterExcludeRequest(val excluded: Boolean = true)
+
+/**
+ * `GET /api/mobile/feeds` — every podcast URL this account can hand to a podcast app (#115).
+ *
+ * Serving a private podcast feed is the feature TTSRoad is built around, and the phone is where a
+ * podcast app lives. The only way to get a tokenised feed URL onto a phone used to be mailing it to
+ * yourself from a laptop.
+ */
+data class FeedsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    /** `followed` or `all`, echoed back — the same scoping `/library` uses. */
+    val scope: String = LibraryScopeFollowed,
+    val library: LibraryFeed = LibraryFeed(),
+    val fictions: List<FictionFeed> = emptyList(),
+)
+
+/**
+ * The account's own two links: every fiction newest-first, and an OPML of the per-fiction feeds.
+ *
+ * These carry a token derived from *this account*, which is why rotating them is self-service.
+ * `account.html` calls them "a private token for this account; treat them like a password".
+ */
+data class LibraryFeed(
+    @param:Json(name = "feed_token_version") val feedTokenVersion: Int = 0,
+    @param:Json(name = "feed_url") val feedUrl: String? = null,
+    @param:Json(name = "opml_url") val opmlUrl: String? = null,
+)
+
+/**
+ * One fiction's feed URL.
+ *
+ * Its token is derived from the *fiction*, so it is the same string for every account — which is
+ * why rotating one is an admin action and rotating the library pair is not.
+ */
+data class FictionFeed(
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    val title: String = "",
+    val slug: String? = null,
+    @param:Json(name = "feed_token_version") val feedTokenVersion: Int = 0,
+    @param:Json(name = "feed_url") val feedUrl: String? = null,
+)
+
+/** The answer to rotating the account's library feed: the same payload with new URLs. */
+data class LibraryFeedRotateResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    @param:Json(name = "feed_token_version") val feedTokenVersion: Int = 0,
+    @param:Json(name = "feed_url") val feedUrl: String? = null,
+    @param:Json(name = "opml_url") val opmlUrl: String? = null,
+)
+
+/**
+ * `GET /api/mobile/listening-state` — every position and chosen mark on the account (#116).
+ *
+ * The web account page puts the case better than a comment can: *"Audio can always be made again.
+ * Where you are in a four-hundred-chapter serial cannot."* And the phone is where most of that
+ * state is made — positions written by the media service every 15s, marks made from the car.
+ *
+ * [document] is deliberately an opaque map. This client neither reads nor rewrites it: it saves
+ * what the server produced and posts it back unaltered, so a document from a newer server survives
+ * a round trip through an older app rather than being silently trimmed to the fields it knows.
+ */
+data class ListeningStateExport(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val document: Map<String, Any?> = emptyMap(),
+)
+
+/**
+ * What a restore actually did.
+ *
+ * The import is never destructive — a position only moves forward and bookmarks are added rather
+ * than reconciled — so this reports additions, not a diff. The counts are what tell a six-month-old
+ * backup restored over a live account from one that did nothing.
+ */
+data class ListeningStateImportResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    val report: Map<String, Any?> = emptyMap(),
+)
 
 data class QueueResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,

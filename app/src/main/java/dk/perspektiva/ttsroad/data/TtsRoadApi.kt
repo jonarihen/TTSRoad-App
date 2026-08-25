@@ -199,6 +199,49 @@ interface TtsRoadApi {
         @Body changes: Map<String, @JvmSuppressWildcards Any?>,
     ): AccountPreferencesResponse
 
+    /**
+     * Every podcast URL this account can hand to a podcast app (#115).
+     *
+     * Scoped to the caller's shelf by default — the URLs they would actually share — the same
+     * scoping `/library` uses.
+     */
+    @GET("api/mobile/feeds")
+    suspend fun feeds(@Query("scope") scope: String = LibraryScopeFollowed): FeedsResponse
+
+    /**
+     * Invalidate this account's combined feed and OPML URLs.
+     *
+     * Self-service, not admin-gated: it revokes only the caller's own credential, and if a private
+     * token leaks the device in your hand is the natural place to respond from.
+     */
+    @POST("api/mobile/feeds/rotate")
+    suspend fun rotateLibraryFeed(): LibraryFeedRotateResponse
+
+    /**
+     * Invalidate one fiction's feed URL. Admin only, because that token is *shared* — every
+     * account subscribed to the fiction has to re-subscribe afterwards.
+     */
+    @POST("api/mobile/fictions/{fiction_id}/feed-token/rotate")
+    suspend fun rotateFictionFeedToken(
+        @Path("fiction_id") fictionId: Int,
+    ): MaintenanceResponse
+
+    /** Every position and chosen mark on this account, as a portable document (#116). */
+    @GET("api/mobile/listening-state")
+    suspend fun exportListeningState(): ListeningStateExport
+
+    /**
+     * Merge a previously exported document back in.
+     *
+     * The server takes it bare or wrapped in `{"document": …}` — this sends it wrapped, which is
+     * exactly the shape the export handed over, so nothing has to unwrap and re-wrap a payload it
+     * does not otherwise read.
+     */
+    @POST("api/mobile/listening-state")
+    suspend fun importListeningState(
+        @Body document: Map<String, @JvmSuppressWildcards Any?>,
+    ): ListeningStateImportResponse
+
     // Maintenance (#107, #112). Nine routes, one response shape, two capability flags: `retry`,
     // `exclude` and `delete` for a chapter, and poll / retry-failed / retry-all / reconvert-all /
     // retag / apply-filter for a fiction. Which of them an *account* may use is `me.is_admin` —

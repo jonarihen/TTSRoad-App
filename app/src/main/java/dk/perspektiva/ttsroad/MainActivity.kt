@@ -179,6 +179,13 @@ import dk.perspektiva.ttsroad.data.formatFictionTags
 import dk.perspektiva.ttsroad.data.readPickedCover
 import dk.perspektiva.ttsroad.data.formatExpiresIn
 import dk.perspektiva.ttsroad.data.formatServerTimestamp
+import dk.perspektiva.ttsroad.data.FeedsResponse
+import dk.perspektiva.ttsroad.data.LibraryFeed
+import dk.perspektiva.ttsroad.data.LibraryScopeAll
+import dk.perspektiva.ttsroad.data.listeningStateFileName
+import dk.perspektiva.ttsroad.data.listeningStateImportSummary
+import dk.perspektiva.ttsroad.data.listeningStateJson
+import dk.perspektiva.ttsroad.data.parseListeningStateJson
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.MaintenanceResponse
 import dk.perspektiva.ttsroad.data.ReadAlongDocument
@@ -1083,6 +1090,25 @@ private fun FictionScreen(
     var maintenanceNote by remember(fiction.id) { mutableStateOf<String?>(null) }
     var confirmReconvert by remember(fiction.id) { mutableStateOf(false) }
     var confirmDeleteChapter by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
+    // This book's podcast URL (#115). One small request, only on a server that can answer it, and
+    // only worth making because the alternative is mailing the link to yourself from a laptop.
+    var feedUrl by remember(fiction.id) { mutableStateOf<String?>(null) }
+    var confirmRotateFeed by remember(fiction.id) { mutableStateOf(false) }
+    LaunchedEffect(fiction.id, capabilities.feedUrls) {
+        feedUrl = if (!capabilities.feedUrls) {
+            null
+        } else {
+            // Asked for the whole server rather than the shelf: a fiction screen can be opened
+            // from browse-all for a book this account does not follow, and the followed-only
+            // default would answer nothing for exactly that case.
+            runCatching {
+                repository.feeds(scope = LibraryScopeAll)
+                    ?.fictions
+                    ?.firstOrNull { it.fictionId == fiction.id }
+                    ?.feedUrl
+            }.getOrNull()
+        }
+    }
     LaunchedEffect(fiction.id, capabilities.bookmarks) {
         fictionBookmarks = if (!capabilities.bookmarks) {
             emptyList()
@@ -1304,6 +1330,15 @@ private fun FictionScreen(
                             },
                             onMaintain = if (capabilities.fictionMaintenance && isAdmin) {
                                 { showMaintenance = true }
+                            } else {
+                                null
+                            },
+                            feedUrl = feedUrl,
+                            onShareFeed = { url ->
+                                shareText(context, url, "${fiction.title} podcast feed")
+                            },
+                            onRotateFeed = if (capabilities.fictionMaintenance && isAdmin) {
+                                { confirmRotateFeed = true }
                             } else {
                                 null
                             },
@@ -1582,6 +1617,30 @@ private fun FictionScreen(
                         }
                     } else {
                         null
+                    },
+                )
+            }
+
+            if (confirmRotateFeed) {
+                ConfirmDialog(
+                    title = "REGENERATE THIS FEED LINK?",
+                    // Deliberately not the same warning as the account links: this token is shared
+                    // by everyone subscribed to the fiction, so the blast radius is not just you.
+                    body = "This book's feed URL is replaced. Every podcast app subscribed to it — " +
+                        "on any account — stops receiving new chapters until it is given the new " +
+                        "link. No audio or progress is lost.",
+                    confirmLabel = "REGENERATE",
+                    onDismiss = { confirmRotateFeed = false },
+                    onConfirm = {
+                        confirmRotateFeed = false
+                        maintain(
+                            describe = { response ->
+                                // Adopt the new URL from the answer rather than re-fetching the
+                                // whole feed list to read back one string.
+                                response.feedUrl?.takeIf { it.isNotBlank() }?.let { feedUrl = it }
+                                "Feed link regenerated."
+                            },
+                        ) { repository.rotateFictionFeedToken(fiction.id) }
                     },
                 )
             }
@@ -2957,6 +3016,83 @@ private fun SettingsScreen(
     var confirmDeleteDownloads by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
 
+    // Podcast URLs (#115) and the listening-state backup (#116). Both are Settings-side and both
+    // load on demand rather than on entry: neither is looked at often, and a Settings screen that
+    // spends two requests every time it is opened to read the version number is a worse trade.
+    var feeds by remember { mutableStateOf<FeedsResponse?>(null) }
+    var feedsError by remember { mutableStateOf<String?>(null) }
+    var confirmRotateFeed by remember { mutableStateOf(false) }
+    var backupNote by remember { mutableStateOf<String?>(null) }
+    var backupError by remember { mutableStateOf<String?>(null) }
+    var isBackupBusy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(capabilities.feedUrls) {
+        feeds = if (!capabilities.feedUrls) {
+            null
+        } else {
+            runCatching { repository.feeds() }
+                .onFailure { feedsError = it.message ?: "Could not load your feed links" }
+                .getOrNull()
+        }
+    }
+
+    /**
+     * Write the account's listening state to a file the user chose (#116).
+     *
+     * A document the *user* picks rather than a share sheet, and rather than the app's own storage:
+     * the point of a backup is surviving this install, so it has to land somewhere the app cannot
+     * take with it when it is uninstalled.
+     */
+    val saveListeningState = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            isBackupBusy = true
+            backupError = null
+            backupNote = null
+            runCatching {
+                val document = repository.exportListeningState()
+                    ?: error("This server cannot export listening state.")
+                // Serialised with the same Moshi vocabulary it was parsed with, so a document from
+                // a newer server round-trips whole rather than being trimmed to known fields.
+                val json = listeningStateJson(document)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
+                        ?: error("Could not write to that file.")
+                }
+            }
+                .onSuccess { backupNote = "Saved." }
+                .onFailure { backupError = it.message ?: "Could not save your listening state" }
+            isBackupBusy = false
+        }
+    }
+
+    /** Read a saved document back and post it. Merged server-side, never destructive. */
+    val restoreListeningState = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            isBackupBusy = true
+            backupError = null
+            backupNote = null
+            runCatching {
+                val text = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                        ?: error("Could not open that file.")
+                }
+                val document = parseListeningStateJson(text)
+                    ?: error("That file is not a listening-state backup.")
+                repository.importListeningState(document)
+                    ?: error("This server cannot restore listening state.")
+            }
+                .onSuccess { backupNote = listeningStateImportSummary(it) }
+                .onFailure { backupError = it.message ?: "Could not restore that backup" }
+            isBackupBusy = false
+        }
+    }
+
     // The cache is only measured on demand: it means walking the cache index off the main thread.
     LaunchedEffect(Unit) { downloads.refreshCacheBytes() }
 
@@ -3328,6 +3464,101 @@ private fun SettingsScreen(
             }
         }
 
+        // Serving a private podcast feed is what TTSRoad is for, and the phone is where a podcast
+        // app lives — so getting a tokenised URL onto the phone used to mean mailing it to yourself
+        // from a laptop (#115). Share rather than copy, because handing the URL straight to a
+        // podcast app is the actual goal.
+        if (capabilities.feedUrls) {
+            MetaText(text = "// Podcast feeds", color = AarisColor.Accent)
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MetaText(
+                        text = "These carry a private token for your account. Treat them like a " +
+                            "password — anyone holding one can read your library.",
+                        color = AarisColor.Dim,
+                    )
+                    feedsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    val library = feeds?.library
+                    ShareUrlRow(
+                        label = "Every fiction, newest first",
+                        url = library?.feedUrl,
+                        onShare = { shareText(context, it, "Podcast feed") },
+                    )
+                    ShareUrlRow(
+                        label = "OPML — subscribe to every per-fiction feed at once",
+                        url = library?.opmlUrl,
+                        onShare = { shareText(context, it, "OPML") },
+                    )
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    MetaText(
+                        text = "Regenerating revokes both links. Every podcast app you gave the " +
+                            "old ones to stops working until you hand it the new one.",
+                        color = AarisColor.Dim,
+                    )
+                    OutlinedButton(
+                        onClick = { confirmRotateFeed = true },
+                        enabled = library?.feedUrl != null && !isBusy,
+                        shape = RectangleShape,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Warning),
+                    ) {
+                        Text("REGENERATE LINKS")
+                    }
+                }
+            }
+        }
+
+        // "Audio can always be made again. Where you are in a four-hundred-chapter serial cannot."
+        // The phone writes most of that state and could not save a copy of it (#116).
+        if (capabilities.listeningStateBackup) {
+            MetaText(text = "// Listening state", color = AarisColor.Accent)
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MetaText(
+                        text = "Every position and bookmark on your account, in one file. Audio " +
+                            "can always be made again; where you are in a four-hundred-chapter " +
+                            "serial cannot.",
+                        color = AarisColor.Dim,
+                    )
+                    backupError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    backupNote?.let { MetaText(text = it, color = AarisColor.Ok) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { saveListeningState.launch(listeningStateFileName()) },
+                            enabled = !isBackupBusy,
+                            shape = RectangleShape,
+                        ) {
+                            Text("SAVE A COPY")
+                        }
+                        OutlinedButton(
+                            // Not restricted to application/json: a file manager that stored the
+                            // backup as octet-stream would otherwise be unable to hand it back, and
+                            // the parse below is what actually decides whether a file is one.
+                            onClick = { restoreListeningState.launch(arrayOf("*/*")) },
+                            enabled = !isBackupBusy,
+                            shape = RectangleShape,
+                        ) {
+                            Text("RESTORE")
+                        }
+                    }
+                    MetaText(
+                        text = "Restoring merges: a position only ever moves forward and bookmarks " +
+                            "are added, so an old backup cannot undo newer listening.",
+                        color = AarisColor.Dim,
+                    )
+                }
+            }
+        }
+
         MetaText(text = "// App", color = AarisColor.Accent)
         AarisCard {
             Column(
@@ -3364,6 +3595,40 @@ private fun SettingsScreen(
         ) {
             Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
         }
+    }
+
+    if (confirmRotateFeed) {
+        ConfirmDialog(
+            title = "REGENERATE FEED LINKS?",
+            body = "Your combined feed and OPML links are replaced with new ones. Every podcast " +
+                "app you have already given the old links to stops receiving new chapters until " +
+                "you hand it the new URL. Nothing is deleted and no progress is lost.",
+            confirmLabel = "REGENERATE",
+            onDismiss = { confirmRotateFeed = false },
+            onConfirm = {
+                confirmRotateFeed = false
+                scope.launch {
+                    isBusy = true
+                    feedsError = null
+                    runCatching { repository.rotateLibraryFeed() }
+                        .onSuccess { rotated ->
+                            // The rotate answer carries the new pair, so nothing has to re-fetch
+                            // the whole feed list to show a URL that just changed.
+                            rotated?.let {
+                                feeds = feeds?.copy(
+                                    library = LibraryFeed(
+                                        feedTokenVersion = it.feedTokenVersion,
+                                        feedUrl = it.feedUrl,
+                                        opmlUrl = it.opmlUrl,
+                                    ),
+                                )
+                            } ?: run { feedsError = "This server cannot regenerate those links." }
+                        }
+                        .onFailure { feedsError = it.message ?: "Could not regenerate your links" }
+                    isBusy = false
+                }
+            },
+        )
     }
 
     if (confirmDeleteDownloads) {
@@ -5301,6 +5566,11 @@ private fun FictionDetailHeader(
     onMaintain: (() -> Unit)? = null,
     /** A maintenance request is in flight; every one of these controls waits for it. */
     isMaintaining: Boolean = false,
+    /** This fiction's podcast feed URL, or null on a server that cannot report one (#115). */
+    feedUrl: String? = null,
+    onShareFeed: ((String) -> Unit)? = null,
+    /** Admin only: this token is shared, so rotating it re-subscribes everyone. */
+    onRotateFeed: (() -> Unit)? = null,
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
@@ -5518,6 +5788,43 @@ private fun FictionDetailHeader(
             }
         }
 
+        // The podcast URL for this book (#115). Above the admin block rather than in it: handing
+        // a feed to a podcast app is something any reader does, not housekeeping.
+        feedUrl?.takeIf { it.isNotBlank() }?.let { url ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                onShareFeed?.let { share ->
+                    OutlinedButton(
+                        onClick = { share(url) },
+                        shape = RectangleShape,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("SHARE PODCAST FEED")
+                    }
+                }
+                MetaText(
+                    text = "Subscribe a podcast app to this book. The link carries a token — " +
+                        "anyone holding it can listen without signing in.",
+                    color = AarisColor.Dim,
+                )
+                onRotateFeed?.let { rotate ->
+                    OutlinedButton(
+                        onClick = rotate,
+                        enabled = !isMaintaining,
+                        shape = RectangleShape,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Warning),
+                    ) {
+                        Text("REGENERATE FEED LINK")
+                    }
+                    MetaText(
+                        text = "This link is shared by everyone subscribed to this book, so " +
+                            "regenerating it makes all of them re-subscribe.",
+                        color = AarisColor.Dim,
+                    )
+                }
+            }
+        }
+
         // Admin housekeeping from here down, below everything anyone reaches for mid-listen.
         // Correcting a title or a synopsis is a rare, deliberate act, and it should not sit next to
         // RESUME.
@@ -5575,6 +5882,44 @@ private fun FictionDetailHeader(
  * the trimmed title, the de-duplicated tags and the rehosted cover URL are all its decisions, not
  * this screen's.
  */
+/**
+ * One private URL and the share sheet that hands it somewhere useful (#115).
+ *
+ * Share rather than copy-to-clipboard, and that is the point of putting these on a phone at all:
+ * the goal is getting a tokenised feed URL *into a podcast app*, and on a phone share-sheet-to-app
+ * is a far better path than a clipboard. On a desktop the clipboard is shared with the browser
+ * that already has the URL, which is why the web page can settle for Copy.
+ *
+ * The URL itself is shown, truncated, rather than hidden behind the button: a link you cannot see
+ * is one you cannot tell apart from the one you regenerated it away from.
+ */
+@Composable
+private fun ShareUrlRow(label: String, url: String?, onShare: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        MetaText(text = label)
+        if (url.isNullOrBlank()) {
+            MetaText(text = "Not available", color = AarisColor.Dim)
+            return@Column
+        }
+        MetaText(text = url, color = AarisColor.Dim, maxLines = 2)
+        OutlinedButton(onClick = { onShare(url) }, shape = RectangleShape) {
+            Text("SHARE")
+        }
+    }
+}
+
+/** Hand [text] to the system share sheet. [title] is what the chooser calls it. */
+private fun shareText(context: Context, text: String, title: String) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+        putExtra(Intent.EXTRA_SUBJECT, title)
+    }
+    // Always a chooser, never a remembered default: these are private URLs, and silently reopening
+    // whatever app handled the last share is not a decision to make on someone's behalf.
+    context.startActivity(Intent.createChooser(intent, title))
+}
+
 /**
  * The rest of the fiction maintenance actions, behind one button (#112).
  *
