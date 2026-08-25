@@ -87,6 +87,13 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **Player, chapter and reader controls are big enough to hit.** The transport buttons, the mini
+  player, the four actions on every chapter row and the reader's option chips made their tap area
+  exactly as small as the glyph drawn in it — 36 dp on a chapter row, where Read, Download, Mark
+  played and Play sit next to each other and a near miss starts a chapter instead of downloading
+  it. Every one of them is now at least Android's 48 dp minimum, without anything looking bigger.
+  Reader chips also announce themselves as a choice with one selected, which colour alone never
+  told a screen reader. ([#104](https://github.com/jonarihen/TTSRoad-App/issues/104))
 - **Now Playing fits a landscape screen.** The cover took whatever height was spare, and when there
   was none spare the scrubber, the transport row and every tertiary action were laid out below the
   window with nothing to scroll them into view — so in landscape, split screen, or at a large

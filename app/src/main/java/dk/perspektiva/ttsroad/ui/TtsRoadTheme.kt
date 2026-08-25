@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -273,6 +274,15 @@ fun AarisCard(
 }
 
 /**
+ * Android's minimum touch target (#104).
+ *
+ * Material's own buttons stop at 40 dp, which is a visual-density decision rather than an
+ * accessibility one. These controls are used while walking, commuting and reaching one-handed, and
+ * their neighbours do different things — so the gap between 40 and 48 is not cosmetic.
+ */
+val MinTouchTargetSize = 48.dp
+
+/**
  * A one-of-N choice that wraps instead of running off the side of the card.
  *
  * Five Settings selectors each laid their options out in a plain [androidx.compose.foundation.layout.Row]
@@ -307,7 +317,9 @@ fun <T> AarisChoiceRow(
             val isSelected = option == selected
             OutlinedButton(
                 onClick = { onSelect(option) },
-                modifier = Modifier.semantics { this.selected = isSelected },
+                modifier = Modifier
+                    .heightIn(min = MinTouchTargetSize)
+                    .semantics { this.selected = isSelected },
                 shape = RectangleShape,
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = if (isSelected) AarisColor.Accent else AarisColor.Muted,
