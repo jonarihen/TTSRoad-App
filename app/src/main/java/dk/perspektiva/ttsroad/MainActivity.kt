@@ -113,7 +113,9 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -233,6 +235,7 @@ import dk.perspektiva.ttsroad.player.PlayerUiState
 import dk.perspektiva.ttsroad.player.queueRows
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
+import dk.perspektiva.ttsroad.player.SleepTimerState
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisChoiceRow
 import dk.perspektiva.ttsroad.ui.AarisColor
@@ -1484,6 +1487,333 @@ private fun BulkAction(
     }
 }
 
+/**
+ * Below this much window height the player scrolls and the artwork shrinks, rather than pushing its
+ * own controls out of the window (#101).
+ *
+ * 520 dp sits between the two cases deliberately: a landscape phone is around 360 dp tall and a
+ * portrait one starts at 640, so the split falls in the gap rather than near either. Split screen
+ * and freeform windows land wherever they land and are handled by the same rule.
+ */
+private val CompactPlayerHeight = 520.dp
+
+/** Thumbnail height for the short-height player. Enough to recognise a cover, not enough to cost. */
+private val CompactCoverHeight = 96.dp
+
+/**
+ * Chapter title and fiction title, shared by the two player layouts.
+ *
+ * One block rather than two copies because the short-height layout differs from the tall one in
+ * exactly one thing — the text is beside the cover, so it is start-aligned rather than centred —
+ * and two copies of it would drift the moment either grew a line.
+ */
+@Composable
+private fun PlayerTitleBlock(
+    title: String,
+    fictionTitle: String?,
+    textAlign: TextAlign,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = if (textAlign == TextAlign.Center) {
+            Alignment.CenterHorizontally
+        } else {
+            Alignment.Start
+        },
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineSmall,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = textAlign,
+        )
+        fictionTitle?.let {
+            Spacer(modifier = Modifier.height(10.dp))
+            MetaText(text = it)
+        }
+    }
+}
+
+/**
+ * Everything the player *shows*, with none of what it is wired to.
+ *
+ * Split out of [PlayerScreen] so the layout can be rendered in a test at a stated viewport. The
+ * screen itself pulls a repository, a history store, a sleep timer and a preference store out of
+ * [ServiceLocator] and holds a live [PlaybackController]; none of that can be stood up on the JVM,
+ * and all of it is beside the point when the question is whether pause is on screen at 360 dp.
+ *
+ * So the parameters are deliberately data and lambdas rather than the objects they came from —
+ * [canRead] rather than the capability set, [onBookmark] rather than the repository.
+ */
+@Composable
+internal fun PlayerScreenBody(
+    playerState: PlayerUiState,
+    skipIntervalMs: Long,
+    sleepTimerState: SleepTimerState,
+    /** Transient confirmation of a bookmark just made. Null most of the time. */
+    bookmarkFeedback: String?,
+    canRead: Boolean,
+    canBookmark: Boolean,
+    canJumpBack: Boolean,
+    onRetry: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onPreviousChapter: () -> Unit,
+    onSkipBack: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onSkipForward: () -> Unit,
+    onNextChapter: () -> Unit,
+    onOpenSpeed: () -> Unit,
+    onOpenSleepTimer: () -> Unit,
+    onRead: () -> Unit,
+    onBookmark: () -> Unit,
+    onOpenJumpBack: () -> Unit,
+    onOpenChapters: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Track the drag locally and only seek on release, so scrubbing does not spam the player.
+    var dragMs by remember { mutableStateOf<Float?>(null) }
+
+    // #101: the cover used to be the only weighted child, so once it had given up all its height
+    // there was no strategy left and the scrubber, the transport and every tertiary action were
+    // laid out below the window with nothing that could scroll to them. On a player, "pause is
+    // off-screen" is the bug; the artwork being small is not.
+    //
+    // The font scale belongs in the breakpoint rather than beside it. A short viewport is only one
+    // of the two ways to run out of room; the other is an ordinary 640 dp portrait phone at a large
+    // display size, where the window is normal and the text in it is half again as tall. Both
+    // arrive at the same place, so both take the same exit.
+    val isShortHeight = LocalConfiguration.current.screenHeightDp.dp <
+        CompactPlayerHeight * LocalDensity.current.fontScale
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            // Weight needs a bounded height and scrolling gives an unbounded one, so these two are
+            // genuinely exclusive: the tall layout hands leftover height to the cover, and the
+            // short one has no leftover height to hand out.
+            .then(
+                if (isShortHeight) Modifier.verticalScroll(rememberScrollState()) else Modifier,
+            )
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        MetaText(text = "// Now Playing", color = AarisColor.Accent)
+        playerState.error?.let { message ->
+            Spacer(modifier = Modifier.height(12.dp))
+            PlaybackErrorBanner(message = message, onRetry = onRetry)
+        }
+        bookmarkFeedback?.let { message ->
+            MetaText(
+                text = "// $message",
+                color = AarisColor.Accent,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        if (isShortHeight) {
+            // Landscape and split screen are short, not narrow, so the cover moves to where the
+            // room actually is: beside the title rather than above it, at a fixed thumbnail height.
+            // Artwork is the one thing on this screen that is not a control, so it is what gets
+            // rationed first.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CoverFill(
+                    imageUrl = playerState.coverImageUrl,
+                    fallback = playerState.fictionTitle ?: playerState.title,
+                    modifier = Modifier
+                        .height(CompactCoverHeight)
+                        .aspectRatio(0.7f),
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                PlayerTitleBlock(
+                    title = playerState.title,
+                    fictionTitle = playerState.fictionTitle,
+                    textAlign = TextAlign.Start,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(vertical = 20.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                // Largest portrait cover that fits both the width and the leftover height.
+                val coverWidth = minOf(maxWidth, maxHeight * 0.7f)
+                CoverFill(
+                    imageUrl = playerState.coverImageUrl,
+                    fallback = playerState.fictionTitle ?: playerState.title,
+                    modifier = Modifier
+                        .width(coverWidth)
+                        .aspectRatio(0.7f),
+                )
+            }
+            PlayerTitleBlock(
+                title = playerState.title,
+                fictionTitle = playerState.fictionTitle,
+                textAlign = TextAlign.Center,
+            )
+        }
+        Spacer(modifier = Modifier.height(28.dp))
+        Slider(
+            value = dragMs ?: playerState.positionMs.coerceAtMost(playerState.durationMs).toFloat(),
+            onValueChange = { dragMs = it },
+            onValueChangeFinished = {
+                dragMs?.let { onSeek(it.toLong()) }
+                dragMs = null
+            },
+            valueRange = 0f..playerState.durationMs.coerceAtLeast(1L).toFloat(),
+            enabled = playerState.durationMs > 0L,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            MetaText(text = formatDuration(dragMs?.toLong() ?: playerState.positionMs))
+            // Time left beats total duration here: the scrubber already shows how far in this is,
+            // and "how much longer" is the thing being asked. At anything but 1x the wall-clock
+            // answer differs from the audio one, so say both rather than the misleading one.
+            if (playerState.durationMs > 0L) {
+                val position = dragMs?.toLong() ?: playerState.positionMs
+                MetaText(
+                    text = buildString {
+                        append("-")
+                        append(formatDuration(remainingMs(position, playerState.durationMs)))
+                        if (playerState.speed != 1f) {
+                            append("  ·  ")
+                            append(
+                                formatDuration(
+                                    remainingMsAtSpeed(
+                                        position,
+                                        playerState.durationMs,
+                                        playerState.speed,
+                                    ),
+                                ),
+                            )
+                            append(" at ${formatSpeed(playerState.speed)}")
+                        }
+                    },
+                )
+            } else {
+                MetaText(text = formatDuration(playerState.durationMs))
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        LinearProgressIndicator(
+            progress = { playerState.bufferedPercentage / 100f },
+            trackColor = AarisColor.Line,
+            color = AarisColor.Dim,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        // Single transport row: chapter skips outside, fine seek inside, primary in the middle.
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TransportIconButton(
+                icon = Icons.Default.SkipPrevious,
+                contentDescription = "Previous chapter",
+                enabled = playerState.hasMedia,
+                size = 46.dp,
+            ) { onPreviousChapter() }
+            TransportIconButton(
+                icon = skipBackIcon(skipIntervalMs),
+                contentDescription = "Back ${formatSkipInterval(skipIntervalMs)}",
+                enabled = playerState.hasMedia,
+                size = 46.dp,
+            ) { onSkipBack() }
+            TransportIconButton(
+                icon = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (playerState.isPlaying) "Pause" else "Play",
+                enabled = playerState.hasMedia,
+                size = 68.dp,
+                filled = true,
+            ) { onTogglePlayPause() }
+            TransportIconButton(
+                icon = skipForwardIcon(skipIntervalMs),
+                contentDescription = "Forward ${formatSkipInterval(skipIntervalMs)}",
+                enabled = playerState.hasMedia,
+                size = 46.dp,
+            ) { onSkipForward() }
+            TransportIconButton(
+                icon = Icons.Default.SkipNext,
+                contentDescription = "Next chapter",
+                enabled = playerState.hasNext,
+                size = 46.dp,
+            ) { onNextChapter() }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        // Tertiary: playback speed and the chapter list. FlowRow, not Row: on a narrow phone the
+        // two groups don't fit side by side, and a Row squeezed "CHAPTERS 53/246" down to a column
+        // one character wide. Wrapping happens between buttons; never inside a label.
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
+                // cycle-only button.
+                TextButton(onClick = onOpenSpeed) {
+                    Text("SPEED ${formatSpeed(playerState.speed)}", maxLines = 1, softWrap = false)
+                }
+                TextButton(
+                    onClick = onOpenSleepTimer,
+                    enabled = playerState.hasMedia || sleepTimerState.isArmed,
+                ) {
+                    Text(
+                        text = if (sleepTimerState.isArmed) {
+                            "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
+                        } else {
+                            "SLEEP"
+                        },
+                        color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Hidden entirely on a server without read-along, rather than shown and then 404ing.
+                if (canRead) {
+                    TextButton(onClick = onRead) {
+                        Text("READ", maxLines = 1, softWrap = false)
+                    }
+                }
+                // Same gating as READ: hidden outright on a server without bookmarks, rather than
+                // offered and then failing.
+                if (canBookmark) {
+                    TextButton(onClick = onBookmark) {
+                        Text("BOOKMARK", maxLines = 1, softWrap = false)
+                    }
+                }
+                if (canJumpBack) {
+                    TextButton(onClick = onOpenJumpBack) {
+                        Text("JUMP BACK", maxLines = 1, softWrap = false)
+                    }
+                }
+                if (playerState.queue.size > 1) {
+                    TextButton(onClick = onOpenChapters) {
+                        Text(
+                            text = "CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}",
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerScreen(
@@ -1546,234 +1876,49 @@ private fun PlayerScreen(
             bookmarkFeedback = null
         }
     }
-    // Track the drag locally and only seek on release, so scrubbing doesn't spam the player.
-    var dragMs by remember { mutableStateOf<Float?>(null) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(padding)
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        MetaText(text = "// Now Playing", color = AarisColor.Accent)
-        playerState.error?.let { message ->
-            Spacer(modifier = Modifier.height(12.dp))
-            PlaybackErrorBanner(message = message, onRetry = playbackController::retry)
-        }
-        bookmarkFeedback?.let { message ->
-            MetaText(
-                text = "// $message",
-                color = AarisColor.Accent,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .padding(vertical = 20.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            // Largest portrait cover that fits both the width and the leftover height.
-            val coverWidth = minOf(maxWidth, maxHeight * 0.7f)
-            CoverFill(
-                imageUrl = playerState.coverImageUrl,
-                fallback = playerState.fictionTitle ?: playerState.title,
-                modifier = Modifier
-                    .width(coverWidth)
-                    .aspectRatio(0.7f),
-            )
-        }
-        Text(
-            text = playerState.title,
-            style = MaterialTheme.typography.headlineSmall,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
-        playerState.fictionTitle?.let {
-            Spacer(modifier = Modifier.height(10.dp))
-            MetaText(text = it, modifier = Modifier)
-        }
-        Spacer(modifier = Modifier.height(28.dp))
-        Slider(
-            value = dragMs ?: playerState.positionMs.coerceAtMost(playerState.durationMs).toFloat(),
-            onValueChange = { dragMs = it },
-            onValueChangeFinished = {
-                dragMs?.let { playbackController.seekTo(it.toLong()) }
-                dragMs = null
-            },
-            valueRange = 0f..playerState.durationMs.coerceAtLeast(1L).toFloat(),
-            enabled = playerState.durationMs > 0L,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            MetaText(text = formatDuration(dragMs?.toLong() ?: playerState.positionMs))
-            // Time left beats total duration here: the scrubber already shows how far in this is,
-            // and "how much longer" is the thing being asked. At anything but 1x the wall-clock
-            // answer differs from the audio one, so say both rather than the misleading one.
-            if (playerState.durationMs > 0L) {
-                val position = dragMs?.toLong() ?: playerState.positionMs
-                MetaText(
-                    text = buildString {
-                        append("-")
-                        append(formatDuration(remainingMs(position, playerState.durationMs)))
-                        if (playerState.speed != 1f) {
-                            append("  ·  ")
-                            append(
-                                formatDuration(
-                                    remainingMsAtSpeed(
-                                        position,
-                                        playerState.durationMs,
-                                        playerState.speed,
-                                    ),
-                                ),
-                            )
-                            append(" at ${formatSpeed(playerState.speed)}")
-                        }
-                    },
-                )
-            } else {
-                MetaText(text = formatDuration(playerState.durationMs))
+    PlayerScreenBody(
+        playerState = playerState,
+        skipIntervalMs = skipIntervalMs,
+        sleepTimerState = sleepTimerState,
+        bookmarkFeedback = bookmarkFeedback,
+        canRead = capabilities.readAlong && playingChapterId != null,
+        canBookmark = capabilities.bookmarks && playingChapterId != null,
+        canJumpBack = jumpBackOptions.isNotEmpty(),
+        onRetry = playbackController::retry,
+        onSeek = playbackController::seekTo,
+        onPreviousChapter = playbackController::skipToPreviousChapter,
+        onSkipBack = { playbackController.skipBy(-skipIntervalMs) },
+        onTogglePlayPause = playbackController::togglePlayPause,
+        onSkipForward = { playbackController.skipBy(skipIntervalMs) },
+        onNextChapter = playbackController::skipToNextChapter,
+        onOpenSpeed = { showSpeed = true },
+        onOpenSleepTimer = { showSleepTimer = true },
+        onRead = {
+            playingChapterId?.let {
+                onOpenReader(AppScreen.Reader(chapterId = it, title = playerState.title))
             }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        LinearProgressIndicator(
-            progress = { playerState.bufferedPercentage / 100f },
-            trackColor = AarisColor.Line,
-            color = AarisColor.Dim,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        // Single transport row: chapter skips outside, fine seek inside, primary in the middle.
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TransportIconButton(
-                icon = Icons.Default.SkipPrevious,
-                contentDescription = "Previous chapter",
-                enabled = playerState.hasMedia,
-                size = 46.dp,
-            ) { playbackController.skipToPreviousChapter() }
-            TransportIconButton(
-                icon = skipBackIcon(skipIntervalMs),
-                contentDescription = "Back ${formatSkipInterval(skipIntervalMs)}",
-                enabled = playerState.hasMedia,
-                size = 46.dp,
-            ) { playbackController.skipBy(-skipIntervalMs) }
-            TransportIconButton(
-                icon = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = if (playerState.isPlaying) "Pause" else "Play",
-                enabled = playerState.hasMedia,
-                size = 68.dp,
-                filled = true,
-            ) { playbackController.togglePlayPause() }
-            TransportIconButton(
-                icon = skipForwardIcon(skipIntervalMs),
-                contentDescription = "Forward ${formatSkipInterval(skipIntervalMs)}",
-                enabled = playerState.hasMedia,
-                size = 46.dp,
-            ) { playbackController.skipBy(skipIntervalMs) }
-            TransportIconButton(
-                icon = Icons.Default.SkipNext,
-                contentDescription = "Next chapter",
-                enabled = playerState.hasNext,
-                size = 46.dp,
-            ) { playbackController.skipToNextChapter() }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        // Tertiary: playback speed and the chapter list. FlowRow, not Row: on a narrow phone the
-        // two groups don't fit side by side, and a Row squeezed "CHAPTERS 53/246" down to a column
-        // one character wide. Wrapping happens between buttons; never inside a label.
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
-                // cycle-only button.
-                TextButton(onClick = { showSpeed = true }) {
-                    Text("SPEED ${formatSpeed(playerState.speed)}", maxLines = 1, softWrap = false)
-                }
-                TextButton(
-                    onClick = { showSleepTimer = true },
-                    enabled = playerState.hasMedia || sleepTimerState.isArmed,
-                ) {
-                    Text(
-                        text = if (sleepTimerState.isArmed) {
-                            "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
-                        } else {
-                            "SLEEP"
-                        },
-                        color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
-                        maxLines = 1,
-                        softWrap = false,
+        },
+        onBookmark = {
+            val chapterId = playingChapterId ?: return@PlayerScreenBody
+            scope.launch {
+                // Deliberately does not touch playback: marking a line worth keeping is
+                // something you do *while* listening.
+                bookmarkFeedback = runCatching {
+                    repository.createBookmark(
+                        chapterId = chapterId,
+                        positionSeconds = playerState.positionMs / 1000.0,
+                        label = playerState.title.takeIf { it.isNotBlank() },
                     )
-                }
+                }.fold(
+                    onSuccess = { "Bookmarked at ${formatDuration(playerState.positionMs)}" },
+                    onFailure = { "Could not save the bookmark" },
+                )
             }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                // Hidden entirely on a server without read-along, rather than shown and then 404ing.
-                if (capabilities.readAlong && playingChapterId != null) {
-                    TextButton(
-                        onClick = {
-                            onOpenReader(
-                                AppScreen.Reader(
-                                    chapterId = playingChapterId,
-                                    title = playerState.title,
-                                ),
-                            )
-                        },
-                    ) {
-                        Text("READ", maxLines = 1, softWrap = false)
-                    }
-                }
-                // Same gating as READ: hidden outright on a server without bookmarks, rather than
-                // offered and then failing.
-                if (capabilities.bookmarks && playingChapterId != null) {
-                    TextButton(
-                        onClick = {
-                            scope.launch {
-                                // Deliberately does not touch playback: marking a line worth
-                                // keeping is something you do *while* listening.
-                                bookmarkFeedback = runCatching {
-                                    repository.createBookmark(
-                                        chapterId = playingChapterId,
-                                        positionSeconds = playerState.positionMs / 1000.0,
-                                        label = playerState.title.takeIf { it.isNotBlank() },
-                                    )
-                                }.fold(
-                                    onSuccess = { "Bookmarked at ${formatDuration(playerState.positionMs)}" },
-                                    onFailure = { "Could not save the bookmark" },
-                                )
-                            }
-                        },
-                    ) {
-                        Text("BOOKMARK", maxLines = 1, softWrap = false)
-                    }
-                }
-                if (jumpBackOptions.isNotEmpty()) {
-                    TextButton(onClick = { showJumpBack = true }) {
-                        Text("JUMP BACK", maxLines = 1, softWrap = false)
-                    }
-                }
-                if (playerState.queue.size > 1) {
-                    TextButton(onClick = { showChapters = true }) {
-                        Text(
-                            text = "CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}",
-                            maxLines = 1,
-                            softWrap = false,
-                        )
-                    }
-                }
-            }
-        }
-    }
+        },
+        onOpenJumpBack = { showJumpBack = true },
+        onOpenChapters = { showChapters = true },
+        modifier = Modifier.padding(padding),
+    )
 
     if (showSpeed) {
         ModalBottomSheet(
