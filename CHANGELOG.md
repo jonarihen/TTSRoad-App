@@ -87,6 +87,13 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **Settings choices wrap instead of running off the side of the card.** Skip interval, sleep-timer
+  default, volume boost, keep-chapters-ahead and keep-streamed-audio each laid their options out in
+  a row that could not wrap. On a 320 dp phone, in split screen, or at a large display scale, the
+  last one or two choices were placed outside the card — so a preference that existed in the app
+  could not be selected from it. They now wrap onto as many lines as they need, and a screen reader
+  says which choice is in force rather than only reading the labels.
+  ([#99](https://github.com/jonarihen/TTSRoad-App/issues/99))
 - **Settings says what your server can do.** The app hides any control the server cannot back —
   which is right, and invisible: a missing button looked the same whether the server was older than
   the app, the account was not an admin, or the app was broken. A **Server** card now lists the

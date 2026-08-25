@@ -231,6 +231,7 @@ import dk.perspektiva.ttsroad.player.queueRows
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
 import dk.perspektiva.ttsroad.ui.AarisCard
+import dk.perspektiva.ttsroad.ui.AarisChoiceRow
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
@@ -2466,21 +2467,12 @@ private fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 MetaText(text = "Skip interval")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SkipIntervalOptionsMs.forEach { option ->
-                        val selected = option == prefs.skipIntervalMs
-                        OutlinedButton(
-                            onClick = { scope.launch { preferences.setSkipIntervalMs(option) } },
-                            shape = RectangleShape,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
-                            ),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                        ) {
-                            Text(formatSkipInterval(option))
-                        }
-                    }
-                }
+                AarisChoiceRow(
+                    options = SkipIntervalOptionsMs,
+                    selected = prefs.skipIntervalMs,
+                    label = ::formatSkipInterval,
+                    onSelect = { scope.launch { preferences.setSkipIntervalMs(it) } },
+                )
                 MetaText(
                     text = "Used by the player, the mini player, and the lockscreen buttons. " +
                         PreferenceScope.DevicePlayer,
@@ -2495,25 +2487,14 @@ private fun SettingsScreen(
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 MetaText(text = "Sleep timer default")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SleepTimerDefaultOptions.forEach { option ->
-                        val selected = option == prefs.sleepTimerDefaultMinutes
-                        OutlinedButton(
-                            onClick = {
-                                scope.launch {
-                                    accountPreferenceSync.setSleepTimerDefaultMinutes(option)
-                                }
-                            },
-                            shape = RectangleShape,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
-                            ),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                        ) {
-                            Text(formatSleepTimerDefault(option))
-                        }
-                    }
-                }
+                AarisChoiceRow(
+                    options = SleepTimerDefaultOptions,
+                    selected = prefs.sleepTimerDefaultMinutes,
+                    label = ::formatSleepTimerDefault,
+                    onSelect = {
+                        scope.launch { accountPreferenceSync.setSleepTimerDefaultMinutes(it) }
+                    },
+                )
                 MetaText(
                     text = "Marked in the player's sleep sheet. " +
                         PreferenceScope.account(capabilities.playerPreferences),
@@ -2586,21 +2567,12 @@ private fun SettingsScreen(
                         "mean reaching for the volume.",
                     color = AarisColor.Dim,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    VolumeBoost.entries.forEach { option ->
-                        val selected = option == prefs.volumeBoost
-                        OutlinedButton(
-                            onClick = { scope.launch { preferences.setVolumeBoost(option) } },
-                            shape = RectangleShape,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
-                            ),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                        ) {
-                            Text(option.label)
-                        }
-                    }
-                }
+                AarisChoiceRow(
+                    options = VolumeBoost.entries,
+                    selected = prefs.volumeBoost,
+                    label = { it.label },
+                    onSelect = { scope.launch { preferences.setVolumeBoost(it) } },
+                )
             }
         }
 
@@ -2637,23 +2609,12 @@ private fun SettingsScreen(
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
                 MetaText(text = "Keep chapters ahead")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    KeepAheadChoices.forEach { option ->
-                        val selected = option == downloadPrefs.keepAheadChapters
-                        OutlinedButton(
-                            onClick = {
-                                scope.launch { downloadPreferences.setKeepAheadChapters(option) }
-                            },
-                            shape = RectangleShape,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
-                            ),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                        ) {
-                            Text(if (option == 0) "OFF" else option.toString())
-                        }
-                    }
-                }
+                AarisChoiceRow(
+                    options = KeepAheadChoices,
+                    selected = downloadPrefs.keepAheadChapters,
+                    label = { if (it == 0) "OFF" else it.toString() },
+                    onSelect = { scope.launch { downloadPreferences.setKeepAheadChapters(it) } },
+                )
                 MetaText(
                     text = if (downloadPrefs.keepAheadChapters <= 0) {
                         "Off. Chapters are downloaded only when you ask for them, so losing " +
@@ -2670,25 +2631,12 @@ private fun SettingsScreen(
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
                 MetaText(text = "Keep streamed audio")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StreamingCacheChoices.forEach { option ->
-                        val selected = option == downloadPrefs.streamingCacheBytes
-                        OutlinedButton(
-                            onClick = {
-                                scope.launch {
-                                    downloadPreferences.setStreamingCacheBytes(option)
-                                }
-                            },
-                            shape = RectangleShape,
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = if (selected) AarisColor.Accent else AarisColor.Muted,
-                            ),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                        ) {
-                            Text(streamingCacheChoiceLabel(option))
-                        }
-                    }
-                }
+                AarisChoiceRow(
+                    options = StreamingCacheChoices,
+                    selected = downloadPrefs.streamingCacheBytes,
+                    label = ::streamingCacheChoiceLabel,
+                    onSelect = { scope.launch { downloadPreferences.setStreamingCacheBytes(it) } },
+                )
                 MetaText(
                     text = if (downloadPrefs.streamingCacheBytes == StreamingCacheUnlimited) {
                         "Everything you play is kept, so replaying it never touches the server. " +

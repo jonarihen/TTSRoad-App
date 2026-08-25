@@ -3,14 +3,20 @@ package dk.perspektiva.ttsroad.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Text
@@ -19,6 +25,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
@@ -259,6 +268,54 @@ fun AarisCard(
     } else {
         OutlinedCard(modifier = modifier, colors = colors, border = border) {
             content()
+        }
+    }
+}
+
+/**
+ * A one-of-N choice that wraps instead of running off the side of the card.
+ *
+ * Five Settings selectors each laid their options out in a plain [androidx.compose.foundation.layout.Row]
+ * with no wrapping and no scroll (#99). A `Row` does not wrap — it measures its children, runs out
+ * of width, and the last ones are simply placed outside the parent. At 320 dp the page gutter and
+ * the card padding leave about 240 dp, and six sleep-timer buttons need well over 380 dp, so the
+ * last two choices could not be seen or tapped at all. A preference that exists in the data model
+ * and cannot be selected from the UI is the failure worth naming: it is not cosmetic clipping.
+ *
+ * [FlowRow] fixes it by construction rather than by tuning. There is no width at which this
+ * overflows, so it holds for a narrow phone, split screen, a large display scale, and a
+ * longer label in some future locale — none of which a hand-picked breakpoint would survive.
+ *
+ * The [selected] semantics are here because the visual cue is colour alone. TalkBack reads the
+ * label and nothing else, so without this a screen-reader user can hear all six options and not
+ * learn which one is in force.
+ */
+@Composable
+fun <T> AarisChoiceRow(
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FlowRow(
+        modifier = modifier.selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        options.forEach { option ->
+            val isSelected = option == selected
+            OutlinedButton(
+                onClick = { onSelect(option) },
+                modifier = Modifier.semantics { this.selected = isSelected },
+                shape = RectangleShape,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isSelected) AarisColor.Accent else AarisColor.Muted,
+                ),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                Text(label(option))
+            }
         }
     }
 }
