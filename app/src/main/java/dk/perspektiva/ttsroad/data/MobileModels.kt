@@ -169,6 +169,26 @@ val EditableMetadataFields: List<String> = listOf(
     MetadataFieldTags,
 )
 
+/**
+ * The `status` values the server sends for a chapter, as it spells them.
+ *
+ * Named rather than inlined because three files compare against them, and a typo in a string
+ * literal comparison fails by silently never matching.
+ */
+object ChapterStatus {
+    const val Pending = "pending"
+    const val Processing = "processing"
+    const val Done = "done"
+    const val Error = "error"
+}
+
+/** The finer stage of a chapter that is [ChapterStatus.Processing]. */
+object ChapterSubStatus {
+    const val FetchingHtml = "fetching_html"
+    const val Preprocessing = "preprocessing"
+    const val Converting = "converting"
+}
+
 data class ChapterSummary(
     val id: Int = 0,
     @param:Json(name = "chapter_id") val apiChapterId: Int? = null,
@@ -179,6 +199,32 @@ data class ChapterSummary(
     @param:Json(name = "display_number") val displayNumber: Double? = null,
     @param:Json(name = "player_index") val playerIndex: Int? = null,
     val status: String? = null,
+    /**
+     * Which stage of conversion a `processing` chapter has reached — `fetching_html`,
+     * `preprocessing` or `converting`.
+     *
+     * Null on a chapter nobody is working on, and on a server too old to send it. Both read as
+     * "no finer detail than [status]", which is what [statusLabel] falls back to.
+     */
+    @param:Json(name = "sub_status") val subStatus: String? = null,
+    /** Percent complete, sent while a chapter is in `converting`. */
+    @param:Json(name = "tts_progress") val ttsProgress: Int? = null,
+    /**
+     * Why a chapter in `error` failed.
+     *
+     * The server has always sent this; until now the client dropped it, so a failure read as the
+     * bare word "error". Retrying is not something the app can do yet (#107), but knowing that a
+     * chapter is locked behind a paywall rather than transiently broken is worth the row on its own.
+     */
+    @param:Json(name = "error_message") val errorMessage: String? = null,
+    /**
+     * Excluded chapters are ignored in counts, in the feed and in the player.
+     *
+     * The app does not request them (`include_excluded` defaults to false), so this is false on
+     * every row today. It is decoded anyway so that a caller which *does* ask for them gets an
+     * answer rather than a silently-dropped field.
+     */
+    val excluded: Boolean = false,
     val playable: Boolean = false,
     @param:Json(name = "audio_duration") val audioDuration: Double? = null,
     @param:Json(name = "audio_duration_label") val audioDurationLabel: String? = null,
@@ -222,6 +268,38 @@ data class ChapterSummary(
 
     val resolvedIsPlayed: Boolean
         get() = playback?.isPlayed ?: false
+
+    /** A chapter whose conversion failed, and which therefore has a reason worth reading. */
+    val hasError: Boolean
+        get() = status == ChapterStatus.Error
+
+    /**
+     * What the row's status tag should say.
+     *
+     * The flat [status] is too coarse to be useful on its own: every chapter that is not yet
+     * playable reads "pending" whether it is queued behind two hundred others or ninety percent
+     * converted. This folds in [subStatus] and [ttsProgress], which the server has always sent.
+     *
+     * Deliberately lowercase — [dk.perspektiva.ttsroad.ui.AarisTag] uppercases what it is given,
+     * and doing it twice is how a label ends up shouting in one place and not another.
+     */
+    val statusLabel: String
+        get() = when {
+            excluded -> "excluded"
+            hasError -> "failed"
+            status == ChapterStatus.Processing || subStatus != null -> when (subStatus) {
+                ChapterSubStatus.FetchingHtml -> "fetching"
+                ChapterSubStatus.Preprocessing -> "cleaning"
+                // The percentage is the whole point of showing this stage rather than "processing":
+                // it is the only one that takes long enough for progress to be worth watching.
+                ChapterSubStatus.Converting ->
+                    ttsProgress?.let { "converting $it%" } ?: "converting"
+
+                else -> status ?: "processing"
+            }
+
+            else -> status ?: "pending"
+        }
 
     /**
      * Seconds left in this chapter, or null when nothing in the payload can answer that.

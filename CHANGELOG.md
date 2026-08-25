@@ -77,6 +77,18 @@ Notable changes to the TTSRoad Android client.
   oldest now sits just under eight hours back.
   ([#68](https://github.com/jonarihen/TTSRoad-App/issues/68))
 
+### Fixed
+
+- **A failed chapter says why it failed.** The server has always sent a reason; the app dropped it
+  at the parse layer, so every chapter that could not be converted rendered as the bare word
+  "error". The reason now appears on the chapter row and in full when you long-press it — which is
+  the difference between a chapter locked behind a pledge tier and one that is genuinely broken.
+  ([#106](https://github.com/jonarihen/TTSRoad-App/issues/106))
+- **A chapter being converted shows how far along it is.** Every chapter without audio read
+  "pending", whether it was queued behind two hundred others or ninety percent finished. Rows now
+  say `FETCHING`, `CLEANING` or `CONVERTING 62%`, from the stage and percentage the server was
+  already sending.
+
 ## 0.12.0 — 2026-08-17
 
 Signed with the same pinned key as 0.7.0 through 0.11.0, so this installs directly over any of them
