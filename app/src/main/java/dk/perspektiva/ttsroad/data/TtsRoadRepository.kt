@@ -504,6 +504,57 @@ class TtsRoadRepository(
         }
     }
 
+    /**
+     * Hold [chapterId]'s read-along document for as long as its audio is downloaded.
+     *
+     * Downloads used to fetch the MP3 and nothing else, so a chapter taken on a flight played
+     * offline and could not be *read* offline unless the reader had happened to be opened on it
+     * beforehand (#123). The backend's own `download-plan` endpoint treats the audio and its
+     * companion documents as one unit for exactly this reason.
+     *
+     * Answers whether a document is now held. False is an ordinary outcome: plenty of chapters were
+     * converted before timings existed, and there is nothing to pin for those.
+     *
+     * Best-effort by design: no failure here is rethrown, because this runs in the background behind
+     * a download the user asked for and a prefetch that did not land must not fail that download.
+     *
+     * A 401 is the exception worth being precise about. [authorized] expires the session *before*
+     * rethrowing, so a revoked token still signs the user out from here — the swallow only stops
+     * the exception propagating, not the expiry. That is deliberate: the token really is invalid,
+     * every other call is about to fail too, and hiding it in this one path would leave the app
+     * quietly half-broken rather than asking for a sign-in.
+     */
+    suspend fun pinReadAlong(chapterId: Int): Boolean = withContext(Dispatchers.IO) {
+        if (readAlongStore.isPinned(chapterId)) return@withContext true
+        // Already on disk from having been read: promote it rather than spending a request.
+        readAlongStore.read(chapterId)?.let { cached ->
+            readAlongStore.pin(chapterId, cached)
+            return@withContext true
+        }
+        runCatching {
+            authorized { api ->
+                val response = api.readAlong(chapterId, null)
+                when {
+                    response.code() == 404 -> false
+                    response.isSuccessful -> response.body()?.let { body ->
+                        readAlongStore.pin(
+                            chapterId,
+                            CachedReadAlong(response.headers()["ETag"], body),
+                        )
+                        true
+                    } ?: false
+
+                    else -> throw HttpException(response)
+                }
+            }
+        }.getOrDefault(false)
+    }
+
+    /** Release a pinned document, when its chapter's audio is deleted. */
+    fun unpinReadAlong(chapterId: Int) {
+        readAlongStore.unpin(chapterId)
+    }
+
     /** Whatever copy of [chapterId] we already hold, promoting the on-disk one into memory. */
     private fun cachedReadAlong(chapterId: Int): CachedReadAlongDocument? {
         synchronized(readAlongCache) { readAlongCache[chapterId] }?.let { return it }
