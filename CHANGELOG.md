@@ -84,6 +84,14 @@ Notable changes to the TTSRoad Android client.
   "error". The reason now appears on the chapter row and in full when you long-press it — which is
   the difference between a chapter locked behind a pledge tier and one that is genuinely broken.
   ([#106](https://github.com/jonarihen/TTSRoad-App/issues/106))
+- **The fiction screen says how a book is produced.** Which voice reads it, at what rate, where its
+  chapters come from and when the server last looked for new ones. All five have been in the
+  library payload since before the app existed — the client simply never decoded them, so "which
+  narrator is this" had no answer on a phone.
+  ([#111](https://github.com/jonarihen/TTSRoad-App/issues/111))
+- **A paused fiction says it is paused.** A book switched off server-side looks exactly like an
+  up-to-date one until you notice nothing has arrived for a fortnight. It now carries a warning
+  saying the server is not polling it or converting anything new.
 - **A chapter being converted shows how far along it is.** Every chapter without audio read
   "pending", whether it was queued behind two hundred others or ninety percent finished. Rows now
   say `FETCHING`, `CLEANING` or `CONVERTING 62%`, from the stage and percentage the server was

@@ -4233,6 +4233,11 @@ private fun FictionDetailHeader(
             )
         }
 
+        // How this book is produced, as opposed to what it is about. All of it has been in the
+        // library payload since before the app existed; the client simply never decoded it, so
+        // "which voice is this" and "why has nothing new arrived" had no answer on a phone (#111).
+        ProductionMeta(fiction)
+
         if (fiction.tags.isNotEmpty()) {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -4308,6 +4313,39 @@ private fun FictionDetailHeader(
  * the trimmed title, the de-duplicated tags and the rehosted cover URL are all its decisions, not
  * this screen's.
  */
+/**
+ * Voice, rate, source and poll state for one fiction.
+ *
+ * Renders nothing at all when the server said none of it — an older server, or a payload that
+ * predates these keys. An empty panel captioned "Production" would be worse than no panel: it
+ * reads as a feature that is broken rather than one the server cannot answer.
+ */
+@Composable
+private fun ProductionMeta(fiction: FictionSummary) {
+    val facts = listOfNotNull(
+        fiction.voice?.takeIf { it.isNotBlank() },
+        fiction.rate?.takeIf { it.isNotBlank() },
+        fiction.sourceTypeLabel,
+        fiction.lastPolledLabel(),
+    )
+    if (facts.isEmpty() && !fiction.isPaused) return
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (fiction.isPaused) {
+            // The one line here that is a problem rather than a fact, so it gets the warning
+            // colour and its own row: a paused book looks identical to an up-to-date one until
+            // you notice nothing has arrived for a fortnight.
+            MetaText(
+                text = "Paused — the server is not polling this or converting anything new",
+                color = AarisColor.Warning,
+            )
+        }
+        if (facts.isNotEmpty()) {
+            MetaText(text = facts.joinToString("  ·  "), color = AarisColor.Dim)
+        }
+    }
+}
+
 @Composable
 private fun FictionEditScreen(
     padding: PaddingValues,

@@ -1,6 +1,8 @@
 package dk.perspektiva.ttsroad.data
 
 import com.squareup.moshi.Json
+import java.time.Duration
+import java.time.Instant
 
 data class LoginRequest(
     val username: String,
@@ -90,6 +92,13 @@ data class ChaptersResponse(
     val chapters: List<ChapterSummary> = emptyList(),
 )
 
+/** The `source_type` values the server sends. A fiction may carry a key newer than this build. */
+object SourceType {
+    const val RoyalRoad = "royalroad"
+    const val Epub = "epub"
+    const val Patreon = "patreon"
+}
+
 data class FictionSummary(
     val id: Int = 0,
     val title: String = "Untitled",
@@ -123,7 +132,77 @@ data class FictionSummary(
      * [supportsMetadataEditing].
      */
     @param:Json(name = "metadata_overrides") val metadataOverrides: List<String>? = null,
+    /**
+     * The edge-tts narrator this fiction is converted with, as the server spells it.
+     *
+     * Read-only here: changing it is an admin workflow with no mobile surface yet (#111). Showing
+     * it is worth doing on its own — with several books in flight there is otherwise no way to tell
+     * from a phone which voice you are listening to, or that two books share one.
+     */
+    val voice: String? = null,
+    /** The synthesis rate baked into the MP3, e.g. `+0%`. Read-only, as [voice]. */
+    val rate: String? = null,
+    /**
+     * Whether polling and conversion run for this fiction at all.
+     *
+     * Null rather than false on a server too old to send it: "we were not told" and "this book is
+     * paused" want different UI, and defaulting the first to the second would put a warning on
+     * every row. Only an explicit `false` is treated as paused.
+     */
+    val enabled: Boolean? = null,
+    /**
+     * Where the chapters come from — `royalroad`, `epub`, `patreon`, or a newer adapter's key.
+     *
+     * These behave differently enough that the distinction matters when something looks wrong: an
+     * EPUB import has no remote chapter list to poll, and a Patreon fiction can have chapters the
+     * account is not entitled to read.
+     */
+    @param:Json(name = "source_type") val sourceType: String? = null,
+    /** When the server last checked the source for new chapters. ISO-8601, or null if never. */
+    @param:Json(name = "last_polled_at") val lastPolledAt: String? = null,
 ) {
+    /**
+     * This fiction is switched off: the poller skips it and nothing new will be converted.
+     *
+     * Deliberately not "not enabled" — [enabled] is null on an older server, and treating that as
+     * paused would warn about every book on it.
+     */
+    val isPaused: Boolean
+        get() = enabled == false
+
+    /**
+     * How this fiction's chapters are obtained, in words, or null when it is not worth saying.
+     *
+     * Royal Road is the overwhelming default and returns null: labelling the ordinary case adds a
+     * word to every row and distinguishes nothing. An unknown key is passed through rather than
+     * hidden — a newer server's adapter is still more informative than silence.
+     */
+    val sourceTypeLabel: String?
+        get() = when (sourceType) {
+            null, "", SourceType.RoyalRoad -> null
+            SourceType.Epub -> "EPUB import"
+            SourceType.Patreon -> "Patreon"
+            else -> sourceType
+        }
+
+    /**
+     * "polled 20m ago", or null when the server never said.
+     *
+     * [now] is a parameter so this is testable without freezing the clock. Coarse on purpose: the
+     * question it answers is "is polling still happening", and to two significant figures.
+     */
+    fun lastPolledLabel(now: Instant = Instant.now()): String? {
+        val polled = parseServerInstant(lastPolledAt) ?: return null
+        val seconds = Duration.between(polled, now).seconds
+        return when {
+            // A server clock a little ahead of the phone's is not worth reporting as a negative age.
+            seconds < 90 -> "polled just now"
+            seconds < 3_600 -> "polled ${seconds / 60}m ago"
+            seconds < 86_400 -> "polled ${seconds / 3_600}h ago"
+            else -> "polled ${seconds / 86_400}d ago"
+        }
+    }
+
     /** Fraction of chapters with audio ready, for progress indicators. */
     val readyFraction: Float
         get() = if (totalChapters > 0) (doneChapters.toFloat() / totalChapters).coerceIn(0f, 1f) else 0f
