@@ -177,6 +177,7 @@ import dk.perspektiva.ttsroad.data.StreamingCacheChoices
 import dk.perspektiva.ttsroad.data.StreamingCacheUnlimited
 import dk.perspektiva.ttsroad.data.KeepAheadChoices
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
+import dk.perspektiva.ttsroad.data.PreferenceScope
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
@@ -2419,13 +2420,15 @@ private fun SettingsScreen(
                     }
                 }
                 MetaText(
-                    text = "Used by the player, the mini player, and the lockscreen buttons.",
+                    text = "Used by the player, the mini player, and the lockscreen buttons. " +
+                        PreferenceScope.DevicePlayer,
                     color = AarisColor.Dim,
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingsItem(label = "Playback speed", value = formatSpeed(prefs.speed))
                 MetaText(
-                    text = "Change it from the player; it is kept across restarts and reboots.",
+                    text = "Change it from the player; it is kept across restarts and reboots. " +
+                        PreferenceScope.DevicePlayer,
                     color = AarisColor.Dim,
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
@@ -2450,8 +2453,8 @@ private fun SettingsScreen(
                     }
                 }
                 MetaText(
-                    text = "Marked in the player's sleep sheet. Follows your account, so the " +
-                        "browser agrees.",
+                    text = "Marked in the player's sleep sheet. " +
+                        PreferenceScope.account(capabilities.playerPreferences),
                     color = AarisColor.Dim,
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
@@ -2465,8 +2468,9 @@ private fun SettingsScreen(
                         Spacer(modifier = Modifier.height(2.dp))
                         MetaText(
                             text = "Finishing a chapter marks it played without being asked. " +
-                                "Turn it off to keep that deliberate. Follows your account, and " +
-                                "marking a chapter yourself still works either way.",
+                                "Turn it off to keep that deliberate; marking a chapter yourself " +
+                                "still works either way. " +
+                                PreferenceScope.account(capabilities.playerPreferences),
                             color = AarisColor.Dim,
                         )
                     }
@@ -4868,6 +4872,8 @@ private fun ReaderScreen(
     // is still what the reader renders from — the sync writes through it, not around it.
     val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val prefs by readerPreferences.prefs.collectAsStateWithLifecycle(initialValue = ReaderPrefs())
+    // Only for the settings sheet's footer, which has to say whether these follow the account.
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     val sleepTimer = remember { ServiceLocator.sleepTimer() }
     val sleepTimerState by sleepTimer.state.collectAsStateWithLifecycle()
     val palette = remember(prefs.theme) { readerPalette(prefs.theme) }
@@ -5050,6 +5056,7 @@ private fun ReaderScreen(
         ReaderSettingsSheet(
             prefs = prefs,
             palette = palette,
+            syncsWithAccount = capabilities.playerPreferences,
             onDismiss = { showSettings = false },
             onFontScale = { scope.launch { accountPreferenceSync.setReaderFontScale(it) } },
             onLineHeight = { scope.launch { accountPreferenceSync.setReaderLineHeight(it) } },
@@ -5202,6 +5209,8 @@ private fun ReaderSettingsSheet(
     prefs: ReaderPrefs,
     palette: ReaderPalette,
     onDismiss: () -> Unit,
+    /** Whether this server can hold reader settings on the account — see [PreferenceScope]. */
+    syncsWithAccount: Boolean,
     onFontScale: (Float) -> Unit,
     onLineHeight: (Float) -> Unit,
     onTheme: (ReaderTheme) -> Unit,
@@ -5258,9 +5267,13 @@ private fun ReaderSettingsSheet(
                 }
             }
             Spacer(modifier = Modifier.height(20.dp))
-            // Worth saying out loud: the web reader has its own copy of these, and #32 wanted them
-            // shared. There is no server endpoint to share them through yet.
-            MetaText(text = "// Kept on this phone only", color = palette.muted)
+            // These have followed the account since #62; the footer went on claiming otherwise for
+            // two releases (#103). It is capability-aware because both answers are real: an older
+            // server genuinely cannot hold them, and saying so is not the same as denying the sync.
+            MetaText(
+                text = PreferenceScope.reader(syncsWithAccount),
+                color = palette.muted,
+            )
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
