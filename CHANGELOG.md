@@ -6,6 +6,20 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **Podcast feed links, from the phone.** Serving a private podcast feed is what TTSRoad is for, and
+  the phone is where a podcast app lives — yet the only way to get a tokenised feed URL onto the
+  phone was to mail it to yourself from a laptop. Settings now shows the combined feed and the OPML
+  link with a **SHARE** action each, and every fiction screen shares that book's feed. Both go to
+  the share sheet rather than the clipboard, because handing the URL straight to a podcast app is
+  the actual goal. Regenerating is there too, behind a confirmation that says what it breaks — if a
+  private token leaks, the device in your hand is the natural place to respond from.
+  ([#115](https://github.com/jonarihen/TTSRoad-App/issues/115))
+- **A backup of where you are in everything.** Settings → Listening state saves every position and
+  bookmark on the account to a file you choose, and restores one. Audio can always be made again;
+  where you are in a four-hundred-chapter serial cannot — and the phone is where most of that state
+  is made. Restoring merges rather than overwrites: a position only ever moves forward and bookmarks
+  are added, so an old backup cannot undo newer listening.
+  ([#116](https://github.com/jonarihen/TTSRoad-App/issues/116))
 - **"N failed" is something you can act on.** The fiction screen stated a count of failed chapters
   and offered nothing to do about it — a number you cannot act on and cannot explain says something
   is wrong and then refuses to help. Admin accounts now get **RETRY N FAILED** next to the count,

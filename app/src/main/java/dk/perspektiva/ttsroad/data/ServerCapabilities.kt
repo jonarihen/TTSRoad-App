@@ -110,6 +110,23 @@ data class ServerCapabilities(
      */
     val fictionMaintenance: Boolean = false,
 
+    /**
+     * The podcast URLs this account can hand to a podcast app, and the lever that revokes them
+     * (#115).
+     *
+     * Its own flag because the client's whole use for it is a share sheet: a server that cannot
+     * list the URLs cannot have that button drawn at all.
+     */
+    val feedUrls: Boolean = false,
+
+    /**
+     * Export and restore where you are in everything (#116).
+     *
+     * The phone writes most of that state — positions from the media service, marks made in the
+     * car — and could not save a copy of it.
+     */
+    val listeningStateBackup: Boolean = false,
+
     /** The server can plan a download batch: which chapters, in what order, how many bytes. */
     val offlineDownloads: Boolean = false,
 
@@ -167,6 +184,8 @@ data class ServerCapabilities(
                 epubUpload = flags.flag("epub_upload"),
                 chapterMaintenance = flags.flag("chapter_maintenance"),
                 fictionMaintenance = flags.flag("fiction_maintenance"),
+                feedUrls = flags.flag("feed_urls"),
+                listeningStateBackup = flags.flag("listening_state_backup"),
                 offlineDownloads = flags.flag("offline_downloads"),
                 signedAudioUrls = flags.flag("signed_audio_urls"),
                 liveEvents = flags.flag("live_events"),
