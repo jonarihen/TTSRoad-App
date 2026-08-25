@@ -79,6 +79,13 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **Settings says what your server can do.** The app hides any control the server cannot back —
+  which is right, and invisible: a missing button looked the same whether the server was older than
+  the app, the account was not an admin, or the app was broken. A **Server** card now lists the
+  server's version and every capability it advertises, so a control you expected and cannot find
+  has a stated reason. ([#120](https://github.com/jonarihen/TTSRoad-App/issues/120))
+- Features the server offers and the app does not yet use say so rather than showing a bare tick,
+  and a capability newer than the app is listed under its own name instead of being dropped.
 - **Every settings group now says where it is actually kept.** The reader's sheet had claimed
   "Kept on this phone only" since before those settings started following the account, so it told
   you the opposite of what it did — someone avoiding an account-wide change was reassured wrongly,
