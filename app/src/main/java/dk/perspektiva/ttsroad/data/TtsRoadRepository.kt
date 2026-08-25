@@ -675,6 +675,76 @@ class TtsRoadRepository(
         return runCatching { withAuthorizedApi { it.updateAccountPreferences(patch) } }.isSuccess
     }
 
+    // Maintenance (#107, #112). Every call answers a [MaintenanceResponse] or null, and null means
+    // exactly one thing: this server does not have the route. A *failure* throws, because unlike the
+    // background freshness check these are actions the user pressed a button for and expects to be
+    // told about — "Poll" quietly doing nothing is worse than "Poll" saying it could not.
+
+    /**
+     * Queue one chapter for conversion again.
+     *
+     * Gated on the capability only, not on admin: the server leaves this route open to any account
+     * on purpose — it repairs one chapter, harms nobody, and the account watching a failed row is
+     * usually the one that wants it fixed.
+     */
+    suspend fun retryChapter(chapterId: Int): MaintenanceResponse? {
+        if (!_currentCapabilities.value.chapterMaintenance) return null
+        return withAuthorizedApi { it.retryChapter(chapterId) }
+    }
+
+    /** Take one chapter off every feed and player, or put it back. Admin only, server-side. */
+    suspend fun setChapterExcluded(chapterId: Int, excluded: Boolean): MaintenanceResponse? {
+        if (!_currentCapabilities.value.chapterMaintenance) return null
+        return withAuthorizedApi {
+            it.setChapterExcluded(chapterId, ChapterExcludeRequest(excluded = excluded))
+        }
+    }
+
+    /** Delete one chapter and its audio. Admin only, server-side. */
+    suspend fun deleteChapter(chapterId: Int): MaintenanceResponse? {
+        if (!_currentCapabilities.value.chapterMaintenance) return null
+        return withAuthorizedApi { it.deleteChapter(chapterId) }
+    }
+
+    /**
+     * Check the source for new chapters now.
+     *
+     * Open to any account, like [retryChapter] — the server rate-limits it and a fresh chapter
+     * benefits every reader. [full] re-ingests the whole chapter list rather than the recent tail.
+     */
+    suspend fun pollFiction(fictionId: Int, full: Boolean = false): MaintenanceResponse? {
+        if (!_currentCapabilities.value.fictionMaintenance) return null
+        return withAuthorizedApi { it.pollFiction(fictionId, full = full) }
+    }
+
+    suspend fun retryFailedChapters(fictionId: Int): MaintenanceResponse? {
+        if (!_currentCapabilities.value.fictionMaintenance) return null
+        return withAuthorizedApi { it.retryFailedChapters(fictionId) }
+    }
+
+    suspend fun retryAllFailed(): MaintenanceResponse? {
+        if (!_currentCapabilities.value.fictionMaintenance) return null
+        return withAuthorizedApi { it.retryAllFailed() }
+    }
+
+    /** Re-narrate every chapter. Expensive — a 400-chapter serial is 400 conversions. */
+    suspend fun reconvertAllChapters(fictionId: Int): MaintenanceResponse? {
+        if (!_currentCapabilities.value.fictionMaintenance) return null
+        return withAuthorizedApi { it.reconvertAllChapters(fictionId) }
+    }
+
+    /** Rewrite the ID3 tags on existing MP3s. No TTS is re-run. */
+    suspend fun retagFiction(fictionId: Int): MaintenanceResponse? {
+        if (!_currentCapabilities.value.fictionMaintenance) return null
+        return withAuthorizedApi { it.retagFiction(fictionId) }
+    }
+
+    /** Re-run the fiction's title filter over chapters that already exist. Excludes only. */
+    suspend fun applyChapterFilter(fictionId: Int): MaintenanceResponse? {
+        if (!_currentCapabilities.value.fictionMaintenance) return null
+        return withAuthorizedApi { it.applyChapterFilter(fictionId) }
+    }
+
     /**
      * Server-side search, or null when this server cannot do it.
      *

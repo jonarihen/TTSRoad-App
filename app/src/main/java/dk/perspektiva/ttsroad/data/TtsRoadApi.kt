@@ -199,6 +199,59 @@ interface TtsRoadApi {
         @Body changes: Map<String, @JvmSuppressWildcards Any?>,
     ): AccountPreferencesResponse
 
+    // Maintenance (#107, #112). Nine routes, one response shape, two capability flags: `retry`,
+    // `exclude` and `delete` for a chapter, and poll / retry-failed / retry-all / reconvert-all /
+    // retag / apply-filter for a fiction. Which of them an *account* may use is `me.is_admin` —
+    // the flags only say the server has them. Retry and poll are the two the server deliberately
+    // leaves open to any account.
+
+    @POST("api/mobile/chapters/{chapter_id}/retry")
+    suspend fun retryChapter(@Path("chapter_id") chapterId: Int): MaintenanceResponse
+
+    @POST("api/mobile/chapters/{chapter_id}/exclude")
+    suspend fun setChapterExcluded(
+        @Path("chapter_id") chapterId: Int,
+        @Body request: ChapterExcludeRequest,
+    ): MaintenanceResponse
+
+    @DELETE("api/mobile/chapters/{chapter_id}")
+    suspend fun deleteChapter(@Path("chapter_id") chapterId: Int): MaintenanceResponse
+
+    /**
+     * Check the source for new chapters now, rather than waiting for the scheduler.
+     *
+     * The answer to "the author posted an hour ago, where is it". [full] re-ingests the whole
+     * chapter list instead of the recent tail, which is the expensive branch and is why it is a
+     * separate action in the UI rather than a default.
+     */
+    @POST("api/mobile/fictions/{fiction_id}/poll")
+    suspend fun pollFiction(
+        @Path("fiction_id") fictionId: Int,
+        @Query("full") full: Boolean = false,
+    ): MaintenanceResponse
+
+    @POST("api/mobile/fictions/{fiction_id}/retry-failed")
+    suspend fun retryFailedChapters(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
+    @POST("api/mobile/retry-all-failed")
+    suspend fun retryAllFailed(): MaintenanceResponse
+
+    @POST("api/mobile/fictions/{fiction_id}/reconvert-all")
+    suspend fun reconvertAllChapters(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
+    /**
+     * Rewrite the ID3 tags on existing MP3s. No TTS is re-run.
+     *
+     * The counterpart to the metadata editing that shipped in 0.11.0: a title or cover changed from
+     * a phone is only half applied while the files carrying the old one cannot be rewritten from
+     * the same place.
+     */
+    @POST("api/mobile/fictions/{fiction_id}/retag")
+    suspend fun retagFiction(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
+    @POST("api/mobile/fictions/{fiction_id}/apply-chapter-filter")
+    suspend fun applyChapterFilter(@Path("fiction_id") fictionId: Int): MaintenanceResponse
+
     /**
      * Bookmarks. The same rows as the web's `/api/bookmarks` — both routers call into the one
      * service — so a mark made in the car is the same record as one made in the browser.

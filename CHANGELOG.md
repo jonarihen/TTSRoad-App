@@ -6,6 +6,19 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **"N failed" is something you can act on.** The fiction screen stated a count of failed chapters
+  and offered nothing to do about it — a number you cannot act on and cannot explain says something
+  is wrong and then refuses to help. Admin accounts now get **RETRY N FAILED** next to the count,
+  and every chapter's long-press sheet gains **Convert again**, which is open to any account exactly
+  as the server has it. ([#107](https://github.com/jonarihen/TTSRoad-App/issues/107))
+- **Fiction maintenance from the phone.** **CHECK FOR NEW CHAPTERS** sits in the fiction header —
+  the answer to "the author posted an hour ago, where is it" without waiting for the scheduler — and
+  a **MAINTENANCE** sheet holds fetch-all, re-apply chapter filter, refresh MP3 tags and re-narrate
+  everything. That last one asks first, because a four-hundred-chapter serial is four hundred
+  conversions. Admin accounts also get exclude and delete on a single chapter. Refresh MP3 tags is
+  the other half of the metadata editing that shipped in 0.11.0: until now the app could rename a
+  book and could not rewrite the files still carrying the old title.
+  ([#112](https://github.com/jonarihen/TTSRoad-App/issues/112))
 - **Bookmarks show up where you would look for them.** The only place to see a mark was Settings →
   Bookmarks — a flat, account-wide, newest-first list. The fiction screen now has a bookmarks section
   scoped to that book with a count, and the player draws every mark in the current chapter as a tick

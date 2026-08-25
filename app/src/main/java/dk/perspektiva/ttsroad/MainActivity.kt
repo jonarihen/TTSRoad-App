@@ -180,6 +180,7 @@ import dk.perspektiva.ttsroad.data.readPickedCover
 import dk.perspektiva.ttsroad.data.formatExpiresIn
 import dk.perspektiva.ttsroad.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.data.LoginResult
+import dk.perspektiva.ttsroad.data.MaintenanceResponse
 import dk.perspektiva.ttsroad.data.ReadAlongDocument
 import dk.perspektiva.ttsroad.data.ReadAlongHighlight
 import dk.perspektiva.ttsroad.data.ReaderFontScales
@@ -1075,6 +1076,13 @@ private fun FictionScreen(
     // list in Settings — while "the marks in this book" is the question you actually have once you
     // have marks across several. Scoped server-side rather than filtered here.
     var fictionBookmarks by remember(fiction.id) { mutableStateOf<List<Bookmark>>(emptyList()) }
+    // Maintenance (#107, #112). One busy flag for the lot: they all act on the same fiction and
+    // running two at once is never what anyone meant.
+    var isMaintaining by remember(fiction.id) { mutableStateOf(false) }
+    var showMaintenance by remember(fiction.id) { mutableStateOf(false) }
+    var maintenanceNote by remember(fiction.id) { mutableStateOf<String?>(null) }
+    var confirmReconvert by remember(fiction.id) { mutableStateOf(false) }
+    var confirmDeleteChapter by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
     LaunchedEffect(fiction.id, capabilities.bookmarks) {
         fictionBookmarks = if (!capabilities.bookmarks) {
             emptyList()
@@ -1099,6 +1107,36 @@ private fun FictionScreen(
     // so opening a fiction you have nothing saved from costs nothing.
     LaunchedEffect(fiction.id, downloadedChapterIds, capabilities.audioContentHash) {
         staleDownloads.scan(fiction.id, downloadedChapterIds)
+    }
+
+    /**
+     * Run one maintenance action and report what it did (#107, #112).
+     *
+     * The counts are the whole point of reporting anything: "re-narrate every chapter" and "rewrite
+     * the tags" both answer `status: ok`, and only a number distinguishes a no-op from four hundred
+     * conversions. The chapter list is reloaded afterwards because every one of these changes it —
+     * a requeued chapter goes back to processing, an excluded one leaves the list.
+     */
+    fun maintain(describe: (MaintenanceResponse) -> String, action: suspend () -> MaintenanceResponse?) {
+        scope.launch {
+            isMaintaining = true
+            error = null
+            maintenanceNote = null
+            runCatching { action() }
+                .onSuccess { response ->
+                    maintenanceNote = response?.let(describe)
+                        ?: "This server cannot do that yet."
+                }
+                .onFailure {
+                    // Surfaced rather than swallowed: unlike the background freshness check, the
+                    // user pressed a button for this and silence would read as success.
+                    error = it.message ?: "That did not work"
+                }
+            isMaintaining = false
+            // The server works in the background, so the reload shows the *accepted* state — a
+            // chapter back in processing — rather than a finished conversion.
+            cache.refreshChapters(fiction.id)
+        }
     }
 
     /**
@@ -1229,6 +1267,46 @@ private fun FictionScreen(
                                 null
                             },
                             isDeleting = isDeleting,
+                            isMaintaining = isMaintaining,
+                            // Poll is not admin-gated, and that is the server's decision rather
+                            // than a looser one taken here: it is rate-limited server-side and a
+                            // fresh chapter benefits every reader.
+                            onPoll = if (capabilities.fictionMaintenance) {
+                                {
+                                    maintain(
+                                        describe = { response ->
+                                            when {
+                                                response.fullIngest -> "Re-reading the whole chapter list."
+                                                (response.partialSync ?: 0) > 0 ->
+                                                    "Checking the last ${response.partialSync} chapters."
+
+                                                else -> "Checking the source now."
+                                            }
+                                        },
+                                    ) { repository.pollFiction(fiction.id) }
+                                }
+                            } else {
+                                null
+                            },
+                            // Admin-only, because the server's route is. The count above it is not
+                            // gated — a non-admin still sees that something failed, they just
+                            // cannot be the one to requeue it.
+                            onRetryFailed = if (
+                                capabilities.fictionMaintenance && isAdmin && fiction.errorChapters > 0
+                            ) {
+                                {
+                                    maintain(
+                                        describe = { "Requeued ${it.resetCount ?: 0} chapters." },
+                                    ) { repository.retryFailedChapters(fiction.id) }
+                                }
+                            } else {
+                                null
+                            },
+                            onMaintain = if (capabilities.fictionMaintenance && isAdmin) {
+                                { showMaintenance = true }
+                            } else {
+                                null
+                            },
                             onDownloadNext = {
                                 // Start where the listener is, not at chapter one — the point of the
                                 // batch is the drive ahead of them.
@@ -1246,6 +1324,13 @@ private fun FictionScreen(
                         error?.let {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(text = it, color = MaterialTheme.colorScheme.error)
+                        }
+                        // What the server accepted, in its own numbers. Every one of these actions
+                        // runs in the background, so "accepted" is genuinely all there is to say —
+                        // claiming it had finished would be a lie about a 400-chapter re-convert.
+                        maintenanceNote?.let {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            MetaText(text = it, color = AarisColor.Ok)
                         }
                         val staleHere = remember(chapters, staleChapters) {
                             chapters.count { it.resolvedChapterId in staleChapters }
@@ -1398,6 +1483,124 @@ private fun FictionScreen(
                     } else {
                         null
                     },
+                    isBusy = isMaintaining,
+                    // Open to any account, exactly as the server has it: repairing one chapter
+                    // harms nobody, and the person staring at a failed row is usually the one who
+                    // wants it fixed.
+                    onRetry = if (capabilities.chapterMaintenance) {
+                        {
+                            bulkTarget = null
+                            maintain(describe = { "Queued for conversion." }) {
+                                repository.retryChapter(target.resolvedChapterId)
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    // Admin-gated, because a chapter is a shared object: excluding one changes
+                    // what every account's podcast feed contains.
+                    onSetExcluded = if (capabilities.chapterMaintenance && isAdmin) {
+                        { excluded ->
+                            bulkTarget = null
+                            maintain(
+                                describe = {
+                                    if (excluded) "Excluded from every feed." else "Back on the feeds."
+                                },
+                            ) { repository.setChapterExcluded(target.resolvedChapterId, excluded) }
+                        }
+                    } else {
+                        null
+                    },
+                    onDelete = if (capabilities.chapterMaintenance && isAdmin) {
+                        {
+                            bulkTarget = null
+                            confirmDeleteChapter = target
+                        }
+                    } else {
+                        null
+                    },
+                )
+            }
+
+            confirmDeleteChapter?.let { chapter ->
+                ConfirmDialog(
+                    title = "DELETE THIS CHAPTER?",
+                    // Specific rather than generic, for the same reason DELETE FICTION is: this is
+                    // not scoped to one account, and there is no undo.
+                    body = "\"${chapter.resolvedTitle}\" and its audio are deleted from the " +
+                        "server, for everyone. It cannot be undone. The next poll may fetch it " +
+                        "again from the source unless the chapter filter excludes it.",
+                    confirmLabel = "DELETE",
+                    onDismiss = { confirmDeleteChapter = null },
+                    onConfirm = {
+                        confirmDeleteChapter = null
+                        maintain(describe = { "Chapter deleted." }) {
+                            repository.deleteChapter(chapter.resolvedChapterId)
+                        }
+                    },
+                )
+            }
+
+            if (showMaintenance) {
+                FictionMaintenanceSheet(
+                    fiction = fiction,
+                    isBusy = isMaintaining,
+                    onDismiss = { showMaintenance = false },
+                    onPollFull = {
+                        showMaintenance = false
+                        maintain(describe = { "Re-reading the whole chapter list." }) {
+                            repository.pollFiction(fiction.id, full = true)
+                        }
+                    },
+                    onApplyFilter = {
+                        showMaintenance = false
+                        maintain(
+                            describe = { response ->
+                                response.detail?.takeIf { it.isNotBlank() }
+                                    ?: "Excluded ${response.excludedCount ?: 0} chapters."
+                            },
+                        ) { repository.applyChapterFilter(fiction.id) }
+                    },
+                    onRetag = {
+                        showMaintenance = false
+                        maintain(describe = { "Rewriting tags on ${it.fileCount ?: 0} files." }) {
+                            repository.retagFiction(fiction.id)
+                        }
+                    },
+                    // The one action here that spends real time and outbound requests, so it is
+                    // the one that asks first. Everything else in this sheet is cheap or reversible.
+                    onReconvertAll = {
+                        showMaintenance = false
+                        confirmReconvert = true
+                    },
+                    onRetryFailed = if (fiction.errorChapters > 0) {
+                        {
+                            showMaintenance = false
+                            maintain(describe = { "Requeued ${it.resetCount ?: 0} chapters." }) {
+                                repository.retryFailedChapters(fiction.id)
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                )
+            }
+
+            if (confirmReconvert) {
+                ConfirmDialog(
+                    title = "RE-NARRATE EVERY CHAPTER?",
+                    body = "All ${fiction.totalChapters} chapters are converted again from " +
+                        "scratch. That is ${fiction.totalChapters} conversions of server time and " +
+                        "outbound requests, and every chapter already downloaded on a phone " +
+                        "becomes an out-of-date copy. Saved positions and bookmarks are not touched.",
+                    confirmLabel = "RE-NARRATE",
+                    onDismiss = { confirmReconvert = false },
+                    onConfirm = {
+                        confirmReconvert = false
+                        maintain(describe = { "Requeued ${it.resetCount ?: 0} chapters." }) {
+                            repository.reconvertAllChapters(fiction.id)
+                        }
+                    },
                 )
             }
 
@@ -1511,6 +1714,23 @@ private fun ChapterBulkSheet(
     onMark: (List<Int>) -> Unit,
     /** Null on a server with no cross-library queue. `true` means "play it next". */
     onQueue: ((playNext: Boolean) -> Unit)? = null,
+    /**
+     * Convert this chapter again (#107).
+     *
+     * Not admin-gated, because the server's route is not: it repairs one chapter, harms nobody, and
+     * the account looking at a failed row is usually the one that wants it fixed.
+     */
+    onRetry: (() -> Unit)? = null,
+    /**
+     * Take this chapter off every feed and player, or put it back. Admin only.
+     *
+     * A chapter is a shared object — excluding one changes what every account's podcast feed
+     * contains — which is why this is gated and [onRetry] is not.
+     */
+    onSetExcluded: ((Boolean) -> Unit)? = null,
+    /** Delete this chapter and its audio, for everyone. Admin only. */
+    onDelete: (() -> Unit)? = null,
+    isBusy: Boolean = false,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
         MetaText(
@@ -1562,6 +1782,41 @@ private fun ChapterBulkSheet(
                 subtitle = if (playable) "At the end of Up Next" else "No audio for this chapter yet",
                 enabled = playable,
                 onClick = { queue(false) },
+            )
+        }
+        // Repair, below the everyday actions. #107 was filed because "N failed" was stated on the
+        // fiction screen and nothing in the app could act on it — this is the per-chapter half.
+        onRetry?.let { retry ->
+            BulkAction(
+                title = if (chapter.hasError) "Convert again" else "Convert this chapter again",
+                subtitle = if (chapter.hasError) {
+                    "Queue it for another attempt"
+                } else {
+                    "Re-narrates it with the fiction's current voice and text rules"
+                },
+                enabled = !isBusy,
+                onClick = retry,
+            )
+        }
+        onSetExcluded?.let { setExcluded ->
+            val excluded = chapter.excluded
+            BulkAction(
+                title = if (excluded) "Include this chapter" else "Exclude this chapter",
+                subtitle = if (excluded) {
+                    "Put it back on every feed and player"
+                } else {
+                    "Takes it off every feed and player, for every account"
+                },
+                enabled = !isBusy,
+                onClick = { setExcluded(!excluded) },
+            )
+        }
+        onDelete?.let { delete ->
+            BulkAction(
+                title = "Delete this chapter",
+                subtitle = "Deletes it and its audio from the server, for everyone",
+                enabled = !isBusy,
+                onClick = delete,
             )
         }
         Spacer(modifier = Modifier.height(16.dp))
@@ -5038,6 +5293,14 @@ private fun FictionDetailHeader(
     /** Null unless this account is an admin on a server that can delete fictions. */
     onDelete: (() -> Unit)? = null,
     isDeleting: Boolean = false,
+    /** Ask the source for new chapters now (#112). Null on a server without the routes. */
+    onPoll: (() -> Unit)? = null,
+    /** Requeue this fiction's failed chapters (#107). Null when there is nothing to requeue. */
+    onRetryFailed: (() -> Unit)? = null,
+    /** Open the rest of the maintenance actions. Admin-only, so null for everyone else. */
+    onMaintain: (() -> Unit)? = null,
+    /** A maintenance request is in flight; every one of these controls waits for it. */
+    isMaintaining: Boolean = false,
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
@@ -5188,12 +5451,40 @@ private fun FictionDetailHeader(
                     if (fiction.errorChapters > 0) append("  ·  ${fiction.errorChapters} failed")
                 },
             )
+            // #107: the count used to be the entire treatment of a failed chapter on the phone.
+            // A number you cannot act on and cannot explain is worse than no number — it says
+            // something is wrong and then refuses to offer a fix.
+            if (fiction.errorChapters > 0 && onRetryFailed != null) {
+                OutlinedButton(
+                    onClick = onRetryFailed,
+                    enabled = !isMaintaining,
+                    shape = RectangleShape,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Warning),
+                ) {
+                    Text("RETRY ${fiction.errorChapters} FAILED")
+                }
+            }
         }
 
         // How this book is produced, as opposed to what it is about. All of it has been in the
         // library payload since before the app existed; the client simply never decoded it, so
         // "which voice is this" and "why has nothing new arrived" had no answer on a phone (#111).
         ProductionMeta(fiction)
+
+        // In the header rather than the sheet, and deliberately: "the author posted an hour ago,
+        // where is it" is the single most likely reason to want the phone to *do* something to a
+        // fiction rather than play it, and the server leaves this route open to any account.
+        onPoll?.let { poll ->
+            OutlinedButton(
+                onClick = poll,
+                enabled = !isMaintaining,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isMaintaining) "WORKING" else "CHECK FOR NEW CHAPTERS")
+            }
+        }
 
         if (fiction.tags.isNotEmpty()) {
             FlowRow(
@@ -5240,6 +5531,20 @@ private fun FictionDetailHeader(
             }
         }
 
+        // The other half of EDIT DETAILS (#112). Renaming a book from a phone was only half
+        // applied while the files carrying the old title could not be rewritten from the same
+        // place — and a count of failed chapters was stated and could not be acted on (#107).
+        onMaintain?.let { maintain ->
+            OutlinedButton(
+                onClick = maintain,
+                enabled = !isMaintaining,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isMaintaining) "WORKING" else "MAINTENANCE")
+            }
+        }
+
         // Last in the header, and the only destructive control on the screen. Deleting is admin
         // housekeeping, not something anyone does mid-listen, so it sits below everything that is.
         onDelete?.let { delete ->
@@ -5270,6 +5575,74 @@ private fun FictionDetailHeader(
  * the trimmed title, the de-duplicated tags and the rehosted cover URL are all its decisions, not
  * this screen's.
  */
+/**
+ * The rest of the fiction maintenance actions, behind one button (#112).
+ *
+ * A sheet rather than four more buttons in the header. The header is what someone opens to press
+ * RESUME, and every action here is a rare, deliberate act with a cost — the two at the bottom spend
+ * real server time, and one of them is four hundred conversions on a long serial. Poll is the
+ * exception and lives in the header, because "has the author posted" is a question people have
+ * while listening.
+ *
+ * Each action says what it will do and what it costs, because none of them can be undone and two
+ * of them are indistinguishable from the outside until they finish.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FictionMaintenanceSheet(
+    fiction: FictionSummary,
+    isBusy: Boolean,
+    onDismiss: () -> Unit,
+    onPollFull: () -> Unit,
+    onApplyFilter: () -> Unit,
+    onRetag: () -> Unit,
+    onReconvertAll: () -> Unit,
+    onRetryFailed: (() -> Unit)?,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        MetaText(
+            text = "// Maintenance",
+            color = AarisColor.Accent,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+        )
+        onRetryFailed?.let { retry ->
+            BulkAction(
+                title = "Retry failed chapters",
+                subtitle = "${fiction.errorChapters} failed",
+                enabled = !isBusy,
+                onClick = retry,
+            )
+        }
+        BulkAction(
+            title = "Fetch all chapters",
+            subtitle = "Re-reads the whole chapter list, not just the recent tail",
+            enabled = !isBusy,
+            onClick = onPollFull,
+        )
+        BulkAction(
+            title = "Re-apply chapter filter",
+            subtitle = "Excludes chapters the filter matches. Never un-excludes: one taken out " +
+                "by hand had a reason.",
+            enabled = !isBusy,
+            onClick = onApplyFilter,
+        )
+        BulkAction(
+            title = "Refresh MP3 tags",
+            subtitle = "Rewrites the tags on files that already exist. No audio is re-made.",
+            enabled = !isBusy,
+            onClick = onRetag,
+        )
+        BulkAction(
+            title = "Re-narrate every chapter",
+            subtitle = "${fiction.totalChapters} chapters, converted again from scratch. This is " +
+                "the expensive one.",
+            enabled = !isBusy,
+            onClick = onReconvertAll,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
 /**
  * Voice, rate, source and poll state for one fiction.
  *
