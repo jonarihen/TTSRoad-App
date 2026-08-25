@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -150,11 +151,15 @@ fun MetaText(
     text: String,
     modifier: Modifier = Modifier,
     color: Color = AarisColor.Muted,
+    /** Caps free-form text — a server error message is not written to fit a list row. */
+    maxLines: Int = Int.MAX_VALUE,
 ) {
     Text(
         text = text.uppercase(),
         modifier = modifier,
         color = color,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
         style = TextStyle(
             fontFamily = MonoFamily,
             fontWeight = FontWeight.Medium,
@@ -166,13 +171,18 @@ fun MetaText(
 
 /** Mono uppercase bordered chip — the AARIS `.tag`. Used for fiction tags/genres. */
 @Composable
-fun AarisTag(text: String, modifier: Modifier = Modifier) {
+fun AarisTag(
+    text: String,
+    modifier: Modifier = Modifier,
+    /** Border and text colour. Defaults to the neutral tag; a failure passes [AarisColor.Danger]. */
+    color: Color = AarisColor.Muted,
+) {
     Text(
         text = text.uppercase(),
         modifier = modifier
-            .border(1.dp, AarisColor.Line)
+            .border(1.dp, if (color == AarisColor.Muted) AarisColor.Line else color)
             .padding(horizontal = 8.dp, vertical = 4.dp),
-        color = AarisColor.Muted,
+        color = color,
         style = TextStyle(
             fontFamily = MonoFamily,
             fontWeight = FontWeight.Medium,

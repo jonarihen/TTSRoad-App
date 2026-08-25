@@ -1398,6 +1398,15 @@ private fun ChapterBulkSheet(
             color = AarisColor.Accent,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
         )
+        // The full reason, uncapped: the row shows two lines of it, and a stack trace tail or a
+        // long URL is exactly the case where the rest is the part worth reading.
+        chapter.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+            MetaText(
+                text = message,
+                color = AarisColor.Danger,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
+            )
+        }
         BulkAction(
             title = "Mark all previous as played",
             subtitle = if (previousIds.isEmpty()) {
@@ -3558,6 +3567,13 @@ private fun ChapterRow(
                         },
                     )
                 }
+                // Why it failed, on the row rather than only behind a long press. A list of rows
+                // reading "FAILED" and nothing else is what #106 was filed about; one line of the
+                // server's own message is usually enough to tell a locked chapter from a broken one.
+                chapter.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                    Spacer(modifier = Modifier.height(2.dp))
+                    MetaText(text = message, color = AarisColor.Danger, maxLines = 2)
+                }
             }
             Spacer(modifier = Modifier.width(8.dp))
             // Offered even for a chapter with no audio yet: the text is worth reading on its own.
@@ -3571,7 +3587,10 @@ private fun ChapterRow(
                 Spacer(modifier = Modifier.width(8.dp))
             }
             if (!playable) {
-                AarisTag(text = chapter.status ?: "pending")
+                AarisTag(
+                    text = chapter.statusLabel,
+                    color = if (chapter.hasError) AarisColor.Danger else AarisColor.Muted,
+                )
             } else {
                 onToggleDownload?.let { toggle ->
                     val state = download?.state ?: ChapterDownloadState.None
