@@ -462,6 +462,34 @@ data class QueueItem(
         get() = chapterTitle?.trim()?.takeIf { it.isNotEmpty() } ?: "Chapter"
 }
 
+/**
+ * `GET /api/mobile/fictions/{id}/audio-hashes` — what the bytes of each converted chapter hash to.
+ *
+ * The point of the endpoint is that chapter audio is **not immutable**. Re-convert, retry, retag
+ * and stale-text reconvert all rewrite an MP3 in place, and the URL does not change when they do —
+ * so a chapter already sitting in the download store is silently the old narration until someone
+ * deletes it by hand, which nothing gives them a reason to do (#109).
+ */
+data class AudioHashesResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    val total: Int = 0,
+    val chapters: List<AudioHash> = emptyList(),
+)
+
+data class AudioHash(
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    /**
+     * Null for chapters converted before hashing shipped, and for rows the server's backfill has
+     * not reached. The backend's own docstring is explicit that this means **unknown**, not
+     * changed — so a null must never mark a download stale. Getting that backwards would re-download
+     * a whole library the first time it met an older server.
+     */
+    @param:Json(name = "audio_sha256") val audioSha256: String? = null,
+    @param:Json(name = "audio_filesize") val audioFileSize: Long = 0L,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+)
+
 data class QueueResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
     val items: List<QueueItem> = emptyList(),

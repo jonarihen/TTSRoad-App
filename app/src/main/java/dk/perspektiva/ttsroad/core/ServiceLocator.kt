@@ -12,7 +12,9 @@ import dk.perspektiva.ttsroad.data.ReadAlongFileStore
 import dk.perspektiva.ttsroad.data.ReaderPreferenceStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TokenStore
+import dk.perspektiva.ttsroad.download.AudioHashRecord
 import dk.perspektiva.ttsroad.download.OfflineDownloads
+import dk.perspektiva.ttsroad.download.StaleDownloadScanner
 import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
@@ -65,6 +67,9 @@ object ServiceLocator {
 
     @Volatile
     private var offlineDownloads: OfflineDownloads? = null
+
+    @Volatile
+    private var staleDownloads: StaleDownloadScanner? = null
 
     @Volatile
     private var accountPreferenceSync: AccountPreferenceSync? = null
@@ -205,6 +210,20 @@ object ServiceLocator {
      * the download service and the UI all reach it through here, so there is still exactly one
      * cache and one download index per process — [OfflineDownloads] depends on that.
      */
+    /**
+     * Whether each downloaded chapter still holds the audio the server has (#109).
+     *
+     * Wired to the repository here rather than inside the scanner so the comparison itself stays a
+     * pure function of three sets, testable without a network.
+     */
+    fun staleDownloads(context: Context): StaleDownloadScanner =
+        staleDownloads ?: synchronized(this) {
+            staleDownloads ?: StaleDownloadScanner(
+                record = AudioHashRecord(context.applicationContext),
+                fetchHashes = { fictionId -> repository(context).audioHashes(fictionId) },
+            ).also { staleDownloads = it }
+        }
+
     fun offlineDownloads(context: Context): OfflineDownloads =
         offlineDownloads ?: synchronized(this) {
             offlineDownloads ?: OfflineDownloads(
@@ -218,6 +237,10 @@ object ServiceLocator {
                 // rather than only on chapters that happened to be opened beforehand.
                 pinReadAlong = { chapterId -> repository(context).pinReadAlong(chapterId) },
                 unpinReadAlong = { chapterId -> repository(context).unpinReadAlong(chapterId) },
+                // A download that is gone cannot be stale, and its recorded hash describes bytes
+                // that are no longer on disk.
+                forgetAudioHash = { chapterId -> staleDownloads(context).forget(chapterId) },
+                forgetAllAudioHashes = { staleDownloads(context).clear() },
             ).also { offlineDownloads = it }
         }
 }

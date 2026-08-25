@@ -1008,6 +1008,10 @@ private fun FictionScreen(
         .collectAsStateWithLifecycle()
     val downloads = remember { ServiceLocator.offlineDownloads(context) }
     val downloadState by downloads.downloads.collectAsStateWithLifecycle()
+    // #109: chapter audio is not immutable, and the download index keys on a URL that does not
+    // change when it is rewritten. Which chapters on disk are no longer what the server has.
+    val staleDownloads = remember { ServiceLocator.staleDownloads(context) }
+    val staleChapters by staleDownloads.staleChapters.collectAsStateWithLifecycle()
     val serverUrl = LocalServerUrl.current
     var error by remember { mutableStateOf<String?>(null) }
     // Not keyed on fiction.id, unlike everything around it: the filter is a library-wide setting
@@ -1043,6 +1047,21 @@ private fun FictionScreen(
     val playerState by playbackController.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(fiction.id) { cache.ensureChapters(fiction.id) }
+
+    // Only the completed downloads: a chapter still transferring has no bytes to be wrong about,
+    // and a failed one has none at all.
+    val downloadedChapterIds = remember(downloadState) {
+        downloadState
+            .filterValues { it.state.isAvailableOffline }
+            .keys
+            .mapNotNullTo(mutableSetOf(), TtsRoadMediaIds::chapterId)
+    }
+    // Re-runs when a download finishes or is deleted, which is when the answer can have changed.
+    // The scan is one small request and is skipped entirely without the capability or a download,
+    // so opening a fiction you have nothing saved from costs nothing.
+    LaunchedEffect(fiction.id, downloadedChapterIds, capabilities.audioContentHash) {
+        staleDownloads.scan(fiction.id, downloadedChapterIds)
+    }
 
     /**
      * Mark [ids] played/unplayed in one request and patch the loaded rows in place — bulk marking a
@@ -1190,6 +1209,22 @@ private fun FictionScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(text = it, color = MaterialTheme.colorScheme.error)
                         }
+                        val staleHere = remember(chapters, staleChapters) {
+                            chapters.count { it.resolvedChapterId in staleChapters }
+                        }
+                        if (staleHere > 0) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            StaleDownloadsNotice(
+                                count = staleHere,
+                                onUpdateAll = {
+                                    val outdated = chapters.filter {
+                                        it.resolvedChapterId in staleChapters
+                                    }
+                                    staleDownloads.markUpdating(outdated.map { it.resolvedChapterId })
+                                    downloads.download(outdated, serverUrl)
+                                },
+                            )
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                         SectionHeader(kicker = "CH", title = "Chapters")
                         ChapterListControls(
@@ -1220,16 +1255,25 @@ private fun FictionScreen(
                             onMarkPlayed = { played -> mark(listOf(chapter.resolvedChapterId), played) },
                             onLongPress = { bulkTarget = chapter },
                             download = downloadState[TtsRoadMediaIds.chapter(chapter.resolvedChapterId)],
+                            isStale = chapter.resolvedChapterId in staleChapters,
                             onToggleDownload = {
                                 val current = downloadState[
                                     TtsRoadMediaIds.chapter(chapter.resolvedChapterId),
                                 ]?.state ?: ChapterDownloadState.None
-                                // Anything already on disk or in flight is removed; anything else
-                                // (including a previous failure) is started.
-                                if (current.isAvailableOffline || current.isBusy) {
-                                    downloads.remove(chapter.resolvedChapterId)
-                                } else {
-                                    downloads.download(chapter, serverUrl)
+                                val isStale = chapter.resolvedChapterId in staleChapters
+                                when {
+                                    // A stale copy is replaced rather than deleted: what is wanted
+                                    // here is the current narration, not the space back.
+                                    isStale && current.isAvailableOffline -> {
+                                        staleDownloads.markUpdating(listOf(chapter.resolvedChapterId))
+                                        downloads.download(chapter, serverUrl)
+                                    }
+                                    // Anything already on disk or in flight is removed; anything
+                                    // else (including a previous failure) is started.
+                                    current.isAvailableOffline || current.isBusy ->
+                                        downloads.remove(chapter.resolvedChapterId)
+
+                                    else -> downloads.download(chapter, serverUrl)
                                 }
                             },
                             // Two gates: the server has read-along, and this chapter is not known
@@ -3736,6 +3780,11 @@ internal fun ChapterRow(
     isCurrent: Boolean = false,
     download: ChapterDownload? = null,
     onToggleDownload: (() -> Unit)? = null,
+    /**
+     * The audio on disk is not the audio the server has any more (#109) — the chapter was
+     * re-converted, retagged or re-narrated after it was downloaded.
+     */
+    isStale: Boolean = false,
 ) {
     val playable = chapter.audio != null
     val isPlayed = chapter.playback?.isPlayed == true
@@ -3770,16 +3819,19 @@ internal fun ChapterRow(
                     chapter.audioDurationLabel,
                     chapter.playback?.remainingLabel?.let { "$it left" }
                         ?: chapter.resumeTimeLabel?.let { "$it in" },
-                    downloadMetaLabel(download),
+                    downloadMetaLabel(download, isStale),
                 ).joinToString("  ·  ")
                 if (meta.isNotBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
                     MetaText(
                         text = meta,
-                        color = if (download?.state?.isAvailableOffline == true) {
-                            AarisColor.Ok
-                        } else {
-                            AarisColor.Dim
+                        // "Offline" earns the green; "Outdated copy" must not wear it. A stale
+                        // download is still available offline, so the same branch would otherwise
+                        // colour a warning as a success (#109).
+                        color = when {
+                            download?.state?.isAvailableOffline != true -> AarisColor.Dim
+                            isStale -> AarisColor.Warning
+                            else -> AarisColor.Ok
                         },
                     )
                 }
@@ -3871,10 +3923,53 @@ private fun downloadAction(state: ChapterDownloadState): String = when (state) {
     else -> "Cancel download"
 }
 
+/**
+ * "The copies you have are not the ones the server has any more" (#109).
+ *
+ * Worth a fiction-level notice and not only a per-row mark: a re-convert is a whole-fiction action,
+ * so this is routinely twenty rows at once, and scrolling a serial to find them is not a task
+ * anyone should be given. It offers and does not act — re-fetching a book's worth of audio is the
+ * user's decision and possibly their mobile data.
+ */
+@Composable
+private fun StaleDownloadsNotice(count: Int, onUpdateAll: () -> Unit) {
+    AarisCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            MetaText(
+                text = if (count == 1) {
+                    "// 1 downloaded chapter is out of date"
+                } else {
+                    "// $count downloaded chapters are out of date"
+                },
+                color = AarisColor.Warning,
+            )
+            MetaText(
+                text = "The audio was re-made on the server after you downloaded it — a new voice, " +
+                    "new tags, or a text rule that changed how it reads. What is on the phone still " +
+                    "plays; it is just no longer what the server would play.",
+                color = AarisColor.Dim,
+            )
+            OutlinedButton(onClick = onUpdateAll, shape = RectangleShape) {
+                Text(if (count == 1) "DOWNLOAD IT AGAIN" else "DOWNLOAD THEM AGAIN")
+            }
+        }
+    }
+}
+
 /** Download status folded into the row's meta line, so it costs no extra vertical space. */
-private fun downloadMetaLabel(download: ChapterDownload?): String? = when (download?.state) {
+private fun downloadMetaLabel(
+    download: ChapterDownload?,
+    isStale: Boolean = false,
+): String? = when (download?.state) {
     null, ChapterDownloadState.None -> null
-    ChapterDownloadState.Downloaded -> "Offline"
+    // "Offline" is a promise that this plays without the server. That stays true for a stale
+    // download, and stops being the useful thing to say — what plays is the old narration (#109).
+    ChapterDownloadState.Downloaded -> if (isStale) "Outdated copy" else "Offline"
     ChapterDownloadState.Queued -> "Queued"
     ChapterDownloadState.Downloading -> "Downloading ${download.percent}%"
     ChapterDownloadState.Failed -> "Download failed"

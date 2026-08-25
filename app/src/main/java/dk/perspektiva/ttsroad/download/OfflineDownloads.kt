@@ -82,6 +82,16 @@ class OfflineDownloads(
      */
     private val pinReadAlong: suspend (Int) -> Boolean = { false },
     private val unpinReadAlong: (Int) -> Unit = {},
+    /**
+     * Forget which audio a chapter's download held (#109).
+     *
+     * Here rather than at the UI call sites because a download can go from a chapter row, from the
+     * keep-ahead window sliding past it, or from "delete all downloads" — and a hash left behind
+     * describes bytes this device no longer has. The next download of that chapter would then be
+     * compared against the previous copy's hash and reported stale or fresh on no evidence.
+     */
+    private val forgetAudioHash: (Int) -> Unit = {},
+    private val forgetAllAudioHashes: () -> Unit = {},
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -367,6 +377,7 @@ class OfflineDownloads(
     /** Delete a chapter's audio and its read-along document, or cancel it if it is still downloading. */
     fun remove(chapterId: Int) {
         unpinReadAlong(chapterId)
+        forgetAudioHash(chapterId)
         DownloadService.sendRemoveDownload(
             context,
             TtsRoadDownloadService::class.java,
@@ -391,6 +402,7 @@ class OfflineDownloads(
         // Every document held for a download goes with it. A chapter still in the browse cache
         // keeps its copy there, bounded and evictable as it was before it was ever downloaded.
         _downloads.value.keys.mapNotNull(TtsRoadMediaIds::chapterId).forEach(unpinReadAlong)
+        forgetAllAudioHashes()
         scope.launch(Dispatchers.IO) {
             // removeAllDownloads only clears what the index knows about; a download cache upgraded
             // from before the split can still hold spans no record claims.
