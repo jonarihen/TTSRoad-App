@@ -6,6 +6,16 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **The Up Next queue is a screen you can look at.** Since 0.11.0 the app could put a chapter on
+  the cross-library queue from two places and show it in none: added the wrong one and you could
+  neither correct it nor empty it without plugging the phone into a car or opening a browser. The
+  queue now has its own screen, reached from the player's **UP NEXT** action and from Settings, with
+  reorder, remove, play-from-here and **CLEAR QUEUE** — the same rows the browser and Android Auto
+  see. ([#108](https://github.com/jonarihen/TTSRoad-App/issues/108))
+- **What happens when the queue runs out is finally settable from the phone.** The app has read and
+  acted on the account's `queue_when_empty` since the queue shipped, and offered no way to change
+  it — so the behaviour at the end of a book was set in a browser and only ever observed here. The
+  control sits with the queue, as it does on the web.
 - **Fix a fiction's details from the phone.** Admin accounts get an **EDIT DETAILS** button on the
   fiction screen: title, author, synopsis, tags, and a new cover image picked from the gallery.
   Scraped metadata is often not what you want to look at for the next three hundred chapters — a

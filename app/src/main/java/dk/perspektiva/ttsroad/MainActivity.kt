@@ -62,6 +62,8 @@ import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Forward5
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -165,6 +167,12 @@ import dk.perspektiva.ttsroad.data.MetadataFieldDescription
 import dk.perspektiva.ttsroad.data.MetadataFieldTags
 import dk.perspektiva.ttsroad.data.MetadataFieldTitle
 import dk.perspektiva.ttsroad.data.PickedCover
+import dk.perspektiva.ttsroad.data.QueueAdvanceResponse
+import dk.perspektiva.ttsroad.data.QueueItem
+import dk.perspektiva.ttsroad.data.QueueResponse
+import dk.perspektiva.ttsroad.data.QueueWhenEmptyContinue
+import dk.perspektiva.ttsroad.data.QueueWhenEmptyStop
+import dk.perspektiva.ttsroad.data.sanitizeQueueWhenEmpty
 import dk.perspektiva.ttsroad.data.fictionMetadataPatch
 import dk.perspektiva.ttsroad.data.formatFictionTags
 import dk.perspektiva.ttsroad.data.readPickedCover
@@ -652,6 +660,7 @@ private fun MainScaffold(
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Device sessions"
         AppScreen.Bookmarks -> "Bookmarks"
+        AppScreen.Queue -> "Up next"
     }
 
     Scaffold(
@@ -758,6 +767,7 @@ private fun MainScaffold(
                     playbackController = playbackController,
                     skipIntervalMs = skipIntervalMs,
                     onOpenReader = { onScreenChange(it) },
+                    onOpenQueue = { onScreenChange(AppScreen.Queue) },
                 )
 
                 is AppScreen.Reader -> ReaderScreen(
@@ -777,6 +787,7 @@ private fun MainScaffold(
                     repository = repository,
                     onOpenDevices = { onScreenChange(AppScreen.Devices) },
                     onOpenBookmarks = { onScreenChange(AppScreen.Bookmarks) },
+                    onOpenQueue = { onScreenChange(AppScreen.Queue) },
                 )
 
                 AppScreen.Devices -> DevicesScreen(
@@ -789,6 +800,13 @@ private fun MainScaffold(
                     padding = padding,
                     repository = repository,
                     onOpenReader = { onScreenChange(it) },
+                )
+
+                AppScreen.Queue -> QueueScreen(
+                    padding = padding,
+                    repository = repository,
+                    playbackController = playbackController,
+                    onOpenPlayer = { onScreenChange(AppScreen.Player) },
                 )
             }
         }
@@ -1631,6 +1649,8 @@ internal fun PlayerScreenBody(
     canRead: Boolean,
     canBookmark: Boolean,
     canJumpBack: Boolean,
+    /** The server has a cross-library queue, so there is an Up Next worth opening (#108). */
+    canOpenQueue: Boolean,
     onRetry: () -> Unit,
     onSeek: (Long) -> Unit,
     onPreviousChapter: () -> Unit,
@@ -1644,6 +1664,7 @@ internal fun PlayerScreenBody(
     onBookmark: () -> Unit,
     onOpenJumpBack: () -> Unit,
     onOpenChapters: () -> Unit,
+    onOpenQueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // Track the drag locally and only seek on release, so scrubbing does not spam the player.
@@ -1867,6 +1888,11 @@ internal fun PlayerScreenBody(
                         onClick = onOpenChapters,
                     )
                 }
+                // Not the same list as CHAPTERS, and the labels have to earn the difference:
+                // CHAPTERS is this book, UP NEXT is what was lined up across books.
+                if (canOpenQueue) {
+                    PlayerActionButton(label = "UP NEXT", onClick = onOpenQueue)
+                }
             }
         }
     }
@@ -1880,6 +1906,7 @@ private fun PlayerScreen(
     playbackController: PlaybackController,
     skipIntervalMs: Long,
     onOpenReader: (AppScreen.Reader) -> Unit,
+    onOpenQueue: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1942,6 +1969,7 @@ private fun PlayerScreen(
         canRead = capabilities.readAlong && playingChapterId != null,
         canBookmark = capabilities.bookmarks && playingChapterId != null,
         canJumpBack = jumpBackOptions.isNotEmpty(),
+        canOpenQueue = capabilities.queue,
         onRetry = playbackController::retry,
         onSeek = playbackController::seekTo,
         onPreviousChapter = playbackController::skipToPreviousChapter,
@@ -1975,6 +2003,7 @@ private fun PlayerScreen(
         },
         onOpenJumpBack = { showJumpBack = true },
         onOpenChapters = { showChapters = true },
+        onOpenQueue = onOpenQueue,
         modifier = Modifier.padding(padding),
     )
 
@@ -2507,6 +2536,7 @@ private fun SettingsScreen(
     repository: TtsRoadRepository,
     onOpenDevices: () -> Unit,
     onOpenBookmarks: () -> Unit,
+    onOpenQueue: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2574,6 +2604,19 @@ private fun SettingsScreen(
                     )
                     OutlinedButton(onClick = onOpenBookmarks, shape = RectangleShape) {
                         Text("BOOKMARKS")
+                    }
+                }
+                // Same gate the add-to-queue actions already use, so the screen and the actions
+                // that feed it appear and disappear together (#108).
+                if (capabilities.queue) {
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    MetaText(
+                        text = "Chapters lined up across books, and what to do when they run out. " +
+                            "The same queue the browser and Android Auto see.",
+                        color = AarisColor.Dim,
+                    )
+                    OutlinedButton(onClick = onOpenQueue, shape = RectangleShape) {
+                        Text("UP NEXT")
                     }
                 }
             }
@@ -3113,6 +3156,345 @@ private fun BookmarkCard(
                     Text("DELETE", color = AarisColor.Danger)
                 }
             }
+        }
+    }
+}
+
+/**
+ * The cross-library Up Next queue — the first place in the app it can actually be looked at.
+ *
+ * The queue has been writable since 0.11.0 and readable nowhere: **Play next** and **Add to queue**
+ * on the chapter sheet put a chapter on a list that could not be seen, corrected or emptied without
+ * plugging the phone into a car or opening a browser (#108).
+ *
+ * Every mutation goes to the server and the answer is what redraws the list. That is not caution
+ * for its own sake — the queue is shared with the browser and with Android Auto, so a locally
+ * patched copy is a second opinion about state this client does not own. The server's reply to a
+ * mutation already carries the whole queue, which is what makes "reload after every write" one
+ * request rather than two.
+ */
+@Composable
+private fun QueueScreen(
+    padding: PaddingValues,
+    repository: TtsRoadRepository,
+    playbackController: PlaybackController,
+    onOpenPlayer: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    var queue by remember { mutableStateOf<QueueResponse?>(null) }
+    var unsupported by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
+    var isBusy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var confirmClear by remember { mutableStateOf(false) }
+
+    fun load() {
+        scope.launch {
+            isLoading = true
+            error = null
+            runCatching { repository.queue() }
+                // Null is not an empty queue: this server has no cross-library queue at all, and
+                // the answer to that is a sentence rather than an empty list.
+                .onSuccess { loaded ->
+                    unsupported = loaded == null
+                    queue = loaded
+                }
+                .onFailure { error = it.message ?: "Could not load the queue" }
+            isLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    /**
+     * Run one mutation and adopt the queue it answers with.
+     *
+     * The mutation endpoints return the new state, so this is a write and a read in one round trip.
+     * A failure leaves the list exactly as it was and says so — nothing here is applied optimistically,
+     * because a queue that shows a move the server refused is worse than one that shows nothing yet.
+     */
+    fun mutate(action: suspend () -> QueueAdvanceResponse?) {
+        scope.launch {
+            isBusy = true
+            error = null
+            runCatching { action() }
+                .onSuccess { response ->
+                    if (response == null) {
+                        unsupported = true
+                    } else {
+                        queue = queue?.copy(items = response.items, total = response.total)
+                            ?: QueueResponse(items = response.items, total = response.total)
+                    }
+                }
+                .onFailure { error = it.message ?: "Could not change the queue" }
+            isBusy = false
+        }
+    }
+
+    /**
+     * Play [item] as part of its own fiction, not as a lone chapter.
+     *
+     * Tapping a queued chapter should behave like tapping it anywhere else in the app — with
+     * next/previous, auto-advance and a jump-to-chapter list — so this loads the fiction the way
+     * the fiction screen does. The row stays on the queue: taking it off is what `advance` is for,
+     * and that is the car's job, not a decision to make on someone's behalf because they looked.
+     */
+    fun play(item: QueueItem) {
+        scope.launch {
+            isBusy = true
+            error = null
+            runCatching {
+                val response = repository.chapters(item.fictionId, playableOnly = true)
+                playbackController.playQueue(
+                    chapters = response.chapters,
+                    startChapterId = item.chapterId,
+                    fiction = response.fiction,
+                )
+            }
+                .onSuccess { onOpenPlayer() }
+                .onFailure { error = it.message ?: "Could not play that chapter" }
+            isBusy = false
+        }
+    }
+
+    val loaded = queue
+    when {
+        isLoading && loaded == null && error == null && !unsupported -> LoadingPane(padding)
+        loaded == null && !unsupported -> ErrorPane(
+            padding = padding,
+            message = error ?: "Could not load the queue",
+            onRetry = ::load,
+        )
+
+        else -> Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            if (unsupported) {
+                MetaText(text = "// Not available", color = AarisColor.Accent)
+                EmptyCard(
+                    "This server has no cross-library queue. Update the backend to line chapters " +
+                        "up across books.",
+                )
+                return@Column
+            }
+
+            if (isLoading || isBusy) {
+                ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+            }
+            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+
+            val items = loaded?.items.orEmpty()
+            if (items.isEmpty()) {
+                MetaText(text = "// Nothing queued", color = AarisColor.Accent)
+                EmptyCard(
+                    "Long-press a chapter and choose PLAY NEXT or ADD TO QUEUE. The queue is " +
+                        "shared with the browser and with Android Auto's Up Next.",
+                )
+            } else {
+                MetaText(
+                    text = if (items.size == 1) "// 1 queued" else "// ${items.size} queued",
+                    color = AarisColor.Accent,
+                )
+                items.forEachIndexed { index, item ->
+                    QueueRow(
+                        item = item,
+                        position = index + 1,
+                        // The ends of the list have nowhere to go, and a disabled arrow says that
+                        // more honestly than one that silently does nothing.
+                        onMoveUp = { mutate { repository.reorderQueue(items.moveItem(index, -1)) } }
+                            .takeIf { index > 0 && !isBusy },
+                        onMoveDown = {
+                            mutate { repository.reorderQueue(items.moveItem(index, 1)) }
+                        }.takeIf { index < items.lastIndex && !isBusy },
+                        onRemove = { mutate { repository.removeFromQueue(listOf(item.id)) } }
+                            .takeIf { !isBusy },
+                        onPlay = { play(item) }.takeIf { !isBusy },
+                    )
+                }
+            }
+
+            // What happens at the end of the list, next to the list it is about — the same place
+            // the web drawer puts it. It is an account preference and the server acts on it inside
+            // `advance`, so this writes and re-reads rather than keeping a local copy.
+            QueueWhenEmptyCard(
+                value = sanitizeQueueWhenEmpty(loaded?.whenEmpty),
+                enabled = !isBusy && capabilities.queue,
+                onSelect = { choice ->
+                    // Optimistic here and nowhere else on this screen, deliberately: the value is
+                    // this account's own setting rather than shared list state, and a chip that
+                    // does not move until a round trip finishes reads as broken.
+                    queue = loaded?.copy(whenEmpty = choice) ?: QueueResponse(whenEmpty = choice)
+                    scope.launch {
+                        if (!repository.setQueueWhenEmpty(choice)) {
+                            error = "Could not save that setting"
+                            load()
+                        }
+                    }
+                },
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = ::load,
+                    enabled = !isLoading && !isBusy,
+                    shape = RectangleShape,
+                ) {
+                    Text("REFRESH")
+                }
+                if (items.isNotEmpty()) {
+                    OutlinedButton(
+                        onClick = { confirmClear = true },
+                        enabled = !isBusy,
+                        shape = RectangleShape,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = AarisColor.Danger,
+                        ),
+                    ) {
+                        Text("CLEAR QUEUE")
+                    }
+                }
+            }
+        }
+    }
+
+    if (confirmClear) {
+        ConfirmDialog(
+            title = "CLEAR QUEUE",
+            body = "Every queued chapter is removed, here and in the browser. Nothing is deleted " +
+                "and no progress is lost — only the order you lined them up in.",
+            confirmLabel = "CLEAR IT",
+            onConfirm = {
+                confirmClear = false
+                mutate { repository.clearQueue() }
+            },
+            onDismiss = { confirmClear = false },
+        )
+    }
+}
+
+/**
+ * The whole order with the item at [index] shifted by [offset], as the row ids the server takes.
+ *
+ * A complete order rather than a move instruction because that is the endpoint's shape, and it is
+ * the right one: the queue is shared, and a "move item 4 up" applied to an order the browser has
+ * since changed lands somewhere nobody asked for. An offset that would fall off either end returns
+ * the list unchanged, so a caller that gets its guard wrong is a no-op rather than a corruption.
+ */
+internal fun List<QueueItem>.moveItem(index: Int, offset: Int): List<Int> {
+    val target = index + offset
+    if (index !in indices || target !in indices) return map { it.id }
+    val ids = map { it.id }.toMutableList()
+    ids.add(target, ids.removeAt(index))
+    return ids
+}
+
+@Composable
+private fun QueueRow(
+    item: QueueItem,
+    position: Int,
+    onMoveUp: (() -> Unit)?,
+    onMoveDown: (() -> Unit)?,
+    onRemove: (() -> Unit)?,
+    onPlay: (() -> Unit)?,
+) {
+    AarisCard {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (onPlay != null) Modifier.clickable(onClick = onPlay) else Modifier)
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(
+                text = position.toString().padStart(2, '0'),
+                color = AarisColor.Dim,
+                modifier = Modifier.width(32.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.resolvedTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AarisColor.Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val meta = listOfNotNull(
+                    item.fictionTitle?.takeIf { it.isNotBlank() },
+                    item.audioDuration?.let { formatDuration((it * 1000).toLong()) },
+                    // Worth saying: a played chapter in the queue is usually a deliberate re-listen,
+                    // but it is also what an accidental add looks like.
+                    "Played".takeIf { item.isPlayed },
+                ).joinToString("  ·  ")
+                if (meta.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    MetaText(text = meta, color = AarisColor.Dim, maxLines = 1)
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            TransportIconButton(
+                icon = Icons.Default.KeyboardArrowUp,
+                contentDescription = "Move up",
+                enabled = onMoveUp != null,
+                size = 36.dp,
+            ) { onMoveUp?.invoke() }
+            TransportIconButton(
+                icon = Icons.Default.KeyboardArrowDown,
+                contentDescription = "Move down",
+                enabled = onMoveDown != null,
+                size = 36.dp,
+            ) { onMoveDown?.invoke() }
+            TransportIconButton(
+                icon = Icons.Default.Close,
+                contentDescription = "Remove from queue",
+                enabled = onRemove != null,
+                size = 36.dp,
+            ) { onRemove?.invoke() }
+        }
+    }
+}
+
+/**
+ * The account's `queue_when_empty`, which the app has read and acted on since 0.11.0 and never
+ * offered a way to change.
+ *
+ * So the behaviour at the end of a book — stop, or keep going with the oldest unplayed thing in the
+ * library — was set in a browser and only ever observed on the phone. The media service reads the
+ * server's decision through `advance`, which is exactly why this is a single account-wide control
+ * rather than a device setting.
+ */
+@Composable
+private fun QueueWhenEmptyCard(
+    value: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    AarisCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            MetaText(text = "When the queue runs out")
+            MetaText(
+                text = "Stop is the safe answer: waking to an unrelated book is a surprise. " +
+                    "Keep going picks the oldest chapter you have not played. " +
+                    PreferenceScope.account(true),
+                color = AarisColor.Dim,
+            )
+            AarisChoiceRow(
+                options = listOf(QueueWhenEmptyStop, QueueWhenEmptyContinue),
+                selected = value,
+                label = { if (it == QueueWhenEmptyContinue) "KEEP GOING" else "STOP" },
+                onSelect = { if (enabled) onSelect(it) },
+            )
         }
     }
 }

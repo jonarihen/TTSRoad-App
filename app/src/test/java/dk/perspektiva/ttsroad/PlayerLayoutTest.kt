@@ -128,6 +128,7 @@ class PlayerLayoutTest {
                     canRead = true,
                     canBookmark = true,
                     canJumpBack = true,
+                    canOpenQueue = true,
                     onRetry = {},
                     onSeek = {},
                     onPreviousChapter = {},
@@ -141,6 +142,7 @@ class PlayerLayoutTest {
                     onBookmark = {},
                     onOpenJumpBack = {},
                     onOpenChapters = {},
+                    onOpenQueue = {},
                 )
             }
         }

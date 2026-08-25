@@ -534,6 +534,14 @@ data class QueueRequest(
 )
 
 const val QueueActionAdd: String = "add"
+/**
+ * Rewrite the whole order.
+ *
+ * Takes the complete ordered list of *row* ids rather than a move instruction. That is the server's
+ * shape and it is the right one: two clients reordering the same queue cannot half-apply each
+ * other's moves, and a row the server has since dropped simply does not appear in what comes back.
+ */
+const val QueueActionReorder: String = "reorder"
 const val QueueActionRemove: String = "remove"
 const val QueueActionClear: String = "clear"
 const val QueueActionAdvance: String = "advance"

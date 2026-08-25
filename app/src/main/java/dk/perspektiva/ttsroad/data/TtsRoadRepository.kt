@@ -623,6 +623,21 @@ class TtsRoadRepository(
         }
     }
 
+    /**
+     * Rewrite the queue's order from the complete list of *row* ids, head first.
+     *
+     * The whole order rather than "move item 4 up one" because that is what the server takes, and
+     * because it is the only shape that survives two clients touching the same queue: a move
+     * instruction applied to an order that has since changed lands somewhere nobody asked for.
+     */
+    suspend fun reorderQueue(itemIds: List<Int>): QueueAdvanceResponse? {
+        if (itemIds.isEmpty()) return null
+        if (!_currentCapabilities.value.queue) return null
+        return withAuthorizedApi {
+            it.updateQueue(QueueRequest(action = QueueActionReorder, itemIds = itemIds))
+        }
+    }
+
     suspend fun clearQueue(): QueueAdvanceResponse? {
         if (!_currentCapabilities.value.queue) return null
         return withAuthorizedApi { it.updateQueue(QueueRequest(action = QueueActionClear)) }
@@ -639,6 +654,25 @@ class TtsRoadRepository(
     suspend fun advanceQueue(): QueueAdvanceResponse? {
         if (!_currentCapabilities.value.queue) return null
         return withAuthorizedApi { it.updateQueue(QueueRequest(action = QueueActionAdvance)) }
+    }
+
+    /**
+     * Set what playback does when the queue runs dry: [QueueWhenEmptyStop] or
+     * [QueueWhenEmptyContinue].
+     *
+     * An account preference rather than a device one, and deliberately so — `advance` reads it
+     * server-side, which is what makes the phone and the browser agree about what comes after the
+     * last chapter of a book. There is no local copy to keep in step, so this is a plain PATCH
+     * rather than anything in [AccountPreferenceSync]; the queue payload is where the current value
+     * is read back from.
+     *
+     * Gated on `queue` rather than on `player_preferences`: a server with a queue is a server whose
+     * `advance` reads this key, and the app has no use for the setting on one without.
+     */
+    suspend fun setQueueWhenEmpty(value: String): Boolean {
+        if (!_currentCapabilities.value.queue) return false
+        val patch = queueWhenEmptyPatch(value)
+        return runCatching { withAuthorizedApi { it.updateAccountPreferences(patch) } }.isSuccess
     }
 
     /**
