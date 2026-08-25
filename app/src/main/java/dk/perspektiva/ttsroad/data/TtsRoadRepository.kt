@@ -675,6 +675,132 @@ class TtsRoadRepository(
         return runCatching { withAuthorizedApi { it.updateAccountPreferences(patch) } }.isSuccess
     }
 
+    // Account security (#118).
+
+    /**
+     * Change the password, and adopt the replacement credential the server hands back.
+     *
+     * **This is the whole reason the method exists rather than the call site doing it.** A password
+     * change revokes every mobile token, including the one making the request — a credential minted
+     * under the old password must not outlive it. The server therefore answers with a fresh token,
+     * and a client that merely inspects the body has signed itself out and will find out on its
+     * next request. Saving it here means no call site can forget.
+     *
+     * Saved through the same [SessionStore.saveLogin] a sign-in uses, because the payload is
+     * deliberately [LoginResponse]'s shape; a second way to persist a session is a second way to
+     * get it subtly wrong.
+     *
+     * [deviceName] is left null on purpose when the caller has nothing better to say: the server
+     * then reuses the name the old token already had, so the device list does not gain a nameless
+     * entry as a side effect of a password change.
+     */
+    suspend fun changePassword(
+        currentPassword: String,
+        newPassword: String,
+        deviceName: String? = null,
+    ): AccountActionResult<Unit> {
+        if (!_currentCapabilities.value.accountSecurity) return AccountActionResult.Unsupported
+        val currentSession = tokenStore.current()
+        if (!currentSession.isLoggedIn) {
+            return AccountActionResult.Refused("You are not signed in.")
+        }
+        return try {
+            val response = withAuthorizedApi {
+                it.changePassword(
+                    PasswordChangeRequest(
+                        currentPassword = currentPassword,
+                        newPassword = newPassword,
+                        deviceName = deviceName?.trim()?.takeIf { name -> name.isNotEmpty() },
+                    ),
+                )
+            }
+            tokenStore.saveLogin(
+                currentSession.serverUrl,
+                LoginResponse(
+                    token = response.token,
+                    tokenType = response.tokenType,
+                    deviceId = response.deviceId,
+                    expiresAt = response.expiresAt,
+                    user = response.user,
+                    // The password response intentionally carries credentials, not server
+                    // discovery metadata. Preserve the name already shown in Settings instead of
+                    // letting saveLogin replace a branded server name with its default.
+                    server = ServerInfo(
+                        name = currentSession.serverName,
+                        baseUrl = currentSession.serverUrl,
+                    ),
+                ),
+            )
+            authHeader = "${response.tokenType.replaceFirstChar { it.uppercase() }} ${response.token}"
+            AccountActionResult.Done(Unit)
+        } catch (e: HttpException) {
+            // A 400 is the server telling the user something: a wrong current password, or a new
+            // one the strength policy refuses. Both are meant to be read.
+            if (e.code() != 400) throw e
+            AccountActionResult.Refused(
+                detailMessage(e.response()?.errorBody()?.string())
+                    ?: "The server would not change your password.",
+            )
+        }
+    }
+
+    suspend fun twoFactorStatus(): TwoFactorStatus? {
+        if (!_currentCapabilities.value.accountSecurity) return null
+        return withAuthorizedApi { it.twoFactorStatus() }
+    }
+
+    /** A provisional secret. The factor is not active until [enableTwoFactor] confirms a code. */
+    suspend fun startTwoFactorSetup(): AccountActionResult<TwoFactorSetup> =
+        accountAction("The server would not start two-factor setup.") { it.startTwoFactorSetup() }
+
+    /**
+     * Confirm setup with a code from the authenticator, and receive the recovery codes.
+     *
+     * The codes come back exactly once — they are hashed before storage — so the caller must put
+     * them in front of the user rather than storing them for later.
+     */
+    suspend fun enableTwoFactor(code: String): AccountActionResult<TwoFactorCodes> =
+        accountAction("That code didn't match.") {
+            it.enableTwoFactor(TwoFactorEnableRequest(code = code.trim()))
+        }
+
+    /** A fresh set of one-time codes. The previous set stops working immediately. */
+    suspend fun reissueRecoveryCodes(): AccountActionResult<TwoFactorCodes> =
+        accountAction("The server would not issue new recovery codes.") { it.reissueRecoveryCodes() }
+
+    /**
+     * Turn the factor off. Requires the password, not just the session.
+     *
+     * A stolen token must not be enough to strip the factor that would have stopped it being
+     * useful, which is why the server asks and why this takes a password at all.
+     */
+    suspend fun disableTwoFactor(password: String): AccountActionResult<TwoFactorCodes> =
+        accountAction("Password is incorrect.") {
+            it.disableTwoFactor(TwoFactorDisableRequest(password = password))
+        }
+
+    /**
+     * The shared shape of the four 2FA calls: capability gate, then a 400 read as an answer.
+     *
+     * [fallback] is only used when the server refused without a `detail`, which it does not do for
+     * any of these routes — but a client that showed nothing in that case would be worse than one
+     * that showed a guess.
+     */
+    private suspend fun <T> accountAction(
+        fallback: String,
+        call: suspend (TtsRoadApi) -> T,
+    ): AccountActionResult<T> {
+        if (!_currentCapabilities.value.accountSecurity) return AccountActionResult.Unsupported
+        return try {
+            AccountActionResult.Done(withAuthorizedApi { call(it) })
+        } catch (e: HttpException) {
+            if (e.code() != 400) throw e
+            AccountActionResult.Refused(
+                detailMessage(e.response()?.errorBody()?.string()) ?: fallback,
+            )
+        }
+    }
+
     /**
      * Every podcast URL this account can hand to a podcast app, or null on a server without them.
      *
@@ -987,9 +1113,15 @@ class TtsRoadRepository(
             block(api(session.serverUrl))
         } catch (e: HttpException) {
             if (e.code() == 401) {
-                authHeader = null
-                tokenStore.clearToken()
-                _sessionEnd.value = parseSessionEnd(e.response()?.errorBody()?.string())
+                // A password change deliberately rotates this credential. A request that began
+                // just before the rotation can come back 401 just after the fresh token was saved;
+                // it must not erase that newer session. Only the token that actually failed is
+                // allowed to end the session.
+                if (tokenStore.current().token == session.token) {
+                    authHeader = null
+                    tokenStore.clearToken()
+                    _sessionEnd.value = parseSessionEnd(e.response()?.errorBody()?.string())
+                }
             }
             throw e
         }

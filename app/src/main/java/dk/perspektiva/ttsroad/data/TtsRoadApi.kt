@@ -199,6 +199,40 @@ interface TtsRoadApi {
         @Body changes: Map<String, @JvmSuppressWildcards Any?>,
     ): AccountPreferencesResponse
 
+    // Account security (#118). The app already handles the 2FA *login* challenge and could not be
+    // the thing that turns the factor on — and an admin who set the server up from a phone is
+    // soft-gated toward an account page that only exists in a browser.
+
+    /**
+     * Change the password, and receive a replacement token.
+     *
+     * The old token is dead the moment this returns 200 — a credential minted under the old
+     * password does not outlive it — so the answer must be stored, not merely inspected.
+     */
+    @POST("api/mobile/account/password")
+    suspend fun changePassword(@Body request: PasswordChangeRequest): PasswordChangeResponse
+
+    @GET("api/mobile/account/2fa")
+    suspend fun twoFactorStatus(): TwoFactorStatus
+
+    @POST("api/mobile/account/2fa/setup")
+    suspend fun startTwoFactorSetup(): TwoFactorSetup
+
+    @POST("api/mobile/account/2fa/enable")
+    suspend fun enableTwoFactor(@Body request: TwoFactorEnableRequest): TwoFactorCodes
+
+    @POST("api/mobile/account/2fa/recovery-codes")
+    suspend fun reissueRecoveryCodes(): TwoFactorCodes
+
+    /**
+     * Turn the factor off. Requires the current password, not just the bearer token.
+     *
+     * A stolen token must not be enough to strip the factor that would have stopped it being
+     * useful, which is the same reason the web route asks.
+     */
+    @POST("api/mobile/account/2fa/disable")
+    suspend fun disableTwoFactor(@Body request: TwoFactorDisableRequest): TwoFactorCodes
+
     /**
      * Every podcast URL this account can hand to a podcast app (#115).
      *

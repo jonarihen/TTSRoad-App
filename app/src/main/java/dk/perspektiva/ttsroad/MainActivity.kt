@@ -3159,6 +3159,10 @@ private fun SettingsScreen(
             }
         }
 
+        if (capabilities.accountSecurity) {
+            AccountSecuritySettings(repository = repository)
+        }
+
         MetaText(text = "// Server", color = AarisColor.Accent)
         AarisCard {
             Column(

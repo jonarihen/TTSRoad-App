@@ -609,6 +609,76 @@ data class ListeningStateImportResponse(
     val report: Map<String, Any?> = emptyMap(),
 )
 
+/**
+ * `POST /api/mobile/account/password` (#118).
+ *
+ * [deviceName] is what the replacement credential is called in the device list. A client that omits
+ * it inherits the name the old token had, so the entry does not silently become "Unknown device"
+ * as a side effect of changing a password.
+ */
+data class PasswordChangeRequest(
+    @param:Json(name = "current_password") val currentPassword: String,
+    @param:Json(name = "new_password") val newPassword: String,
+    @param:Json(name = "device_name") val deviceName: String? = null,
+)
+
+/**
+ * The answer to a password change — **including a replacement token that must be stored**.
+ *
+ * A password change revokes every mobile token, this one included. That is the right behaviour: a
+ * credential minted under the old password should not outlive it. But it means a client that
+ * ignores this body has signed itself out, and will discover that on its next request.
+ *
+ * The shape is deliberately [LoginResponse]'s, so the session store's existing `saveLogin` is what
+ * adopts it. Anything else would be a second, subtly different way to persist a session.
+ */
+data class PasswordChangeResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    val token: String = "",
+    @param:Json(name = "token_type") val tokenType: String = "bearer",
+    @param:Json(name = "device_id") val deviceId: Int? = null,
+    @param:Json(name = "expires_at") val expiresAt: String? = null,
+    val user: MobileUser,
+)
+
+/** `GET /api/mobile/account/2fa` — whether a second factor is on, and how many codes are left. */
+data class TwoFactorStatus(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val enabled: Boolean = false,
+    @param:Json(name = "recovery_codes_remaining") val recoveryCodesRemaining: Int = 0,
+)
+
+/**
+ * A provisional secret. The factor is **not** active until `/enable` confirms it with a code.
+ *
+ * [otpauthUri] is the one to use on a phone: it opens an authenticator app directly, where a
+ * browser has to render [qr] and ask someone to point a second device at it. [qr] is sent anyway,
+ * for clients that have the browser's problem.
+ */
+data class TwoFactorSetup(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val secret: String = "",
+    @param:Json(name = "otpauth_uri") val otpauthUri: String? = null,
+    val qr: String? = null,
+)
+
+data class TwoFactorEnableRequest(val code: String)
+
+data class TwoFactorDisableRequest(val password: String)
+
+/**
+ * The result of enabling, or of reissuing the codes.
+ *
+ * **[recoveryCodes] is shown once and never again.** The server hashes them before storage, so a
+ * client that does not put them in front of the user here has lost them for good.
+ */
+data class TwoFactorCodes(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val enabled: Boolean = false,
+    @param:Json(name = "recovery_codes") val recoveryCodes: List<String> = emptyList(),
+)
+
 data class QueueResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
     val items: List<QueueItem> = emptyList(),
