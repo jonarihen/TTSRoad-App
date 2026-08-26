@@ -53,6 +53,27 @@ const val MinActivityWeeks: Int = 1
 const val MaxActivityWeeks: Int = 53
 
 /**
+ * How many log lines to ask for at a time, and the ceiling the server enforces (#124).
+ *
+ * Fifty is the server's own default and about a screenful with the message wrapped; the cap is 200,
+ * above which the server silently gives 200 back. Clamped here anyway, so the request says what it
+ * means rather than relying on the server to correct it.
+ */
+const val DefaultLogPageSize: Int = 50
+const val MinLogPageSize: Int = 1
+const val MaxLogPageSize: Int = 200
+
+/**
+ * The three levels the log column holds, most severe first — the order the filter offers them in.
+ *
+ * The server matches case-insensitively and answers **400** to anything else rather than an empty
+ * list, which is the right call: on this screen an empty list means "nothing has gone wrong", and
+ * that is the one answer a typo must not be able to invent. This client never sends a level that is
+ * not in here, so it never provokes that 400.
+ */
+val ServerLogLevels: List<String> = listOf("ERROR", "WARNING", "INFO")
+
+/**
  * Outcome of tracking a new fiction.
  *
  * A sealed result rather than an exception because every failure here is one the user can act on by
@@ -1000,6 +1021,55 @@ class TtsRoadRepository(
     suspend fun audiobookExports(): AudiobookExportsResponse? {
         if (!_currentCapabilities.value.audiobookExport) return null
         return withAuthorizedApi { it.audiobookExports() }
+    }
+
+    /**
+     * A page of the pipeline's log, newest first, or null on a server without the route (#124).
+     *
+     * Gated on the capability here and on `is_admin` at the call site — the same two-part gate every
+     * other admin surface uses. Null is "this server cannot answer that", which the screen has its
+     * own sentence for; it must never be shown as an empty log, because an empty log is the answer
+     * that means nothing has gone wrong.
+     *
+     * [level] is normalised to the server's own vocabulary and dropped if it is not one of
+     * [ServerLogLevels]. The server answers 400 rather than an empty list to an unrecognised level,
+     * and a client that let a stray value through would turn a filter into an error dialog.
+     *
+     * [beforeId] is a cursor taken from the previous page's `next_before_id`, never an offset: the
+     * id is a monotonic primary key, so a page boundary holds still while the pipeline keeps writing
+     * rows above it. Paging on a second-resolution timestamp would not.
+     */
+    suspend fun serverLogs(
+        limit: Int = DefaultLogPageSize,
+        level: String? = null,
+        fictionId: Int? = null,
+        beforeId: Int? = null,
+    ): ServerLogsResponse? {
+        if (!_currentCapabilities.value.logs) return null
+        val wanted = level?.trim()?.uppercase()?.takeIf { it in ServerLogLevels }
+        return withAuthorizedApi {
+            it.serverLogs(
+                limit = limit.coerceIn(MinLogPageSize, MaxLogPageSize),
+                level = wanted,
+                fictionId = fictionId,
+                beforeId = beforeId,
+            )
+        }
+    }
+
+    /**
+     * How much disk the server is using, per fiction, or null on a server without the route (#124).
+     *
+     * The whole response rather than the rows, because the totals, the volume's free space and
+     * `ffmpeg_available` are the parts a per-fiction table cannot say. Every figure arrives with a
+     * label the server already rendered; nothing here re-formats one.
+     *
+     * Read-only, deliberately. The server publishes no mobile mirror of the orphan scan or of any
+     * delete, and this client offers none: they are irreversible and confirmed badly on a phone.
+     */
+    suspend fun serverStorage(): ServerStorageResponse? {
+        if (!_currentCapabilities.value.storage) return null
+        return withAuthorizedApi { it.serverStorage() }
     }
 
     /**

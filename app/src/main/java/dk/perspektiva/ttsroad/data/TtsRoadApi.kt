@@ -322,6 +322,37 @@ interface TtsRoadApi {
     @GET("api/mobile/exports")
     suspend fun audiobookExports(): AudiobookExportsResponse
 
+    /**
+     * The pipeline's own log, newest first (#124).
+     *
+     * Admin-only server-side, and read-only — there is no mobile route that clears or writes one.
+     *
+     * [level] must be `INFO`, `WARNING` or `ERROR`; anything else is a **400, not an empty list**,
+     * which is the right call on a screen where an empty list means "nothing has gone wrong". Send
+     * null for all three. [beforeId] is a cursor, not an offset: it is the monotonic primary key,
+     * so a page boundary holds still while the pipeline keeps writing rows above it.
+     *
+     * [limit] is capped at 200 server-side; asking for more is answered with 200 rather than an
+     * error, but the caller clamps anyway so the request says what it means.
+     */
+    @GET("api/mobile/logs")
+    suspend fun serverLogs(
+        @Query("limit") limit: Int,
+        @Query("level") level: String? = null,
+        @Query("fiction_id") fictionId: Int? = null,
+        @Query("before_id") beforeId: Int? = null,
+    ): ServerLogsResponse
+
+    /**
+     * How much disk the install is using, per fiction (#124). Admin-only, read-only.
+     *
+     * The same summary the web storage page renders, labels included. **Deliberately no mirror of
+     * the cleanup actions** — the orphan scan and every delete stay on the web console, because
+     * they are irreversible and are confirmed badly on a small screen.
+     */
+    @GET("api/mobile/storage")
+    suspend fun serverStorage(): ServerStorageResponse
+
     /** Every position and chosen mark on this account, as a portable document (#116). */
     @GET("api/mobile/listening-state")
     suspend fun exportListeningState(): ListeningStateExport

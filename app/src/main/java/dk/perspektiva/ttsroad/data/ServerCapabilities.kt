@@ -166,6 +166,27 @@ data class ServerCapabilities(
     val voicePreview: Boolean = false,
 
     /**
+     * The pipeline's own log is readable over `/api/mobile/logs` (#124).
+     *
+     * Says the route exists, not that this account may use it: the server answers 403 to a
+     * non-admin, exactly as the web page does. A client needs this flag *and* [SessionState.isAdmin]
+     * before it draws the screen. Worth advertising separately from anything else, because without
+     * it an app on an older server would show an empty log — which is the one answer that must
+     * never be invented, since an empty log means nothing has gone wrong.
+     */
+    val logs: Boolean = false,
+
+    /**
+     * Disk usage, per fiction, over `/api/mobile/storage` (#124).
+     *
+     * Its own flag rather than folded in with [logs]: a deployment may reasonably expose one and
+     * not the other, and nothing about seeing the log implies seeing the volume's free space.
+     * Read-only on both sides — the server publishes no mobile mirror of the cleanup actions, and
+     * this client offers none.
+     */
+    val storage: Boolean = false,
+
+    /**
      * Every flag the server advertised, exactly as sent, including ones this build has never heard
      * of.
      *
@@ -229,6 +250,8 @@ data class ServerCapabilities(
                 signedAudioUrls = flags.flag("signed_audio_urls"),
                 liveEvents = flags.flag("live_events"),
                 voicePreview = flags.flag("voice_preview"),
+                logs = flags.flag("logs"),
+                storage = flags.flag("storage"),
                 // Only entries that are actually booleans. A server sending something else for a
                 // key is saying something this build cannot read, and listing it as "off" would be
                 // a guess presented as fact.

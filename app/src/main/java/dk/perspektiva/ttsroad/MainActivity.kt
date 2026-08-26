@@ -230,6 +230,7 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
 import dk.perspektiva.ttsroad.data.audiobookExportEncoderNote
 import dk.perspektiva.ttsroad.data.audiobookExportRows
+import dk.perspektiva.ttsroad.data.canReadServerLogs
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
@@ -688,6 +689,7 @@ private fun MainScaffold(
         AppScreen.PronunciationReports -> "Pronunciation"
         AppScreen.Queue -> "Up next"
         AppScreen.Stats -> "Listening stats"
+        AppScreen.Logs -> "Server log"
     }
 
     Scaffold(
@@ -819,6 +821,7 @@ private fun MainScaffold(
                     },
                     onOpenQueue = { onScreenChange(AppScreen.Queue) },
                     onOpenStats = { onScreenChange(AppScreen.Stats) },
+                    onOpenLogs = { onScreenChange(AppScreen.Logs) },
                 )
 
                 AppScreen.Devices -> DevicesScreen(
@@ -848,6 +851,12 @@ private fun MainScaffold(
 
                 AppScreen.Stats -> ListeningStatsScreen(
                     padding = padding,
+                    repository = repository,
+                )
+
+                AppScreen.Logs -> ServerLogsScreen(
+                    padding = padding,
+                    session = session,
                     repository = repository,
                 )
             }
@@ -3099,6 +3108,7 @@ private fun SettingsScreen(
     onOpenPronunciationReports: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenStats: () -> Unit,
+    onOpenLogs: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -3366,6 +3376,21 @@ private fun SettingsScreen(
                         }
                     }
                 }
+                // The pipeline's own log (#124). Two gates, like every other admin surface: the
+                // capability says the server publishes it, `is_admin` says this account may read
+                // it. "Why did that chapter fail" is a question you have with the app open, and
+                // the answer used to be a laptop away.
+                if (canReadServerLogs(capabilities, session.isAdmin)) {
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    MetaText(
+                        text = "Everything the conversion pipeline has reported — failures, " +
+                            "polls, imports. Read-only, filtered by level or by book.",
+                        color = AarisColor.Dim,
+                    )
+                    OutlinedButton(onClick = onOpenLogs, shape = RectangleShape) {
+                        Text("SERVER LOG")
+                    }
+                }
             }
         }
 
@@ -3614,6 +3639,17 @@ private fun SettingsScreen(
                 }
             }
         }
+
+        // The other storage figure, and until now the one nobody could see from here: how much disk
+        // the *server* is using, per fiction (#124). It sits next to the phone's own cache card
+        // because "storage" used to mean only the download cache, while the volume actually at risk
+        // of filling up is the one the MP3s are written to. Read-only — every reclamation stays on
+        // the web console, deliberately.
+        ServerStorageSettings(
+            capabilities = capabilities,
+            isAdmin = session.isAdmin,
+            repository = repository,
+        )
 
         // Serving a private podcast feed is what TTSRoad is for, and the phone is where a podcast
         // app lives — so getting a tokenised URL onto the phone used to mean mailing it to yourself
