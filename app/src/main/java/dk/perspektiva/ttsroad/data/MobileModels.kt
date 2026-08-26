@@ -83,6 +83,10 @@ data class LibraryResponse(
     val fictions: List<FictionSummary> = emptyList(),
     @param:Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
     @param:Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    @param:Json(name = "updated_since") val updatedSince: String? = null,
+    val delta: Boolean = false,
+    val deleted: List<Int> = emptyList(),
 )
 
 data class ChaptersResponse(
@@ -90,6 +94,48 @@ data class ChaptersResponse(
     val fiction: FictionSummary,
     val total: Int = 0,
     val chapters: List<ChapterSummary> = emptyList(),
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    @param:Json(name = "updated_since") val updatedSince: String? = null,
+    val delta: Boolean = false,
+    val deleted: List<Int> = emptyList(),
+)
+
+/** One fiction named by `GET /api/mobile/sync` because some part of it moved. */
+data class DeltaFictionChange(
+    @param:Json(name = "fiction_id") val fictionId: Int,
+    val slug: String? = null,
+    val title: String? = null,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    @param:Json(name = "changed_chapters") val changedChapters: Int = 0,
+    @param:Json(name = "deleted_chapters") val deletedChapters: Int = 0,
+    @param:Json(name = "changed_playback") val changedPlayback: Int = 0,
+) {
+    /** Whether a loaded chapter list has anything to pull for this fiction. */
+    val chaptersMoved: Boolean
+        get() = changedChapters > 0 || deletedChapters > 0 || changedPlayback > 0
+}
+
+data class DeltaChanged(
+    val library: Boolean = false,
+    val fictions: List<DeltaFictionChange> = emptyList(),
+    val playback: Int = 0,
+    val bookmarks: Int = 0,
+)
+
+data class DeltaDeleted(
+    val fictions: List<Int> = emptyList(),
+    val chapters: List<Int> = emptyList(),
+    val bookmarks: List<Int> = emptyList(),
+)
+
+/** The cheap index request that precedes sparse library and chapter pulls (#110). */
+data class DeltaSyncResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "server_time") val serverTime: String,
+    @param:Json(name = "updated_since") val updatedSince: String? = null,
+    val delta: Boolean = false,
+    val changed: DeltaChanged = DeltaChanged(),
+    val deleted: DeltaDeleted = DeltaDeleted(),
 )
 
 /** The `source_type` values the server sends. A fiction may carry a key newer than this build. */

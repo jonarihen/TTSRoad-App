@@ -312,8 +312,16 @@ class TtsRoadRepository(
      * The parameter is always sent. A server without per-user libraries ignores it and answers the
      * shared list either way, and the response says which scope it actually applied.
      */
-    suspend fun library(scope: String = LibraryScopeFollowed): LibraryResponse =
-        withAuthorizedApi { it.library(scope) }
+    suspend fun library(
+        scope: String = LibraryScopeFollowed,
+        updatedSince: String? = null,
+    ): LibraryResponse = withAuthorizedApi { it.library(scope, updatedSince) }
+
+    /** Ask whether anything moved before spending requests on sparse payloads. */
+    suspend fun deltaSync(updatedSince: String): DeltaSyncResponse? {
+        if (!_currentCapabilities.value.deltaSync) return null
+        return withAuthorizedApi { it.deltaSync(updatedSince) }
+    }
 
     /**
      * Follow or unfollow a fiction. Answers the resulting state, or null when the server has no
@@ -495,11 +503,13 @@ class TtsRoadRepository(
         fictionId: Int,
         playableOnly: Boolean = false,
         includeExcluded: Boolean = false,
+        updatedSince: String? = null,
     ): ChaptersResponse = withAuthorizedApi {
         it.chapters(
             fictionId = fictionId,
             playableOnly = playableOnly,
             includeExcluded = includeExcluded,
+            updatedSince = updatedSince,
         )
     }
 

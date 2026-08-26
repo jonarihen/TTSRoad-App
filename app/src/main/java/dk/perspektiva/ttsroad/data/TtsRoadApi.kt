@@ -66,6 +66,7 @@ interface TtsRoadApi {
     @GET("api/mobile/library")
     suspend fun library(
         @Query("scope") scope: String = LibraryScopeFollowed,
+        @Query("updated_since") updatedSince: String? = null,
     ): LibraryResponse
 
     @GET("api/mobile/fictions/{fiction_id}/chapters")
@@ -73,7 +74,12 @@ interface TtsRoadApi {
         @Path("fiction_id") fictionId: Int,
         @Query("playable_only") playableOnly: Boolean = false,
         @Query("include_excluded") includeExcluded: Boolean = false,
+        @Query("updated_since") updatedSince: String? = null,
     ): ChaptersResponse
+
+    /** Cheap change index used before pulling sparse library and chapter payloads (#110). */
+    @GET("api/mobile/sync")
+    suspend fun deltaSync(@Query("updated_since") updatedSince: String): DeltaSyncResponse
 
     /**
      * Content hashes for one fiction's converted chapters — what a download index needs and nothing
