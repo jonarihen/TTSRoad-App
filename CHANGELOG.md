@@ -6,6 +6,23 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **The chapter you are on, on the home screen.** Pressing pause meant unlocking the phone, finding
+  TTSRoad, waiting for it to open and then finding the player — three steps and a few seconds for
+  something the launcher can do in one tap, and the phone spends much of its TTSRoad time in a car
+  mount where those steps are worse than merely slow. There is now a **continue-listening widget**:
+  the cover, the book, the chapter, how much of it is left, and play/pause with the same
+  30-second skips the notification offers. Its buttons act on the one real playback session, so a
+  tap here and a tap on the notification are the same thing to the player — and pressing play with
+  the app closed starts it exactly as a Bluetooth button does, resuming whatever was last heard.
+  Resize it: one cell high keeps the book and pause, two adds the time remaining and the skips.
+  The interesting problem was honesty about what it knows. A widget cannot hold a connection to the
+  player — the launcher draws it long after Android has reaped the app — so the service leaves a
+  small note behind on the paths it already runs, and the widget renders that. If the note stops
+  being updated, the widget stops claiming to be playing and says **Last heard** instead: a pause
+  button and a moving progress bar over audio that actually stopped at 2am invites a tap that does
+  the opposite of what it looks like. Signing out removes the note rather than blanking it, so the
+  previous account's book cannot survive on a home screen.
+  ([#150](https://github.com/jonarihen/TTSRoad-App/issues/150))
 - **"That name is said wrong" is now something you can say from the car.** Wanting a pronunciation
   rule starts with *hearing* the mispronunciation, and that happens forty chapters into a serial, on
   headphones or at the wheel — nowhere near the browser where rules are actually made. By the time

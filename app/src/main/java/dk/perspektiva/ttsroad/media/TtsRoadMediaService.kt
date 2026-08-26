@@ -6,10 +6,12 @@ import android.media.AudioManager
 import android.media.audiofx.LoudnessEnhancer
 import android.os.Bundle
 import androidx.annotation.OptIn
+import androidx.glance.appwidget.updateAll
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
@@ -56,6 +58,10 @@ import dk.perspektiva.ttsroad.player.ShakeDetector
 import dk.perspektiva.ttsroad.player.SleepTimerAction
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
+import dk.perspektiva.ttsroad.widget.NowPlayingSnapshot
+import dk.perspektiva.ttsroad.widget.NowPlayingStore
+import dk.perspektiva.ttsroad.widget.NowPlayingWidget
+import dk.perspektiva.ttsroad.widget.nowPlayingSnapshotOf
 import dk.perspektiva.ttsroad.player.ServerBreadcrumbIntervalMs
 import dk.perspektiva.ttsroad.player.breadcrumbsToPrune
 import dk.perspektiva.ttsroad.player.shouldWriteBreadcrumb
@@ -92,6 +98,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var session: MediaLibrarySession
     private lateinit var sleepTimer: SleepTimerController
     private lateinit var fictionSpeeds: FictionSpeedPreferences
+    private lateinit var nowPlayingStore: NowPlayingStore
 
     /** The book currently playing, or null. Drives the per-fiction speed; see [effectiveSpeed]. */
     private val currentFictionId = MutableStateFlow<Int?>(null)
@@ -132,11 +139,21 @@ class TtsRoadMediaService : MediaLibraryService() {
         downloadPreferences = ServiceLocator.downloadPreferences(this)
         pendingProgress = ServiceLocator.pendingProgress(this)
         progressSync = ServiceLocator.progressSync(this)
+        nowPlayingStore = NowPlayingStore(this)
         // Anything recorded while the last session was offline is still waiting. Flush it before
         // playback adds to it, so a reconnect settles the backlog rather than deepening it.
         serviceScope.launch { progressSync.flush() }
         serviceScope.launch {
-            tokenStore.session.collectLatest { authHeader = it.authorizationHeader }
+            tokenStore.session.collectLatest { state ->
+                authHeader = state.authorizationHeader
+                // Account state and the snapshot are separate files. Remove the latter explicitly
+                // on sign-out so a later process can never show the previous account's book, even
+                // for the instant before its DataStore read finishes.
+                if (!state.isLoggedIn) {
+                    nowPlayingStore.clear()
+                    runCatching { NowPlayingWidget().updateAll(this@TtsRoadMediaService) }
+                }
+            }
         }
         player = createPlayer()
         startAudioTuning()
@@ -174,6 +191,10 @@ class TtsRoadMediaService : MediaLibraryService() {
                             // a say — everything before this point is the local queue, untouched.
                             advanceServerQueue()
                         }
+                    } else {
+                        // READY is when duration first becomes trustworthy; BUFFERING also matters
+                        // after restoring a queue before isPlaying has changed.
+                        serviceScope.launch { publishNowPlaying(forcePlaying = null) }
                     }
                     // Playing again means whatever broke has healed, so the next failure starts
                     // its backoff from the top rather than inheriting an exhausted counter.
@@ -186,6 +207,9 @@ class TtsRoadMediaService : MediaLibraryService() {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (!isPlaying) {
                         serviceScope.launch { saveCurrentProgress(forcePlayed = false) }
+                    } else {
+                        // Do not wait for the first 15-second progress tick to turn Play into Pause.
+                        serviceScope.launch { publishNowPlaying(forcePlaying = true) }
                     }
                 }
 
@@ -200,6 +224,26 @@ class TtsRoadMediaService : MediaLibraryService() {
                     currentFictionId.value = mediaItem?.mediaMetadata?.extras
                         ?.getInt("fiction_id")
                         ?.takeIf { it > 0 }
+                    // A chapter title and cover should change as soon as auto-advance does. When a
+                    // queue is cleared, publishNowPlaying preserves the last item and marks it
+                    // stopped, which is the widget's "last heard" state.
+                    serviceScope.launch {
+                        publishNowPlaying(forcePlaying = if (mediaItem == null) false else null)
+                    }
+                }
+
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int,
+                ) {
+                    // Widget skips and seeks should move the progress display immediately.
+                    serviceScope.launch { publishNowPlaying(forcePlaying = null) }
+                }
+
+                override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+                    // Extrapolation uses speed, so changing it invalidates the stored baseline.
+                    serviceScope.launch { publishNowPlaying(forcePlaying = null) }
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -599,6 +643,31 @@ class TtsRoadMediaService : MediaLibraryService() {
         return (duration - player.currentPosition).coerceAtLeast(0L)
     }
 
+    /**
+     * Persist what the launcher needs and ask every placed widget to redraw.
+     *
+     * There is deliberately no controller kept alive by the widget. The media service is the one
+     * source of truth, and this tiny note survives when Android later kills its process. If the
+     * queue is cleared, retain the last chapter but mark it stopped so the useful "last heard"
+     * state does not collapse into "nothing played".
+     */
+    private suspend fun publishNowPlaying(forcePlaying: Boolean?) {
+        val now = System.currentTimeMillis()
+        val current = nowPlayingSnapshotOf(
+            player = player,
+            isPlaying = forcePlaying ?: player.isPlaying,
+            updatedAt = now,
+        )
+        if (current != null) {
+            nowPlayingStore.write(current)
+        } else {
+            nowPlayingStore.read()?.let { previous ->
+                nowPlayingStore.write(previous.copy(isPlaying = false, updatedAt = now))
+            }
+        }
+        runCatching { NowPlayingWidget().updateAll(this) }
+    }
+
     private suspend fun saveCurrentProgress(forcePlayed: Boolean) {
         val mediaItem = player.currentMediaItem ?: return
         val position = player.currentPosition.coerceAtLeast(0L)
@@ -619,6 +688,11 @@ class TtsRoadMediaService : MediaLibraryService() {
             fictionTitle = mediaItem.mediaMetadata.albumTitle?.toString(),
             positionMs = position,
         )
+
+        // The home-screen widget reads a note rather than a player, because the launcher draws it
+        // in a process where this one is usually dead (#150). Written from here so it rides the
+        // same 15s tick, pause and chapter-end path that already exists — no second ticker.
+        publishNowPlaying(forcePlaying = null)
 
         if (fictionId == null || chapterId == null) return
         // The account's `auto_mark_played`. The web player has honoured it since it was introduced
