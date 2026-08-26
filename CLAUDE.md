@@ -22,7 +22,7 @@ server. `CHANGELOG.md` records what shipped in each version.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`app/src/test` is a real JVM test source set — 847 tests as of 0.13.0, JUnit + Robolectric +
+`app/src/test` is a real JVM test source set — 1214 tests as of 0.13.0, JUnit + Robolectric +
 MockWebServer + Compose UI test, all wired in `app/build.gradle.kts`. **Run `./gradlew test` before
 claiming a change works.** `app/src/androidTest` exists but holds only the R8 startup smoke test,
 which needs a device and the keystore — see below.
