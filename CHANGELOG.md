@@ -238,6 +238,17 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- **Two things your server can do were listed by their database names.** The Settings capability
+  panel exists so that "this server is older than my app", "I am not an admin" and "this app is
+  broken" stop looking identical — it says, in words, what the server behind you supports. Two
+  flags had never been given words: listening statistics and the server's voice list showed up as
+  `listening_stats` and `voice_catalogue`, raw column names in a list of sentences. Both are named
+  properly now, and the voice list says plainly that this app does not use it — it shows which
+  voice a fiction was narrated in and does not offer to change it, which is a different thing from
+  the server being unable to. A test now checks the whole set against the server's own list, so the
+  next flag added on the backend cannot arrive here nameless.
+  ([#120](https://github.com/jonarihen/TTSRoad-App/issues/120))
+
 - **Player, chapter and reader controls are big enough to hit.** The transport buttons, the mini
   player, the four actions on every chapter row and the reader's option chips made their tap area
   exactly as small as the glyph drawn in it — 36 dp on a chapter row, where Read, Download, Mark

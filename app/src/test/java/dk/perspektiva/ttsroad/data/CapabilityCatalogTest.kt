@@ -101,4 +101,57 @@ class CapabilityCatalogTest {
         assertFalse(rows.single().supported)
         assertNull(rows.single().note)
     }
+
+    /**
+     * Every flag the backend advertises has a human label.
+     *
+     * This is the regression the panel exists to prevent, and it had already happened twice:
+     * `listening_stats` and `voice_catalogue` were both live on the server and absent from the
+     * catalogue, so the one screen whose job is to say what a server can do in words was saying
+     * "listening_stats" — a raw column name, in a list of sentences.
+     *
+     * The list below is `CAPABILITY_ROUTES` in the backend's `app/routers/platform.py`, copied
+     * rather than fetched because a unit test has no server. It will go stale, and that is the
+     * intended failure: a flag added there and not here is exactly what this catches, and the fix
+     * is one line in [CapabilityCatalog].
+     */
+    @Test
+    fun `every capability the server advertises is named in words`() {
+        val advertisedByServer = listOf(
+            "account_security", "audio_content_hash", "audiobook_export", "batch_progress",
+            "bookmarks", "chapter_maintenance", "delta_sync", "device_management", "epub_upload",
+            "feed_urls", "fiction_maintenance", "fiction_management", "follows",
+            "listening_state_backup", "listening_stats", "live_events", "logs",
+            "offline_downloads", "player_preferences", "pronunciation_reports", "queue",
+            "readalong", "search", "signed_audio_urls", "storage", "voice_catalogue",
+            "voice_preview",
+        )
+
+        val unnamed = advertisedByServer.filter { CapabilityCatalog.label(it) == it }
+
+        assertEquals(emptyList<String>(), unnamed)
+    }
+
+    /**
+     * The order list and the label map are two halves of one table, and a key in one and not the
+     * other is a bug either way round: missing from [CapabilityCatalog.Order] it sorts into the
+     * unknown tail, missing from the labels it shows its raw name.
+     */
+    @Test
+    fun `the ordered flags and the labelled flags are the same set`() {
+        val labelled = CapabilityCatalog.rows(
+            CapabilityCatalog.Order.associateWith { true },
+        ).filterNot { it.label == it.key }
+
+        assertEquals(CapabilityCatalog.Order.size, labelled.size)
+    }
+
+    /** A note qualifies a flag the panel already knows about; one on an unknown key never shows. */
+    @Test
+    fun `every not-used-by-this-app note belongs to a known flag`() {
+        val noted = CapabilityCatalog.Order.filter { CapabilityCatalog.note(it, supported = true) != null }
+
+        assertTrue(noted.containsAll(listOf("offline_downloads", "voice_catalogue", "voice_preview")))
+    }
+
 }
