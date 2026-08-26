@@ -70,7 +70,6 @@ object CapabilityCatalog {
     private val unusedByThisApp: Map<String, String> = mapOf(
         "offline_downloads" to "this app plans its own",
         "delta_sync" to "not used yet",
-        "audiobook_export" to "not used yet",
         "voice_preview" to "not used yet",
         "signed_audio_urls" to "not needed — this app sends a header",
         "live_events" to "browser only",

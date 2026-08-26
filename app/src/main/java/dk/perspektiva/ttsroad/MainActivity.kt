@@ -151,6 +151,8 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.data.AudiobookExportRow
+import dk.perspektiva.ttsroad.data.AudiobookExportsResponse
 import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.Bookmark
 import dk.perspektiva.ttsroad.data.CapabilityCatalog
@@ -225,6 +227,8 @@ import dk.perspektiva.ttsroad.data.readerAutoScrollOffsetPx
 import dk.perspektiva.ttsroad.data.shouldKeepReaderScreenOn
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
+import dk.perspektiva.ttsroad.data.audiobookExportEncoderNote
+import dk.perspektiva.ttsroad.data.audiobookExportRows
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
@@ -2524,6 +2528,11 @@ private fun PlayerScreen(
                         },
                     )
                 }
+                MetaText(
+                    text = PreferenceScope.DevicePlayer,
+                    color = AarisColor.Dim,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             }
             speedOptions(playerState.speed).forEach { preset ->
@@ -3041,6 +3050,24 @@ private fun SettingsScreen(
         }
     }
 
+    // Finished M4B exports (#113). Two gates, like every other admin surface: the capability says
+    // the server has the route, `is_admin` says this account may reach it. Asking without the
+    // second is a 403 the user cannot act on.
+    var exports by remember { mutableStateOf<AudiobookExportsResponse?>(null) }
+    var exportsError by remember { mutableStateOf<String?>(null) }
+    val canListExports = capabilities.audiobookExport && session.isAdmin
+
+    LaunchedEffect(canListExports) {
+        exportsError = null
+        exports = if (!canListExports) {
+            null
+        } else {
+            runCatching { repository.audiobookExports() }
+                .onFailure { exportsError = it.message ?: "Could not load the export list" }
+                .getOrNull()
+        }
+    }
+
     /**
      * Write the account's listening state to a file the user chose (#116).
      *
@@ -3343,7 +3370,7 @@ private fun SettingsScreen(
                             text = "Shortens the long pauses synthesised speech leaves around " +
                                 "headings and scene breaks. Off by default, because the web " +
                                 "player has no equivalent and leaving it on makes the same " +
-                                "chapter finish sooner here.",
+                                "chapter finish sooner here. " + PreferenceScope.DevicePlayer,
                             color = AarisColor.Dim,
                         )
                     }
@@ -3359,7 +3386,7 @@ private fun SettingsScreen(
                 MetaText(text = "Volume boost")
                 MetaText(
                     text = "Lifts chapters converted at a lower level, so a quiet one does not " +
-                        "mean reaching for the volume.",
+                        "mean reaching for the volume. " + PreferenceScope.DevicePlayer,
                     color = AarisColor.Dim,
                 )
                 AarisChoiceRow(
@@ -3564,6 +3591,71 @@ private fun SettingsScreen(
                             "are added, so an old backup cannot undo newer listening.",
                         color = AarisColor.Dim,
                     )
+                }
+            }
+        }
+
+        // Whole-book M4B files the server has already made (#113). Read-only and admin-only,
+        // exactly as the server has it: starting an export and deleting one stay on the web
+        // console. The app deliberately does not *play* these — it streams a fiction chapter by
+        // chapter with a position per chapter, and one multi-gigabyte file carrying a single
+        // position is a downgrade, not a feature. What they are for is another audiobook player.
+        if (canListExports) {
+            MetaText(text = "// Audiobook exports", color = AarisColor.Accent)
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MetaText(
+                        text = "Finished M4B files on this server, for handing to another " +
+                            "audiobook player. Making one and deleting one are still jobs for " +
+                            "the web console.",
+                        color = AarisColor.Dim,
+                    )
+                    exportsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    // ffmpeg is reported per request, not as a capability: the route existing and
+                    // the machine behind it being able to encode are two different questions, and
+                    // an empty list would answer the wrong one.
+                    audiobookExportEncoderNote(exports)?.let {
+                        MetaText(text = it, color = AarisColor.Warning)
+                    }
+                    val rows = remember(exports, session.serverUrl) {
+                        audiobookExportRows(exports) {
+                            ServerUrls.rewriteHost(it, session.serverUrl)
+                        }
+                    }
+                    if (rows.isEmpty()) {
+                        // The error above already says why an empty list is empty, when it is.
+                        if (exportsError == null) {
+                            MetaText(
+                                text = if (exports == null) {
+                                    "Loading…"
+                                } else {
+                                    "Nothing has been exported on this server yet."
+                                },
+                                color = AarisColor.Muted,
+                            )
+                        }
+                    } else {
+                        MetaText(
+                            text = "A download carries your account's bearer token, so these links " +
+                                "do nothing in a plain browser. Share one to something that can " +
+                                "send the header.",
+                            color = AarisColor.Dim,
+                        )
+                        rows.forEachIndexed { index, row ->
+                            if (index > 0) {
+                                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                            }
+                            AudiobookExportListItem(
+                                row = row,
+                                onShare = { shareText(context, it, row.title) },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -5989,6 +6081,43 @@ private fun ShareUrlRow(label: String, url: String?, onShare: (String) -> Unit) 
         MetaText(text = url, color = AarisColor.Dim, maxLines = 2)
         OutlinedButton(onClick = { onShare(url) }, shape = RectangleShape) {
             Text("SHARE")
+        }
+    }
+}
+
+/**
+ * One finished M4B export: what it is, how big it is, when it finished, and where it lives (#113).
+ *
+ * There is no play button, and that is the design rather than an omission — the app streams a
+ * fiction chapter by chapter with a position per chapter, which beats one multi-gigabyte file with
+ * a single position everywhere except inside another app. Nor is there a download button: the URL
+ * needs the account's `Authorization` header, so the phone cannot hand it to the system browser or
+ * to DownloadManager and expect anything but a 401. Sharing is the honest action for a link that
+ * only means something to something holding a token.
+ */
+@Composable
+private fun AudiobookExportListItem(row: AudiobookExportRow, onShare: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = row.title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = AarisColor.Ink,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        row.detail.takeIf { it.isNotBlank() }?.let { MetaText(text = it, color = AarisColor.Muted) }
+        row.finished?.let { MetaText(text = "Finished $it", color = AarisColor.Dim) }
+        val url = row.downloadUrl
+        if (url == null) {
+            // The URL is built from the server's own BASE_URL and can come back empty. Saying so
+            // beats a SHARE button that shares nothing.
+            MetaText(text = "This server did not give a download link.", color = AarisColor.Dim)
+        } else {
+            MetaText(text = url, color = AarisColor.Dim, maxLines = 2)
+            OutlinedButton(onClick = { onShare(url) }, shape = RectangleShape) {
+                Text("SHARE LINK")
+            }
         }
     }
 }
