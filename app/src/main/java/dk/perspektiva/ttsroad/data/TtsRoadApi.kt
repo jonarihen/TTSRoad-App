@@ -260,6 +260,16 @@ interface TtsRoadApi {
         @Path("fiction_id") fictionId: Int,
     ): MaintenanceResponse
 
+    /**
+     * The finished M4B audiobooks on the server (#113).
+     *
+     * Admin-only server-side, and read-only by design: starting an export and deleting one stay on
+     * the web console. The reply also carries `ffmpeg_available`, which is what lets a client say
+     * "this server cannot make one right now" instead of offering a button that would fail.
+     */
+    @GET("api/mobile/exports")
+    suspend fun audiobookExports(): AudiobookExportsResponse
+
     /** Every position and chosen mark on this account, as a portable document (#116). */
     @GET("api/mobile/listening-state")
     suspend fun exportListeningState(): ListeningStateExport

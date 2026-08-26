@@ -56,7 +56,6 @@ class CapabilityCatalogTest {
         // These are true on the server and unused here. A bare "Yes" would promise the user a
         // feature that is not in the app.
         assertNotNull(CapabilityCatalog.note("delta_sync", supported = true))
-        assertNotNull(CapabilityCatalog.note("audiobook_export", supported = true))
         assertNotNull(CapabilityCatalog.note("live_events", supported = true))
     }
 
@@ -65,6 +64,8 @@ class CapabilityCatalogTest {
         assertNull(CapabilityCatalog.note("readalong", supported = true))
         assertNull(CapabilityCatalog.note("bookmarks", supported = true))
         assertNull(CapabilityCatalog.note("queue", supported = true))
+        // Listing exports shipped in #113, so the "not used yet" qualifier came off with it.
+        assertNull(CapabilityCatalog.note("audiobook_export", supported = true))
     }
 
     @Test

@@ -6,6 +6,17 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **The audiobook exports on your server, from the phone.** TTSRoad can encode a whole fiction to
+  one M4B file, and the only way to find out whether last night's export had finished was to open
+  the web console on a laptop. Settings now lists the finished files with their size, running time,
+  chapter range and when they completed, and **SHARE LINK** sends one wherever it needs to go. A
+  server with no ffmpeg says so instead of showing an empty list that reads as "nothing was ever
+  exported". The list is read-only and admin-only, exactly as the server has it — starting an
+  export and deleting one stay on the web — and the app does not offer to play these: it streams a
+  fiction chapter by chapter with a position in each, which beats one multi-gigabyte file carrying
+  a single position. The download carries your account's bearer token, so the link is meant for
+  something that can send that header, not for a browser.
+  ([#113](https://github.com/jonarihen/TTSRoad-App/issues/113))
 - **Podcast feed links, from the phone.** Serving a private podcast feed is what TTSRoad is for, and
   the phone is where a podcast app lives — yet the only way to get a tokenised feed URL onto the
   phone was to mail it to yourself from a laptop. Settings now shows the combined feed and the OPML

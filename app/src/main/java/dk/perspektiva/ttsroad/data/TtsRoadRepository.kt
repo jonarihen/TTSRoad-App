@@ -830,6 +830,22 @@ class TtsRoadRepository(
     }
 
     /**
+     * The finished M4B audiobooks on the server, or null on a server without the route (#113).
+     *
+     * Gated on the capability here and on `is_admin` at the call site, the same two-part gate the
+     * other admin surfaces use: the flag says the server has the route, the session says whether
+     * this account may reach it. A non-admin asking gets a 403, which is a thrown exception dressed
+     * up as a feature that does not exist — so the caller does not ask.
+     *
+     * The whole response is returned rather than just the list, because `ffmpeg_available` is the
+     * difference between "nothing has been exported" and "this server cannot export anything".
+     */
+    suspend fun audiobookExports(): AudiobookExportsResponse? {
+        if (!_currentCapabilities.value.audiobookExport) return null
+        return withAuthorizedApi { it.audiobookExports() }
+    }
+
+    /**
      * This account's positions and marks, as the server's own document.
      *
      * Returned as the opaque map the server sent. Nothing here reads or rewrites it: a document

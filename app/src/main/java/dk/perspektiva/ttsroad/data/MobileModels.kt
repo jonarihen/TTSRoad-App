@@ -610,6 +610,63 @@ data class ListeningStateImportResponse(
 )
 
 /**
+ * `GET /api/mobile/exports` — the finished M4B audiobooks on the server (#113).
+ *
+ * Written for this app specifically, and deliberately read-only: starting an export and deleting
+ * one stay on the web console. Every entry is flagged `playable_in_app: false` for a reason worth
+ * repeating here — the app streams a fiction chapter by chapter with a position per chapter, which
+ * is strictly better in-app than one multi-gigabyte file carrying a single position. What an export
+ * is *for* is handing to a third-party audiobook player.
+ *
+ * [ffmpegAvailable] is not a capability and is not redundant with one. `audiobook_export` says the
+ * route exists; this says whether the server can currently encode anything at all. A client that
+ * showed an empty list on a server without ffmpeg would be reporting the wrong problem.
+ */
+data class AudiobookExportsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "ffmpeg_available") val ffmpegAvailable: Boolean = false,
+    val exports: List<AudiobookExport> = emptyList(),
+)
+
+/**
+ * One finished M4B file.
+ *
+ * A *file*, not a request: a split export of a nine-hundred-chapter serial is several entries
+ * sharing a batch, told apart by [partIndex] of [partCount]. Each is downloaded, and deleted on the
+ * web, on its own.
+ *
+ * [sizeLabel] and [durationLabel] are the server's own words for [sizeBytes] and [durationSeconds],
+ * and are preferred when shown. The web storage page quotes those exact strings, and two clients
+ * disagreeing over whether a file is 1.4 GB or 1.5 GB is a support question nobody needs.
+ *
+ * [requiresBearerAuth] is the awkward part, and is always true: [downloadUrl] needs the
+ * `Authorization` header, so it is not a link the system browser or DownloadManager can be handed.
+ */
+data class AudiobookExport(
+    val id: Int = 0,
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    /** The export's own title — "Ashes of the Sun, Part 2" — which is not the fiction's. */
+    val title: String? = null,
+    val filename: String? = null,
+    @param:Json(name = "part_index") val partIndex: Int = 1,
+    @param:Json(name = "part_count") val partCount: Int = 1,
+    @param:Json(name = "chapter_count") val chapterCount: Int = 0,
+    /** Null on an unnumbered chapter — the server's own reason for storing chapter ids as well. */
+    @param:Json(name = "first_chapter_number") val firstChapterNumber: Int? = null,
+    @param:Json(name = "last_chapter_number") val lastChapterNumber: Int? = null,
+    @param:Json(name = "duration_seconds") val durationSeconds: Double = 0.0,
+    @param:Json(name = "duration_label") val durationLabel: String? = null,
+    @param:Json(name = "size_bytes") val sizeBytes: Long = 0L,
+    @param:Json(name = "size_label") val sizeLabel: String? = null,
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    @param:Json(name = "completed_at") val completedAt: String? = null,
+    @param:Json(name = "download_url") val downloadUrl: String? = null,
+    @param:Json(name = "requires_bearer_auth") val requiresBearerAuth: Boolean = true,
+    @param:Json(name = "playable_in_app") val playableInApp: Boolean = false,
+)
+
+/**
  * `POST /api/mobile/account/password` (#118).
  *
  * [deviceName] is what the replacement credential is called in the device list. A client that omits
