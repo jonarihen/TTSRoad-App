@@ -65,6 +65,28 @@ class ServerCapabilitiesTest {
         assertFalse(ServerCapabilities.Baseline.listeningStats)
     }
 
+    /**
+     * The two operational read-outs are advertised separately (#124). A deployment may reasonably
+     * expose one and not the other, and nothing about publishing the log implies publishing the
+     * volume's free space — so one flag must never light up the other's screen.
+     */
+    @Test
+    fun `logs and storage are read as two independent flags`() {
+        val logsOnly = ServerCapabilities.from(
+            CapabilitiesResponse(capabilities = mapOf("logs" to true, "storage" to false)),
+        )
+        val storageOnly = ServerCapabilities.from(
+            CapabilitiesResponse(capabilities = mapOf("storage" to true)),
+        )
+
+        assertTrue(logsOnly.logs)
+        assertFalse(logsOnly.storage)
+        assertTrue(storageOnly.storage)
+        assertFalse(storageOnly.logs)
+        assertFalse(ServerCapabilities.Baseline.logs)
+        assertFalse(ServerCapabilities.Baseline.storage)
+    }
+
     @Test
     fun `the server's own base url is carried through, and its absence is null not blank`() {
         // The download cache keys on this to tell one instance from another, and treats null as
