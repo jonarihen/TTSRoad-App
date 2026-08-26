@@ -104,6 +104,25 @@ class VoiceCatalogueTest {
     }
 
     @Test
+    fun `a name published twice is offered once`() {
+        // The picker keys its list rows on the voice name, so a duplicated row would be a crash
+        // rather than a cosmetic repeat.
+        val groups = voiceGroups(
+            listOf(
+                MobileVoice(name = "en-US-BrianNeural", locale = "en-US", gender = "Male"),
+                MobileVoice(name = "en-US-BrianNeural", locale = "en-US", gender = "Male"),
+                MobileVoice(name = "en-US-AvaNeural", locale = "en-US", gender = "Female"),
+            ),
+            locale = Locale.US,
+        )
+
+        assertEquals(
+            listOf("en-US-AvaNeural", "en-US-BrianNeural"),
+            groups.single().voices.map { it.name },
+        )
+    }
+
+    @Test
     fun `short voice names respect locale prefixes longer than language and region`() {
         assertEquals("Brian", shortVoiceName("en-US-BrianNeural", "en-US"))
         assertEquals(

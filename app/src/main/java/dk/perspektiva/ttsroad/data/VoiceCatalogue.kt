@@ -73,7 +73,7 @@ const val UnknownVoiceLocale: String = "other"
  * `en-GB-SoniaNeural`. An empty result is an empty list — the caller says what that means.
  *
  * A row with a blank [MobileVoice.name] is dropped: it cannot be stored, so offering it would be
- * offering a choice whose save fails.
+ * offering a choice whose save fails. A name that arrives twice is kept once.
  */
 fun voiceGroups(
     voices: List<MobileVoice>?,
@@ -88,6 +88,10 @@ fun voiceGroups(
 
     val groups = voices
         .filter { it.name.isNotBlank() }
+        // One row per name. The picker keys its list on the voice name, so a server that published
+        // the same narrator twice would take the sheet down with a duplicate key rather than merely
+        // showing it twice — and a name is the identity here, not a label.
+        .distinctBy { it.name.trim() }
         .groupBy { it.localeTag }
         .map { (tag, rows) ->
             VoiceGroup(
