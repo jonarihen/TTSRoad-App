@@ -166,6 +166,24 @@ wall-clock → chapter+position snapshot, capped at 2000 entries (~8h) and persi
 or, if the queue was cleared overnight, reloads the fiction from `fiction_id`/`chapter_id` and
 resumes at the historical position.
 
+**The home-screen widget reads a note, never a player.** `widget/` is Glance
+(`androidx.glance:glance-appwidget`), rendered by the launcher on demand — usually with this app's
+process already reaped — so it cannot hold a `MediaController`. `TtsRoadMediaService.publishNowPlaying`
+writes one `NowPlayingSnapshot` to `filesDir/widget_now_playing.json` on the paths it already runs
+(the 15s progress tick, `onIsPlayingChanged`, item transitions, discontinuities, speed changes) and
+calls `updateAll`. Three rules:
+- Everything the widget *decides* lives in `widget/WidgetPresentation.kt`, which is plain arithmetic
+  over a snapshot and a clock, and is unit-tested. The Glance composable is deliberately thin,
+  because none of Glance is reachable from `app/src/test`.
+- A snapshot claiming `isPlaying` is only believed for `StalePlayingThresholdMs` (90s, six missed
+  ticks). Past that the widget says "Last heard" — a pause button over audio that stopped hours ago
+  invites a tap that does the opposite of what it looks like.
+- Widget buttons go through a short-lived `MediaController` **on `Dispatchers.Main`**. Media3 verifies
+  the application thread on every controller call and Glance dispatches `ActionCallback` on a worker,
+  so anywhere else throws. Covers are fetched to a bitmap through the app's Coil loader before
+  composition — the launcher is handed pixels, not a URL, and that loader is what keeps the bearer
+  token off Royal Road/CDN origins.
+
 **UI is one file.** `MainActivity.kt` (~2k lines) holds every screen as a private composable.
 Navigation is a hand-rolled `AppScreen` sealed interface in `remember { mutableStateOf }` — the
 `navigation-compose` dependency is present but unused. Per-screen loading uses the local

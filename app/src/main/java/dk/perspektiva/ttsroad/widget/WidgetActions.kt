@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.widget
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.action.ActionCallback
@@ -11,7 +12,9 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import dk.perspektiva.ttsroad.media.TtsRoadMediaService
 import dk.perspektiva.ttsroad.media.TtsRoadSessionCommands
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.guava.await
+import kotlinx.coroutines.withContext
 
 /**
  * The widget's buttons, issued against the one real playback session (#150).
@@ -24,27 +27,38 @@ import kotlinx.coroutines.guava.await
  * a cold home screen — the service's `onPlaybackResumption` then restores the newest
  * continue-listening item, exactly as it does for a media-button press.
  *
+ * All of it runs on [Dispatchers.Main]. Media3 verifies the application thread on every
+ * [MediaController] call — `isPlaying`, `play`, `sendCustomCommand` and `release` alike — and Glance
+ * dispatches [ActionCallback.onAction] on a background worker, so doing this anywhere else throws.
+ * `player/PlaybackController` connects the same way for the same reason.
+ *
  * The controller is released in a `finally`. A leaked one keeps a bound service alive for a widget
  * that has already finished drawing.
  */
-private suspend fun <T> withController(context: Context, block: suspend (MediaController) -> T): T? {
-    val token = SessionToken(
-        context.applicationContext,
-        ComponentName(context.applicationContext, TtsRoadMediaService::class.java),
-    )
-    val controller = runCatching {
-        MediaController.Builder(context.applicationContext, token).buildAsync().await()
-    }.getOrNull() ?: return null
-    return try {
-        block(controller)
-    } catch (_: Exception) {
-        null
-    } finally {
-        controller.release()
+private suspend fun <T> withController(context: Context, block: suspend (MediaController) -> T): T? =
+    withContext(Dispatchers.Main) {
+        val token = SessionToken(
+            context.applicationContext,
+            ComponentName(context.applicationContext, TtsRoadMediaService::class.java),
+        )
+        val controller = runCatching {
+            MediaController.Builder(context.applicationContext, token).buildAsync().await()
+        }.getOrNull() ?: return@withContext null
+        try {
+            block(controller)
+        } catch (_: Exception) {
+            null
+        } finally {
+            controller.release()
+        }
     }
-}
 
-/** Refresh every placed widget after an action, so the button reflects what it just did. */
+/**
+ * Redraw every placed widget after an action, so the button reflects what it just did.
+ *
+ * The service publishes its own refresh once the player has actually changed state; this is the
+ * immediate one, so the button does not sit on its old label waiting for a listener to fire.
+ */
 private suspend fun refresh(context: Context) {
     runCatching { NowPlayingWidget().updateAll(context) }
 }
@@ -70,7 +84,7 @@ class TogglePlayPauseAction : ActionCallback {
  */
 private suspend fun sendSkip(context: Context, command: SessionCommand) {
     withController(context) { controller ->
-        controller.sendCustomCommand(command, android.os.Bundle.EMPTY).await()
+        controller.sendCustomCommand(command, Bundle.EMPTY).await()
     }
     refresh(context)
 }
