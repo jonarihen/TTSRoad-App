@@ -6,6 +6,17 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **A book that is already on the phone can go straight into the library.** An EPUB bought in a shop
+  app or mailed to yourself needed a laptop and a browser to get into TTSRoad — the server has
+  accepted uploads on the mobile surface all along and nothing here used them. Admin accounts now
+  get **UPLOAD AN EPUB** beside the add-by-URL field on the browse screen: pick the file and the
+  server splits its chapters and starts narrating, exactly as the web console does it. A file that
+  is not an `.epub`, or one past the size limit the server advertises, is refused on the phone
+  rather than after a hundred megabytes have been pushed up a mobile connection, and the book is
+  streamed off the device instead of being read into memory first — a large illustrated one uploads
+  without the app ever holding it. A server that recognises the book from a previous upload says so
+  in its own words, which is an answer rather than an error.
+  ([#114](https://github.com/jonarihen/TTSRoad-App/issues/114))
 - **The audiobook exports on your server, from the phone.** TTSRoad can encode a whole fiction to
   one M4B file, and the only way to find out whether last night's export had finished was to open
   the web console on a laptop. Settings now lists the finished files with their size, running time,

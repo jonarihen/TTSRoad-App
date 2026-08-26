@@ -167,6 +167,16 @@ data class ServerCapabilities(
     /** The largest EPUB the server will accept, for checking a file before uploading it (#114). */
     val maxEpubBytes: Long? = null,
 ) {
+    /**
+     * The EPUB ceiling to enforce on this server, advertised or assumed.
+     *
+     * A server can have the upload route and still not publish the limit — the flag and the limit
+     * shipped together, but a client cannot count on that. [DefaultMaxEpubBytes] is the value the
+     * server compiles in, so assuming it refuses exactly what the server would have refused.
+     */
+    val effectiveMaxEpubBytes: Long
+        get() = maxEpubBytes ?: DefaultMaxEpubBytes
+
     companion object {
         /** What an older server — or an unreachable one — is assumed to support. */
         val Baseline = ServerCapabilities()
