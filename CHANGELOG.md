@@ -78,6 +78,17 @@ Notable changes to the TTSRoad Android client.
   that way — the orphan scan and every delete stay on the web console, where an irreversible
   removal of somebody's audio library can be confirmed properly.
   ([#124](https://github.com/jonarihen/TTSRoad-App/issues/124))
+- **Your password and your second factor, from the phone.** Securing the account the app signs into
+  meant opening the web console — so the one device that holds a long-lived token was the one device
+  that could not rotate the credential behind it. Settings now changes a password natively,
+  enrols two-factor by handing the secret to an authenticator app, shows the one-time recovery codes
+  once and regenerates them on request, and disables the whole thing behind a password confirmation.
+  Two details are the reason this is worth doing rather than linking out: a password change hands
+  back a replacement token, which the app adopts without dropping the server and session it was
+  branded with, and a stale 401 still in flight from the old credential can no longer race in and
+  clear the new one — which would have signed you out at the exact moment you secured the account.
+  Older servers without the capability keep the controls hidden.
+  ([#118](https://github.com/jonarihen/TTSRoad-App/issues/118))
 - **The device that does the listening can finally show it.** The web has had a Stats page for as
   long as TTSRoad has — hours listened, chapters finished against chapters still open, a per-day
   activity grid, streaks, where the hours went, badges — and the app, which writes nearly every
