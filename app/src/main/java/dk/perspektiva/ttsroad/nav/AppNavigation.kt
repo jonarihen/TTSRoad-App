@@ -58,6 +58,15 @@ sealed interface AppScreen {
      * recorded, and what the account's server has aggregated — neither of which fits in a row.
      */
     data object Stats : AppScreen
+
+    /**
+     * The server's own pipeline log, reached from Settings. Admin-only and read-only (#124).
+     *
+     * Its own destination rather than a Settings card for the same reason [Stats] is one: it is
+     * read rather than operated, it pages, and it carries filters of its own. A card holding fifty
+     * log lines inside a page that already scrolls is not a card.
+     */
+    data object Logs : AppScreen
 }
 
 /** Stable key for per-entry saved UI state (scroll offsets, search text). */
@@ -78,6 +87,7 @@ val AppScreen.saveKey: String
         AppScreen.Bookmarks -> "Bookmarks"
         AppScreen.Queue -> "Queue"
         AppScreen.Stats -> "Stats"
+        AppScreen.Logs -> "Logs"
     }
 
 /** The stack every session starts from. */

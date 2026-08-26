@@ -23,6 +23,32 @@ Notable changes to the TTSRoad Android client.
   the opposite of what it looks like. Signing out removes the note rather than blanking it, so the
   previous account's book cannot survive on a home screen.
   ([#150](https://github.com/jonarihen/TTSRoad-App/issues/150))
+- **The server's own log, on the phone.** "Why did that chapter fail" and "is the poller running"
+  are questions you have with the app open, and the answer was a laptop away: the pipeline's log
+  lived only on the web console, so the client that made you want to ask was the one client that
+  could not tell you. Settings → **SERVER LOG** now shows it, newest first, filtered by level or
+  narrowed to one book by tapping the book on any line. It pages backwards on the server's own
+  cursor rather than an offset, so walking back through a busy night cannot show the same failure
+  twice. An empty list is treated as the answer it usually is rather than as a shrug — "no errors,
+  nothing on this server has failed" is not the same sentence as "this server's log is empty", and
+  neither is the same as a server too old to publish one, which says so plainly instead of showing
+  a blank screen. Read-only and admin-only, exactly as the server has it; there is no route that
+  writes or clears a log and none was added.
+  ([#124](https://github.com/jonarihen/TTSRoad-App/issues/124))
+- **How much disk the server is using, beside how much this phone is.** "Storage" in Settings meant
+  the download cache — a few hundred megabytes on a phone — while the volume actually at risk of
+  filling up is the one the server writes its MP3s to, and seeing that meant opening a browser.
+  A new card sits next to the app's own cache figures with the volume's free space, the totals for
+  audio, exports, source EPUBs, cover art and voice samples, and the per-fiction table, largest
+  first, so the serial holding three hundred gigabytes is obvious at a glance. Audio belonging to
+  excluded chapters is called out separately, because that is the part that could be reclaimed. A
+  server without ffmpeg says so where the export total is, rather than letting a missing encoder
+  surface as a failure after you have already asked for an export. Every size on the card is the
+  string the server rendered, never one the phone worked out again: two clients disagreeing about
+  whether something is 1.4 GB is a support question nobody needs. Read-only on purpose and staying
+  that way — the orphan scan and every delete stay on the web console, where an irreversible
+  removal of somebody's audio library can be confirmed properly.
+  ([#124](https://github.com/jonarihen/TTSRoad-App/issues/124))
 - **The device that does the listening can finally show it.** The web has had a Stats page for as
   long as TTSRoad has — hours listened, chapters finished against chapters still open, a per-day
   activity grid, streaks, where the hours went, badges — and the app, which writes nearly every

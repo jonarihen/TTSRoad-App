@@ -1283,3 +1283,96 @@ fun BusiestListeningDay.startOfDayMillis(zone: ZoneId = ZoneId.systemDefault()):
     runCatching {
         LocalDate.parse(date.trim()).atStartOfDay(zone).toInstant().toEpochMilli()
     }.getOrNull()
+
+/**
+ * `GET /api/mobile/logs` — the pipeline's own log, newest first (#124).
+ *
+ * Admin-only server-side and read-only by design. "Why did this chapter fail" and "is the poller
+ * running" are questions asked while looking at the app, and the answer used to be a laptop away.
+ *
+ * Paged on [nextBeforeId], not on an offset. The cursor is a monotonic primary key, so a page
+ * boundary stays where it was while the pipeline keeps writing rows above it; an offset over a
+ * table that only grows would show the same line twice. It is null once there is nothing older, so
+ * a client pages until it goes away rather than counting.
+ */
+data class ServerLogsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val logs: List<ServerLogEntry> = emptyList(),
+    @param:Json(name = "has_more") val hasMore: Boolean = false,
+    @param:Json(name = "next_before_id") val nextBeforeId: Int? = null,
+)
+
+/**
+ * One log line.
+ *
+ * [level] is `INFO`, `WARNING` or `ERROR` as the column holds it. [fictionId] and [chapterId] are
+ * null on a line about the install rather than about a book — the scheduler starting, a voice list
+ * refreshing — which is most of a quiet log.
+ */
+data class ServerLogEntry(
+    val id: Int = 0,
+    val level: String = "",
+    val message: String = "",
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+    @param:Json(name = "chapter_id") val chapterId: Int? = null,
+    /** ISO-8601 with a `Z`, unlike the web `/api/logs`, which emits a naive local time. */
+    @param:Json(name = "created_at") val createdAt: String? = null,
+)
+
+/**
+ * `GET /api/mobile/storage` — how much disk the install is using, per fiction (#124).
+ *
+ * Every `…_bytes` has a matching `…_label`, and **the label is what gets rendered**. They are
+ * computed once server-side on purpose: two clients disagreeing about whether something is 1.4 GB
+ * is a support question nobody needs. The byte counts are here for arithmetic the labels cannot do
+ * — the share of the volume that is in use — and for nothing else.
+ *
+ * [ffmpegAvailable] is the same runtime fact [AudiobookExportsResponse] carries, and [exports] the
+ * same rows: the storage page is where an operator meets exports, and a missing ffmpeg otherwise
+ * only surfaces as a failure after someone has already chosen a fiction and asked for one.
+ *
+ * Read-only, and staying that way. The orphan scan, the orphan delete, the voice-sample delete, the
+ * excluded-audio delete and the per-fiction audio delete have no mobile mirror and none is planned:
+ * they are irreversible and they are confirmed badly on a small screen.
+ */
+data class ServerStorageResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "total_audio_bytes") val totalAudioBytes: Long = 0L,
+    @param:Json(name = "total_audio_label") val totalAudioLabel: String = "",
+    @param:Json(name = "excluded_audio_bytes") val excludedAudioBytes: Long = 0L,
+    @param:Json(name = "excluded_audio_label") val excludedAudioLabel: String = "",
+    @param:Json(name = "epub_bytes") val epubBytes: Long = 0L,
+    @param:Json(name = "epub_label") val epubLabel: String = "",
+    @param:Json(name = "cover_bytes") val coverBytes: Long = 0L,
+    @param:Json(name = "cover_label") val coverLabel: String = "",
+    @param:Json(name = "voice_sample_bytes") val voiceSampleBytes: Long = 0L,
+    @param:Json(name = "voice_sample_label") val voiceSampleLabel: String = "",
+    @param:Json(name = "voice_sample_count") val voiceSampleCount: Int = 0,
+    @param:Json(name = "export_bytes") val exportBytes: Long = 0L,
+    @param:Json(name = "export_label") val exportLabel: String = "",
+    val exports: List<AudiobookExport> = emptyList(),
+    @param:Json(name = "ffmpeg_available") val ffmpegAvailable: Boolean = false,
+    @param:Json(name = "volume_total_bytes") val volumeTotalBytes: Long = 0L,
+    @param:Json(name = "volume_total_label") val volumeTotalLabel: String = "",
+    @param:Json(name = "volume_free_bytes") val volumeFreeBytes: Long = 0L,
+    @param:Json(name = "volume_free_label") val volumeFreeLabel: String = "",
+    @param:Json(name = "per_fiction") val perFiction: List<FictionStorageRow> = emptyList(),
+)
+
+/**
+ * One fiction's share of the disk, in the order the server sent it — largest first.
+ *
+ * [excludedBytes] is the part of [audioBytes] belonging to chapters that have been excluded from
+ * the feed and still have their MP3 on disk. It is the reclaimable figure, which is exactly why it
+ * is worth showing on a surface that deliberately cannot reclaim it: knowing which book is holding
+ * two gigabytes of audio nobody listens to is most of the value, and the delete stays on the web.
+ */
+data class FictionStorageRow(
+    val id: Int = 0,
+    val title: String = "",
+    val slug: String = "",
+    @param:Json(name = "audio_bytes") val audioBytes: Long = 0L,
+    @param:Json(name = "audio_label") val audioLabel: String = "",
+    @param:Json(name = "excluded_bytes") val excludedBytes: Long = 0L,
+    @param:Json(name = "excluded_label") val excludedLabel: String = "",
+)
