@@ -1198,6 +1198,69 @@ class TtsRoadRepository(
     }
 
     /**
+     * This account's captured pronunciation problems, or null when the server has no capture store.
+     *
+     * Null and empty are deliberately different: null hides the feature, while an empty list is a
+     * supported server on which the listener has not filed anything matching the filters.
+     */
+    suspend fun pronunciationReports(
+        fictionId: Int? = null,
+        includeResolved: Boolean = false,
+    ): List<PronunciationReport>? {
+        if (!_currentCapabilities.value.pronunciationReports) return null
+        return withAuthorizedApi {
+            it.pronunciationReports(
+                fictionId = fictionId,
+                includeResolved = includeResolved,
+            )
+        }.reports
+    }
+
+    /**
+     * Capture where a pronunciation problem was heard, or null when the server cannot store one.
+     *
+     * [word] is optional by contract and must stay that way: a media-session command normally has
+     * the chapter and position but no timed read-along document. Non-finite and negative positions
+     * are flattened before Moshi sees them; NaN and infinity are not valid JSON, and losing the
+     * entire locked-phone capture over a bad clock value would lose the only useful information.
+     *
+     * A real server refusal, including the open-report ceiling's 409, propagates as an
+     * [HttpException] so the UI can show the backend's specific `detail`.
+     */
+    suspend fun createPronunciationReport(
+        chapterId: Int,
+        positionSeconds: Double = 0.0,
+        fictionId: Int? = null,
+        word: String? = null,
+        note: String? = null,
+    ): PronunciationReport? {
+        if (!_currentCapabilities.value.pronunciationReports) return null
+        val safePosition = positionSeconds.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+        return withAuthorizedApi {
+            it.createPronunciationReport(
+                CreatePronunciationReportRequest(
+                    chapterId = chapterId,
+                    fictionId = fictionId,
+                    positionSeconds = safePosition,
+                    word = word?.trim()?.takeIf { text -> text.isNotEmpty() },
+                    note = note?.trim()?.takeIf { text -> text.isNotEmpty() },
+                ),
+            )
+        }.report
+    }
+
+    /** True when the report is gone. A 404 counts because it is already not there. */
+    suspend fun deletePronunciationReport(reportId: Int): Boolean {
+        if (!_currentCapabilities.value.pronunciationReports) return false
+        return try {
+            withAuthorizedApi { it.deletePronunciationReport(reportId) }
+            true
+        } catch (e: HttpException) {
+            if (e.code() == 404) true else throw e
+        }
+    }
+
+    /**
      * Batched, timestamped progress. Answers null when the server has no `batch_progress` support,
      * which is the caller's signal to fall back to the single-item endpoint.
      */

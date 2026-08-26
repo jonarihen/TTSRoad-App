@@ -16,6 +16,7 @@ object CapabilityCatalog {
     val Order: List<String> = listOf(
         "readalong",
         "bookmarks",
+        "pronunciation_reports",
         "queue",
         "search",
         "follows",
@@ -41,6 +42,7 @@ object CapabilityCatalog {
     private val labels: Map<String, String> = mapOf(
         "readalong" to "Read along",
         "bookmarks" to "Bookmarks",
+        "pronunciation_reports" to "Report a mispronunciation",
         "queue" to "Up Next queue",
         "search" to "Search chapter text",
         "follows" to "Follow fictions",

@@ -42,6 +42,14 @@ data class ServerCapabilities(
     val readAlong: Boolean = false,
     val search: Boolean = false,
     val bookmarks: Boolean = false,
+    /**
+     * Capture "that word was pronounced wrong" at the chapter position where it was heard.
+     *
+     * The server gates this on both the list and write routes. That distinction matters here: the
+     * primary control is a one-tap media-session action, often used with the phone locked, so it
+     * must not be offered unless the observation can actually be stored.
+     */
+    val pronunciationReports: Boolean = false,
     val deltaSync: Boolean = false,
     val batchProgress: Boolean = false,
     val audioContentHash: Boolean = false,
@@ -200,6 +208,7 @@ data class ServerCapabilities(
                 readAlong = flags.flag("readalong"),
                 search = flags.flag("search"),
                 bookmarks = flags.flag("bookmarks"),
+                pronunciationReports = flags.flag("pronunciation_reports"),
                 deltaSync = flags.flag("delta_sync"),
                 batchProgress = flags.flag("batch_progress"),
                 audioContentHash = flags.flag("audio_content_hash"),
