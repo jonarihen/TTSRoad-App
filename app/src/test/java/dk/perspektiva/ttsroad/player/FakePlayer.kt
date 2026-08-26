@@ -56,11 +56,13 @@ class FakePlayer(
             fictionTitle: String? = null,
             artworkUri: String? = null,
             durationMs: Long = 60_000L,
+            extras: android.os.Bundle? = null,
         ): MediaItemData {
             val metadata = MediaMetadata.Builder()
                 .setTitle(title)
                 .setAlbumTitle(fictionTitle)
                 .apply { artworkUri?.let { setArtworkUri(android.net.Uri.parse(it)) } }
+                .apply { extras?.let { setExtras(it) } }
                 .build()
             return MediaItemData.Builder(mediaId)
                 .setMediaItem(

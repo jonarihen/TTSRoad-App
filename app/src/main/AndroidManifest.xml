@@ -78,5 +78,20 @@
             android:name=".download.TtsRoadDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- The continue-listening widget (#150). Exported because the launcher, another process
+             entirely, is what instantiates it; its actions go through the media session rather
+             than doing anything privileged themselves. -->
+        <receiver
+            android:name=".widget.NowPlayingWidgetReceiver"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/now_playing_widget_info" />
+        </receiver>
     </application>
 </manifest>

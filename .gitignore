@@ -13,3 +13,6 @@ externalNativeBuild/
 *.keystore
 
 .kotlin/
+
+# Claude Code agent worktrees (transient, auto-cleaned)
+.claude/worktrees/

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The continue-listening widget (#150).
+
+  Resizable both ways, defaulting to a 4x2 block. One cell of height holds the book, the chapter
+  and pause; the second buys the time remaining and the 30-second skips, which is the shape worth
+  offering by default. The composable builds both — see NowPlayingWidget's SizeMode.Responsive —
+  so a launcher squeezing this into a 3x1 strip gets the compact layout rather than a clipped one.
+
+  Session events redraw it immediately. The platform's minimum 30-minute period is the fallback
+  that eventually corrects a stale "playing" note if Android kills the service mid-tick.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/now_playing_widget_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="180dp"
+    android:minHeight="60dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />
