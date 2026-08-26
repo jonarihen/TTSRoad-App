@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The continue-listening widget (#150).
+
+  `resizeMode` both ways and a 2x1 minimum: the useful shape is a wide, short strip beside other
+  widgets, but the transport row needs a second line once the launcher's grid is narrow.
+-->
+<!-- Session events redraw immediately. The platform's minimum 30-minute period is the fallback
+     that eventually corrects a stale "playing" note if Android kills the service mid-tick. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/now_playing_widget_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="180dp"
+    android:minHeight="60dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="3"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />
