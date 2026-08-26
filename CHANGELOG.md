@@ -6,6 +6,17 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **Choose how a fiction's next chapters sound without reaching for the web console.** The server
+  already accepted a voice and synthesis rate on the fiction update route, but the phone had no way
+  to learn which voices existed. Admins now get a Narration card in the fiction editor: its picker
+  groups the server's full voice catalogue by locale, opens beside the current narrator, and can be
+  searched by voice, language, region or gender instead of presenting several hundred names as one
+  list. The rate field accepts the pipeline's signed-percent form and catches a typo before it turns
+  into a failed conversion hours later. The editor says the important consequence at the point of
+  the change: existing audio keeps its old voice and pace; only future conversions use the new
+  choice unless **Re-narrate every chapter** is run separately. Older servers and non-admin accounts
+  never see the controls, and the capability panel now reports the voice list as used.
+  ([#156](https://github.com/jonarihen/TTSRoad-App/issues/156))
 - **The chapter you are on, on the home screen.** Pressing pause meant unlocking the phone, finding
   TTSRoad, waiting for it to open and then finding the player — three steps and a few seconds for
   something the launcher can do in one tap, and the phone spends much of its TTSRoad time in a car

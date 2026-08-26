@@ -52,6 +52,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -195,6 +196,7 @@ import dk.perspektiva.ttsroad.data.listeningStateJson
 import dk.perspektiva.ttsroad.data.parseListeningStateJson
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.MaintenanceResponse
+import dk.perspektiva.ttsroad.data.MobileVoice
 import dk.perspektiva.ttsroad.data.PronunciationReport
 import dk.perspektiva.ttsroad.data.ReadAlongDocument
 import dk.perspektiva.ttsroad.data.ReadAlongHighlight
@@ -219,6 +221,7 @@ import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
 import dk.perspektiva.ttsroad.data.speedOptions
 import dk.perspektiva.ttsroad.data.TextSpan
+import dk.perspektiva.ttsroad.data.VoiceChoice
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.formatReaderFontScale
 import dk.perspektiva.ttsroad.data.formatReaderLineHeight
@@ -231,9 +234,16 @@ import dk.perspektiva.ttsroad.data.allChapterIds
 import dk.perspektiva.ttsroad.data.audiobookExportEncoderNote
 import dk.perspektiva.ttsroad.data.audiobookExportRows
 import dk.perspektiva.ttsroad.data.canReadServerLogs
+import dk.perspektiva.ttsroad.data.canPickVoice
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
+import dk.perspektiva.ttsroad.data.fictionNarrationPatch
+import dk.perspektiva.ttsroad.data.initiallyExpandedVoiceLocale
+import dk.perspektiva.ttsroad.data.voiceChangeConsequence
+import dk.perspektiva.ttsroad.data.voiceGroups
+import dk.perspektiva.ttsroad.data.voiceRateProblem
+import dk.perspektiva.ttsroad.data.withNarration
 import dk.perspektiva.ttsroad.download.ChapterDownload
 import dk.perspektiva.ttsroad.download.ChapterDownloadState
 import dk.perspektiva.ttsroad.download.DownloadBatchSize
@@ -784,6 +794,7 @@ private fun MainScaffold(
                     padding = padding,
                     fiction = screen.fiction,
                     repository = repository,
+                    isAdmin = session.isAdmin,
                     // Every accepted write lands here, cover uploads included, so the fiction
                     // screen behind the editor is already correct when the editor closes.
                     onFictionChanged = onFictionUpdated,
@@ -6621,6 +6632,7 @@ private fun FictionEditScreen(
     padding: PaddingValues,
     fiction: FictionSummary,
     repository: TtsRoadRepository,
+    isAdmin: Boolean,
     /** Called with the server's copy after every accepted write — an edit or a cover alike. */
     onFictionChanged: (FictionSummary) -> Unit,
     onDone: () -> Unit,
@@ -6628,12 +6640,20 @@ private fun FictionEditScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val cache = remember { ServiceLocator.libraryCache(context) }
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     // Keyed on the fiction rather than on the whole row: an accepted cover upload hands a new
     // FictionSummary in while the form is still open, and that must not throw away typing.
     var title by rememberSaveable(fiction.id) { mutableStateOf(fiction.title) }
     var author by rememberSaveable(fiction.id) { mutableStateOf(fiction.author.orEmpty()) }
     var description by rememberSaveable(fiction.id) { mutableStateOf(fiction.description.orEmpty()) }
     var tagText by rememberSaveable(fiction.id) { mutableStateOf(formatFictionTags(fiction.tags)) }
+    var voice by rememberSaveable(fiction.id) { mutableStateOf(fiction.voice.orEmpty()) }
+    var rate by rememberSaveable(fiction.id) { mutableStateOf(fiction.rate.orEmpty()) }
+    var voices by remember(fiction.id) { mutableStateOf<List<MobileVoice>?>(null) }
+    var isLoadingVoices by remember(fiction.id) { mutableStateOf(false) }
+    var voiceLoadError by remember(fiction.id) { mutableStateOf<String?>(null) }
+    var voiceLoadRequest by remember(fiction.id) { mutableStateOf(0) }
+    var showVoicePicker by rememberSaveable(fiction.id) { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -6646,13 +6666,50 @@ private fun FictionEditScreen(
         description = description,
         tags = tagText,
     )
-    val patch = remember(fiction, draft) { fictionMetadataPatch(fiction, draft) }
+    val metadataPatch = remember(fiction, draft) { fictionMetadataPatch(fiction, draft) }
+    val canEditNarration = canPickVoice(capabilities, isAdmin)
+    val narrationPatch = remember(fiction, voice, rate, canEditNarration) {
+        if (canEditNarration) fictionNarrationPatch(fiction, voice, rate) else null
+    }
+    val patch = remember(metadataPatch, narrationPatch) {
+        withNarration(metadataPatch, narrationPatch)
+    }
+    val changedRateProblem = remember(fiction.rate, rate, canEditNarration) {
+        val changed = canEditNarration && rate.trim() != fiction.rate.orEmpty().trim()
+        when {
+            !changed -> null
+            rate.isBlank() -> "A rate cannot be empty. Use +0% for the normal pace."
+            else -> voiceRateProblem(rate)
+        }
+    }
+    val narrationConsequence = remember(fiction, voice, rate, canEditNarration) {
+        if (canEditNarration) voiceChangeConsequence(fiction, voice, rate) else null
+    }
     val overridden = fiction.overriddenFields
     val isBusy = isSaving || isUploading
     // Whether this server understands hand-edited metadata at all. An older one accepts a
     // description, drops it and answers "ok", so offering the field would be offering a lie; the
     // title and author it has always been able to store are still editable.
     val editsEverything = fiction.supportsMetadataEditing
+
+    // The catalogue is only asked for when both halves of the UI gate are true. Listing is open to
+    // any signed-in user, but saving a voice is admin-only; fetching it for a control that cannot
+    // be used would turn an intentional omission into an unexplained network request.
+    LaunchedEffect(fiction.id, canEditNarration, voiceLoadRequest) {
+        if (!canEditNarration) {
+            voices = null
+            isLoadingVoices = false
+            voiceLoadError = null
+            showVoicePicker = false
+            return@LaunchedEffect
+        }
+        isLoadingVoices = true
+        voiceLoadError = null
+        runCatching { repository.voices() }
+            .onSuccess { voices = it.orEmpty() }
+            .onFailure { voiceLoadError = it.message ?: "Could not load the server's voices." }
+        isLoadingVoices = false
+    }
 
     /**
      * Adopt whatever the server answered with, and say so.
@@ -6870,11 +6927,71 @@ private fun FictionEditScreen(
             }
         }
 
+        if (canEditNarration) {
+            MetaText(text = "// Narration", color = AarisColor.Accent)
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MetaText(text = "Voice", color = AarisColor.Accent)
+                    OutlinedButton(
+                        onClick = { showVoicePicker = true },
+                        enabled = !isBusy && !isLoadingVoices && !voices.isNullOrEmpty(),
+                        shape = RectangleShape,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            when {
+                                isLoadingVoices -> "LOADING VOICES"
+                                voice.isBlank() -> "CHOOSE A VOICE"
+                                else -> voice
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    when {
+                        voiceLoadError != null -> {
+                            MetaText(text = voiceLoadError.orEmpty(), color = AarisColor.Danger)
+                            TextButton(
+                                onClick = { voiceLoadRequest += 1 },
+                                enabled = !isBusy && !isLoadingVoices,
+                            ) {
+                                Text("TRY AGAIN")
+                            }
+                        }
+
+                        !isLoadingVoices && voices?.isEmpty() == true -> MetaText(
+                            text = "This server published an empty voice list.",
+                            color = AarisColor.Warning,
+                        )
+                    }
+                    MetadataField(
+                        label = "Rate",
+                        value = rate,
+                        onValueChange = { rate = it },
+                        enabled = !isBusy,
+                        supporting = "The synthesis rate for chapters converted from now on, for " +
+                            "example +0%, +25% or -10%.",
+                    )
+                    changedRateProblem?.let {
+                        MetaText(text = it, color = AarisColor.Danger)
+                    }
+                    narrationConsequence?.let {
+                        MetaText(text = it, color = AarisColor.Warning)
+                    }
+                }
+            }
+        }
+
         Button(
             onClick = ::save,
             // Nothing changed means nothing to send: a PATCH carrying an untouched field would
             // freeze it against the source for no reason at all.
-            enabled = !isBusy && patch != null && draft.hasUsableTitle,
+            enabled = !isBusy && patch != null && draft.hasUsableTitle && changedRateProblem == null,
             shape = RectangleShape,
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -6943,6 +7060,161 @@ private fun FictionEditScreen(
             onDismiss = { confirmRevert = false },
         )
     }
+
+    if (showVoicePicker) {
+        voices?.takeIf { it.isNotEmpty() }?.let { loaded ->
+            VoicePickerSheet(
+                voices = loaded,
+                current = voice,
+                onSelect = {
+                    voice = it
+                    showVoicePicker = false
+                },
+                onDismiss = { showVoicePicker = false },
+            )
+        }
+    }
+}
+
+/**
+ * The server's several-hundred-row voice catalogue, grouped into something a phone can browse.
+ *
+ * Search opens every matching group because making someone guess which locale a name belongs to is
+ * exactly what search should remove. With no query, one group is open at a time and the fiction's
+ * current locale starts open, so the sheet stays compact without hiding the nearby alternatives.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VoicePickerSheet(
+    voices: List<MobileVoice>,
+    current: String?,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val groups = remember(voices, current, query) {
+        voiceGroups(voices = voices, current = current, query = query)
+    }
+    var expandedLocale by rememberSaveable(current) {
+        mutableStateOf(initiallyExpandedVoiceLocale(voiceGroups(voices, current), current))
+    }
+    LaunchedEffect(groups, query) {
+        if (query.isBlank() && groups.none { it.locale == expandedLocale }) {
+            expandedLocale = initiallyExpandedVoiceLocale(groups, current)
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            MetaText(text = "// Choose voice", color = AarisColor.Accent)
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("SEARCH NAME OR LOCALE") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (groups.isEmpty()) {
+                MetaText(
+                    text = "No voice matches that search.",
+                    color = AarisColor.Dim,
+                    modifier = Modifier.padding(vertical = 20.dp),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 560.dp)
+                        .selectableGroup(),
+                    contentPadding = PaddingValues(bottom = 24.dp),
+                ) {
+                    groups.forEach { group ->
+                        val isExpanded = query.isNotBlank() || expandedLocale == group.locale
+                        item(key = "voice-locale-${group.locale}") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .sizeIn(minHeight = 48.dp)
+                                    .clickable(enabled = query.isBlank()) {
+                                        expandedLocale = group.locale.takeUnless {
+                                            it == expandedLocale
+                                        }
+                                    }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = group.label, style = MaterialTheme.typography.titleMedium)
+                                    MetaText(
+                                        text = "${group.locale}  ·  ${group.voices.size} voices",
+                                        color = AarisColor.Dim,
+                                    )
+                                }
+                                if (query.isBlank()) {
+                                    Icon(
+                                        imageVector = if (isExpanded) {
+                                            Icons.Default.KeyboardArrowUp
+                                        } else {
+                                            Icons.Default.KeyboardArrowDown
+                                        },
+                                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                                        tint = AarisColor.Muted,
+                                    )
+                                }
+                            }
+                            HorizontalDivider(color = AarisColor.Line)
+                        }
+                        if (isExpanded) {
+                            itemsIndexed(
+                                items = group.voices,
+                                key = { _, choice -> "voice-${choice.name}" },
+                            ) { _, choice ->
+                                VoiceChoiceRow(
+                                    choice = choice,
+                                    selected = choice.name == current,
+                                    onSelect = { onSelect(choice.name) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceChoiceRow(
+    choice: VoiceChoice,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .sizeIn(minHeight = 56.dp)
+            .selectable(selected = selected, onClick = onSelect, role = Role.RadioButton)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = choice.shortName, color = if (selected) AarisColor.Accent else AarisColor.Ink)
+            MetaText(text = choice.detail, color = AarisColor.Dim)
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = "Selected",
+                tint = AarisColor.Accent,
+            )
+        }
+    }
+    HorizontalDivider(color = AarisColor.LineSoft)
 }
 
 /** What a `metadata_overrides` name is called on screen. */

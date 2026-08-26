@@ -237,6 +237,31 @@ class FictionManagementRepositoryTest {
     }
 
     @Test
+    fun `editing a narrator sends the voice and rate the conversion pipeline expects`() = runTest {
+        val repository = repository()
+        server.enqueue(
+            json(
+                """{"status": "ok", "fiction": {"id": 7, "title": "Ashfall",
+                     "voice": "en-US-BrianNeural", "rate": "+15%"}}""",
+            ),
+        )
+
+        val result = repository.updateFiction(
+            7,
+            FictionUpdateRequest(voice = "en-US-BrianNeural", rate = "+15%"),
+        )
+
+        server.takeRequest()
+        val request = server.takeRequest()
+        assertEquals(
+            """{"voice":"en-US-BrianNeural","rate":"+15%"}""",
+            request.body.readUtf8(),
+        )
+        assertEquals("en-US-BrianNeural", (result as FictionEditResult.Saved).fiction?.voice)
+        assertEquals("+15%", result.fiction?.rate)
+    }
+
+    @Test
     fun `an emptied field is sent as an empty string rather than dropped`() = runTest {
         // "" clears the value server-side; omitting the key leaves it alone. The difference is the
         // difference between clearing an author and failing to.

@@ -162,7 +162,23 @@ data class ServerCapabilities(
     /** A server-push event stream. Browser-only by design; listed so the panel can say so. */
     val liveEvents: Boolean = false,
 
-    /** Per-fiction voice selection and preview exist server-side. No mobile client yet (#111). */
+    /**
+     * The narrators this server can convert with, over `/api/mobile/voices` (#156).
+     *
+     * Listing them is open to any signed-in account; *applying* one is admin-gated by the `PATCH`
+     * that stores it. So this flag is only half a gate — see [SessionState.isAdmin] for the other
+     * half, and `canPickVoice` for the pair. A picker offered to a regular account is a control
+     * whose save is a 403, which is a worse answer than not offering it.
+     */
+    val voiceCatalogue: Boolean = false,
+
+    /**
+     * Server-side voice previews exist. Deliberately not mirrored here.
+     *
+     * The route is admin-only and a cache miss spends an outbound synthesis request to Microsoft,
+     * so hearing a voice before choosing it stays on the web console. Listed so the capability
+     * panel can say that in words rather than leaving a raw flag name on screen (#111, #156).
+     */
     val voicePreview: Boolean = false,
 
     /**
@@ -249,6 +265,7 @@ data class ServerCapabilities(
                 offlineDownloads = flags.flag("offline_downloads"),
                 signedAudioUrls = flags.flag("signed_audio_urls"),
                 liveEvents = flags.flag("live_events"),
+                voiceCatalogue = flags.flag("voice_catalogue"),
                 voicePreview = flags.flag("voice_preview"),
                 logs = flags.flag("logs"),
                 storage = flags.flag("storage"),

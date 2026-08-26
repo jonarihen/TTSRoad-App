@@ -1073,6 +1073,23 @@ class TtsRoadRepository(
     }
 
     /**
+     * Every narrator this server can convert with, or null on a server without the route (#156).
+     *
+     * Null and an empty list are different answers and the picker draws them differently: null is
+     * "this server does not publish a catalogue", an empty list is "it published one and it is
+     * empty", which on an install whose edge-tts refresh has never run is a real state.
+     *
+     * Gated on the capability here and on `is_admin` at the call site — the same two-part gate the
+     * other admin surfaces use, and here for an unusual reason. *Listing* voices is open to any
+     * account; it is storing the choice that a non-admin gets a 403 for. So the gate is not about
+     * this request at all, it is about the `PATCH` the picker exists to make.
+     */
+    suspend fun voices(): List<MobileVoice>? {
+        if (!_currentCapabilities.value.voiceCatalogue) return null
+        return withAuthorizedApi { it.voices() }.voices
+    }
+
+    /**
      * This account's positions and marks, as the server's own document.
      *
      * Returned as the opaque map the server sent. Nothing here reads or rewrites it: a document
