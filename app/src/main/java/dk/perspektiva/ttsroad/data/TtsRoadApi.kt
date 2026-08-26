@@ -353,6 +353,20 @@ interface TtsRoadApi {
     @GET("api/mobile/storage")
     suspend fun serverStorage(): ServerStorageResponse
 
+    /**
+     * Every narrator this server can convert with (#156).
+     *
+     * Open to any signed-in account, unlike almost everything else in this region of the API — it
+     * is a catalogue, not a setting. Storing a choice is the admin-gated half, and it goes out on
+     * [updateFiction] as `voice`, which has always accepted it.
+     *
+     * There is deliberately no preview route here. `POST /api/voices/{voice}/preview` exists, is
+     * admin-only, and spends an outbound synthesis request on a cache miss; hearing a voice before
+     * picking it stays on the web console.
+     */
+    @GET("api/mobile/voices")
+    suspend fun voices(): VoicesResponse
+
     /** Every position and chosen mark on this account, as a portable document (#116). */
     @GET("api/mobile/listening-state")
     suspend fun exportListeningState(): ListeningStateExport

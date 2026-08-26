@@ -71,6 +71,8 @@ class CapabilityCatalogTest {
         assertNull(CapabilityCatalog.note("delta_sync", supported = true))
         // Listing exports shipped in #113, so the "not used yet" qualifier came off with it.
         assertNull(CapabilityCatalog.note("audiobook_export", supported = true))
+        // The fiction editor now consumes the catalogue for its locale-grouped voice picker.
+        assertNull(CapabilityCatalog.note("voice_catalogue", supported = true))
     }
 
     @Test
@@ -151,7 +153,7 @@ class CapabilityCatalogTest {
     fun `every not-used-by-this-app note belongs to a known flag`() {
         val noted = CapabilityCatalog.Order.filter { CapabilityCatalog.note(it, supported = true) != null }
 
-        assertTrue(noted.containsAll(listOf("offline_downloads", "voice_catalogue", "voice_preview")))
+        assertTrue(noted.containsAll(listOf("offline_downloads", "voice_preview")))
     }
 
 }

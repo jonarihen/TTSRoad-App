@@ -183,12 +183,13 @@ data class FictionSummary(
     /**
      * The edge-tts narrator this fiction is converted with, as the server spells it.
      *
-     * Read-only here: changing it is an admin workflow with no mobile surface yet (#111). Showing
-     * it is worth doing on its own — with several books in flight there is otherwise no way to tell
-     * from a phone which voice you are listening to, or that two books share one.
+     * The voice the server will use for the next conversion. It also describes the existing audio
+     * until somebody changes it, which the editor can now do (#111 showed it, #156 changed it);
+     * after that, this field cannot recover which earlier chapters used which old voice. Nothing
+     * already converted is re-narrated by the change.
      */
     val voice: String? = null,
-    /** The synthesis rate baked into the MP3, e.g. `+0%`. Read-only, as [voice]. */
+    /** The synthesis rate for the next conversion, e.g. `+0%`. Existing MP3s may predate it. */
     val rate: String? = null,
     /**
      * Whether polling and conversion run for this fiction at all.
@@ -1176,6 +1177,11 @@ data class FictionDeleteResponse(
  *
  * [clearOverrides] is the undo: it removes names from the fiction's `metadata_overrides` so the
  * source may write them again. It does not restore the old text; only the next poll can do that.
+ *
+ * [voice] and [rate] are the exception to the paragraph above: the server sets them without marking
+ * anything hand-edited, because no poll has ever overwritten them — they are a production setting
+ * rather than metadata the source owns. What they *do* affect is the future, not the past. See
+ * `fictionNarrationPatch`.
  */
 data class FictionUpdateRequest(
     val title: String? = null,
@@ -1183,6 +1189,40 @@ data class FictionUpdateRequest(
     val description: String? = null,
     val tags: List<String>? = null,
     @param:Json(name = "clear_overrides") val clearOverrides: List<String>? = null,
+    /** An edge-tts voice in its short form, `en-US-BrianNeural`, as `GET /api/mobile/voices` spells it. */
+    val voice: String? = null,
+    /** The synthesis rate, `+0%` / `-10%`. Stored verbatim — see `normaliseVoiceRate`. */
+    val rate: String? = null,
+)
+
+/**
+ * `GET /api/mobile/voices` — every narrator this server can convert with (#156).
+ *
+ * Open to any signed-in account, unlike the `PATCH` that stores a choice. The list is the edge-tts
+ * catalogue as the server holds it: several hundred entries across a hundred-odd locales, which is
+ * why nothing here is drawn as a flat list — see `voiceGroups`.
+ */
+data class VoicesResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val voices: List<MobileVoice> = emptyList(),
+)
+
+/**
+ * One narrator.
+ *
+ * [name] is the short form — `en-US-BrianNeural` — which is both what a fiction stores and what
+ * [FictionUpdateRequest.voice] expects; nothing here ever sends a display name. It is the one field
+ * with no meaningful default, so a row that arrives without one is dropped rather than offered as a
+ * choice that cannot be applied.
+ *
+ * [locale] and [gender] are nullable on purpose. The server sends both today, and they are used for
+ * grouping and for one line of description — neither is worth failing a parse over, and a catalogue
+ * that would not load at all is a worse outcome than a voice filed under "Other".
+ */
+data class MobileVoice(
+    val name: String = "",
+    val locale: String? = null,
+    val gender: String? = null,
 )
 
 /**
