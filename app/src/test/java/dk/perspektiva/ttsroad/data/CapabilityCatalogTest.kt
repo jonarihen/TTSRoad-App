@@ -65,6 +65,9 @@ class CapabilityCatalogTest {
         assertNull(CapabilityCatalog.note("readalong", supported = true))
         assertNull(CapabilityCatalog.note("bookmarks", supported = true))
         assertNull(CapabilityCatalog.note("queue", supported = true))
+        // Used since #114: the panel said "not used yet" about a button that is now on the browse
+        // screen, which is worse than saying nothing.
+        assertNull(CapabilityCatalog.note("epub_upload", supported = true))
     }
 
     @Test

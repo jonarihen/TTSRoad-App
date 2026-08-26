@@ -25,6 +25,16 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
 
 /**
+ * How long a request marked [SlowUploadHeader] is given to write its body and hear an answer.
+ *
+ * Sized for the worst realistic case rather than the common one: a hundred-megabyte illustrated
+ * book pushed up a mobile connection, which the server then parses and splits into chapters before
+ * it replies. Five minutes is generous for that and still short enough that a genuinely dead
+ * connection is reported rather than left spinning.
+ */
+private const val SlowUploadTimeoutMinutes = 5
+
+/**
  * Batch size to use when the server advertises `batch_progress` but names no limit.
  *
  * Deliberately well under the 500 the backend actually enforces: guessing high costs a whole flush
@@ -101,7 +111,19 @@ class TtsRoadRepository(
             } else {
                 authHeader?.let { builder.header("Authorization", it) }
             }
-            chain.proceed(builder.build())
+            // A file upload borrows a longer clock from the same client rather than getting a
+            // client of its own: sharing the connection pool is the whole reason there is one
+            // client, and the timeouts are the only thing an EPUB actually needs changed.
+            val slow = request.header(SlowUploadHeader) != null
+            if (slow) builder.removeHeader(SlowUploadHeader)
+            val proceed = if (slow) {
+                chain
+                    .withWriteTimeout(SlowUploadTimeoutMinutes, TimeUnit.MINUTES)
+                    .withReadTimeout(SlowUploadTimeoutMinutes, TimeUnit.MINUTES)
+            } else {
+                chain
+            }
+            proceed.proceed(builder.build())
         }
         .build()
 
@@ -337,6 +359,50 @@ class TtsRoadRepository(
                 detailMessage(e.response()?.errorBody()?.string())
                     ?: "The server would not add that fiction.",
             )
+        }
+    }
+
+    /**
+     * Import a book that is already on the phone.
+     *
+     * The interesting half is what happens *before* the request. `/api/mobile/capabilities`
+     * publishes `max_epub_bytes` so that a client can refuse an oversized file itself, and this is
+     * where that promise is kept: a book past the ceiling never reaches the wire, because the
+     * alternative is spending a hundred megabytes of someone's data allowance to be told 413.
+     * [epubRejectionReason] applies the server's own two rules — the name has to end in `.epub`,
+     * the file has to fit — against the limit this server actually advertised.
+     *
+     * The bytes are streamed off the content provider rather than read into memory first; see
+     * [PickedEpub.Ready]. Nothing here holds the book.
+     *
+     * Gated on `epub_upload`, not on `fiction_management`: the server treats "accepts files" as a
+     * separate thing to advertise, and a 404 here means this server is one that does not.
+     */
+    suspend fun uploadEpub(book: PickedEpub.Ready): FictionAddResult {
+        val capabilities = _currentCapabilities.value
+        if (!capabilities.epubUpload) return FictionAddResult.Unsupported
+        epubRejectionReason(book.filename, book.sizeBytes, capabilities.effectiveMaxEpubBytes)
+            ?.let { return FictionAddResult.Refused(it) }
+        val part = MultipartBody.Part.createFormData(
+            // The server looks for a part with exactly this name; anything else is a 422.
+            "file",
+            book.filename,
+            book.requestBody(),
+        )
+        return try {
+            FictionAddResult.Added(withAuthorizedApi { it.uploadEpub(part) }.fiction)
+        } catch (e: HttpException) {
+            when (e.code()) {
+                401 -> throw e
+                404 -> FictionAddResult.Unsupported
+                else -> FictionAddResult.Refused(
+                    // 409 is the one worth reading: "This EPUB has already been uploaded" is the
+                    // server recognising the file by content hash, which is a useful thing to be
+                    // told and not a failure to retry.
+                    detailMessage(e.response()?.errorBody()?.string())
+                        ?: "The server would not accept that book.",
+                )
+            }
         }
     }
 

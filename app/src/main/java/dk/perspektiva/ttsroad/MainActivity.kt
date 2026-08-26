@@ -155,7 +155,9 @@ import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.Bookmark
 import dk.perspektiva.ttsroad.data.CapabilityCatalog
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.DefaultMaxEpubBytes
 import dk.perspektiva.ttsroad.data.DeviceSession
+import dk.perspektiva.ttsroad.data.EpubPickerMimeTypes
 import dk.perspektiva.ttsroad.data.FictionAddResult
 import dk.perspektiva.ttsroad.data.FictionEditResult
 import dk.perspektiva.ttsroad.data.FictionMetadataDraft
@@ -168,6 +170,7 @@ import dk.perspektiva.ttsroad.data.MetadataFieldDescription
 import dk.perspektiva.ttsroad.data.MetadataFieldTags
 import dk.perspektiva.ttsroad.data.MetadataFieldTitle
 import dk.perspektiva.ttsroad.data.PickedCover
+import dk.perspektiva.ttsroad.data.PickedEpub
 import dk.perspektiva.ttsroad.data.QueueAdvanceResponse
 import dk.perspektiva.ttsroad.data.QueueItem
 import dk.perspektiva.ttsroad.data.QueueResponse
@@ -177,6 +180,8 @@ import dk.perspektiva.ttsroad.data.sanitizeQueueWhenEmpty
 import dk.perspektiva.ttsroad.data.fictionMetadataPatch
 import dk.perspektiva.ttsroad.data.formatFictionTags
 import dk.perspektiva.ttsroad.data.readPickedCover
+import dk.perspektiva.ttsroad.data.readPickedEpub
+import dk.perspektiva.ttsroad.data.megabyteLabel
 import dk.perspektiva.ttsroad.data.formatExpiresIn
 import dk.perspektiva.ttsroad.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.data.FeedsResponse
@@ -5175,10 +5180,17 @@ private fun FictionsScreen(
                     // Adding lives on the browse screen rather than the shelf because this is the
                     // screen that already answers "what is on this server", and a fiction has to
                     // exist here before it can be followed onto a shelf.
-                    if (capabilities.fictionManagement && isAdmin) {
+                    // Two separate server capabilities, deliberately: a deployment may take JSON
+                    // fiction CRUD without accepting file uploads, or the reverse. Either one is
+                    // enough to draw the section — it just holds fewer controls (#114).
+                    if (isAdmin && (capabilities.fictionManagement || capabilities.epubUpload)) {
                         fullWidthItem(key = "add-fiction") {
                             AddFictionSection(
+                                canAddByUrl = capabilities.fictionManagement,
+                                canUploadEpub = capabilities.epubUpload,
+                                maxEpubBytes = capabilities.effectiveMaxEpubBytes,
                                 onAdd = { url -> repository.addFiction(url) },
+                                onUploadEpub = { book -> repository.uploadEpub(book) },
                                 onAdded = refresh,
                             )
                         }
@@ -5254,27 +5266,101 @@ private fun FictionsScreen(
 }
 
 /**
- * Paste a fiction URL and track it. Admin-only, and hidden entirely on a server without
- * `fiction_management`.
+ * The two ways a fiction gets into the library from a phone: paste a URL, or hand over a book that
+ * is already on the device. Admin-only, and each half is hidden unless the server advertises it.
  *
- * A single field is the whole interaction on purpose. The URL is usually already in the clipboard
- * from browsing on the phone, and everything else the create endpoint accepts — voice, rate, the
- * sync window — has a server-side default and is a poor thing to be choosing on a phone.
+ * A single field is the whole interaction for the URL path on purpose. The URL is usually already in
+ * the clipboard from browsing on the phone, and everything else the create endpoint accepts — voice,
+ * rate, the sync window — has a server-side default and is a poor thing to be choosing on a phone.
+ * The upload takes the same view: no voice picker, just the file.
  *
  * The server's refusal is shown verbatim rather than replaced with a generic failure: it is the half
  * that knows which sites have adapters, and "Fiction already tracked" is a different instruction to
- * the user than "that is not a URL I can read".
+ * the user than "that is not a URL I can read". The same goes for an EPUB the server recognises by
+ * content hash — "already uploaded" is an answer, not an error to retry.
+ *
+ * Internal rather than private so the capability gating can be tested: which controls a server can
+ * back is the whole behaviour here, and it is invisible from the outside when it is wrong.
  */
 @Composable
-private fun AddFictionSection(
-    onAdd: suspend (String) -> FictionAddResult,
-    onAdded: () -> Unit,
+internal fun AddFictionSection(
+    canAddByUrl: Boolean = true,
+    canUploadEpub: Boolean = false,
+    /** This server's advertised ceiling, so an oversized book is refused before it is uploaded. */
+    maxEpubBytes: Long = DefaultMaxEpubBytes,
+    onAdd: suspend (String) -> FictionAddResult = { FictionAddResult.Unsupported },
+    onUploadEpub: suspend (PickedEpub.Ready) -> FictionAddResult = { FictionAddResult.Unsupported },
+    onAdded: () -> Unit = {},
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var url by rememberSaveable { mutableStateOf("") }
     var isAdding by remember { mutableStateOf(false) }
+    var isUploading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var isError by remember { mutableStateOf(false) }
+
+    /** What to say about a result, and whether the list behind this needs to be refetched. */
+    fun adopt(result: FictionAddResult, clearsUrl: Boolean) {
+        when (result) {
+            is FictionAddResult.Added -> {
+                isError = false
+                message = result.fiction?.title?.let { "Tracking \"$it\"." } ?: "Fiction added."
+                // Cleared only on success, so a rejected URL stays in the field to be corrected
+                // rather than having to be pasted again.
+                if (clearsUrl) url = ""
+                // The new fiction is not in the loaded list, and conversion has only just been
+                // queued, so the list has to come from the server again.
+                onAdded()
+            }
+
+            is FictionAddResult.Refused -> {
+                isError = true
+                message = result.message
+            }
+
+            FictionAddResult.Unsupported -> {
+                isError = true
+                message = "This server cannot add fictions."
+            }
+        }
+    }
+
+    /**
+     * Pick a book off the device and send it.
+     *
+     * `OpenDocument` rather than the visual-media picker the cover upload uses: an EPUB is a
+     * document, and it is as likely to be in Downloads or a cloud drive as anywhere the gallery
+     * knows about. The URI it hands back is readable for as long as this screen lives, which is
+     * longer than the upload takes.
+     */
+    val pickEpub = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        // A cancelled picker is not an event: no message, no state change.
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            isUploading = true
+            message = null
+            // Off the main thread: the metadata query talks to a content provider that may be
+            // backed by anything, including a network.
+            val picked = withContext(Dispatchers.IO) {
+                readPickedEpub(context.contentResolver, uri, maxEpubBytes)
+            }
+            when (picked) {
+                is PickedEpub.Rejected -> {
+                    isError = true
+                    message = picked.message
+                }
+
+                is PickedEpub.Ready -> {
+                    val result = runCatching { onUploadEpub(picked) }.getOrElse { failure ->
+                        FictionAddResult.Refused(failure.message ?: "Could not upload that book.")
+                    }
+                    adopt(result, clearsUrl = false)
+                }
+            }
+            isUploading = false
+        }
+    }
 
     Column(
         // No horizontal gutter of its own: this is a full-width row of the browse grid now, and
@@ -5284,61 +5370,56 @@ private fun AddFictionSection(
             .padding(top = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        OutlinedTextField(
-            value = url,
-            onValueChange = {
-                url = it
-                message = null
-            },
-            label = { Text("ADD A FICTION BY URL OR ID") },
-            placeholder = { Text("Royal Road URL or ID") },
-            singleLine = true,
-            enabled = !isAdding,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(
-            onClick = {
-                scope.launch {
-                    isAdding = true
+        val isBusy = isAdding || isUploading
+        if (canAddByUrl) {
+            OutlinedTextField(
+                value = url,
+                onValueChange = {
+                    url = it
                     message = null
-                    val result = runCatching { onAdd(url) }.getOrElse { failure ->
-                        isError = true
-                        message = failure.message ?: "Could not add this fiction."
+                },
+                label = { Text("ADD A FICTION BY URL OR ID") },
+                placeholder = { Text("Royal Road URL or ID") },
+                singleLine = true,
+                enabled = !isBusy,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = {
+                    scope.launch {
+                        isAdding = true
+                        message = null
+                        val result = runCatching { onAdd(url) }.getOrElse { failure ->
+                            FictionAddResult.Refused(
+                                failure.message ?: "Could not add this fiction.",
+                            )
+                        }
+                        adopt(result, clearsUrl = true)
                         isAdding = false
-                        return@launch
                     }
-                    when (result) {
-                        is FictionAddResult.Added -> {
-                            isError = false
-                            message = result.fiction?.title?.let { "Tracking \"$it\"." }
-                                ?: "Fiction added."
-                            // Cleared only on success, so a rejected URL stays in the field to be
-                            // corrected rather than having to be pasted again.
-                            url = ""
-                            // The new fiction is not in the loaded list, and conversion has only
-                            // just been queued, so the list has to come from the server again.
-                            onAdded()
-                        }
-
-                        is FictionAddResult.Refused -> {
-                            isError = true
-                            message = result.message
-                        }
-
-                        FictionAddResult.Unsupported -> {
-                            isError = true
-                            message = "This server cannot add fictions."
-                        }
-                    }
-                    isAdding = false
-                }
-            },
-            enabled = !isAdding && url.isNotBlank(),
-            shape = RectangleShape,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (isAdding) "ADDING" else "ADD FICTION")
+                },
+                enabled = !isBusy && url.isNotBlank(),
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isAdding) "ADDING" else "ADD FICTION")
+            }
+        }
+        if (canUploadEpub) {
+            OutlinedButton(
+                onClick = { pickEpub.launch(EpubPickerMimeTypes) },
+                enabled = !isBusy,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isUploading) "UPLOADING" else "UPLOAD AN EPUB")
+            }
+            MetaText(
+                text = "A book already on this phone. Chapters are detected automatically, and " +
+                    "narration starts on the server. Up to ${megabyteLabel(maxEpubBytes)}.",
+                color = AarisColor.Dim,
+            )
         }
         message?.let {
             MetaText(text = it, color = if (isError) AarisColor.Danger else AarisColor.Muted)

@@ -6,6 +6,17 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **A book that is already on the phone can go straight into the library.** An EPUB bought in a shop
+  app or mailed to yourself needed a laptop and a browser to get into TTSRoad — the server has
+  accepted uploads on the mobile surface all along and nothing here used them. Admin accounts now
+  get **UPLOAD AN EPUB** beside the add-by-URL field on the browse screen: pick the file and the
+  server splits its chapters and starts narrating, exactly as the web console does it. A file that
+  is not an `.epub`, or one past the size limit the server advertises, is refused on the phone
+  rather than after a hundred megabytes have been pushed up a mobile connection, and the book is
+  streamed off the device instead of being read into memory first — a large illustrated one uploads
+  without the app ever holding it. A server that recognises the book from a previous upload says so
+  in its own words, which is an answer rather than an error.
+  ([#114](https://github.com/jonarihen/TTSRoad-App/issues/114))
 - **Podcast feed links, from the phone.** Serving a private podcast feed is what TTSRoad is for, and
   the phone is where a podcast app lives — yet the only way to get a tokenised feed URL onto the
   phone was to mail it to yourself from a laptop. Settings now shows the combined feed and the OPML
