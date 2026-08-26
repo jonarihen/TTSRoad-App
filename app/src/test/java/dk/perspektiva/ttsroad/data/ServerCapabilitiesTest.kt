@@ -42,6 +42,29 @@ class ServerCapabilitiesTest {
         assertEquals(200, capabilities.maxChaptersPerPage)
     }
 
+    /**
+     * `listening_stats` was advertised by the server for a release before this client parsed it, so
+     * the Stats screen had a capability to gate on and no field to read it from (#117).
+     */
+    @Test
+    fun `the listening statistics flag is read, and absent means no`() {
+        val advertised = ServerCapabilities.from(
+            CapabilitiesResponse(capabilities = mapOf("listening_stats" to true)),
+        )
+        val silent = ServerCapabilities.from(CapabilitiesResponse(capabilities = emptyMap()))
+        // Only a literal JSON true enables a feature; a string is a server saying something this
+        // client cannot read, and guessing yes would draw a screen it cannot fill.
+        val vague = ServerCapabilities.from(
+            CapabilitiesResponse(capabilities = mapOf("listening_stats" to "yes")),
+        )
+
+        assertTrue(advertised.listeningStats)
+        assertTrue(advertised.advertised["listening_stats"] == true)
+        assertFalse(silent.listeningStats)
+        assertFalse(vague.listeningStats)
+        assertFalse(ServerCapabilities.Baseline.listeningStats)
+    }
+
     @Test
     fun `the server's own base url is carried through, and its absence is null not blank`() {
         // The download cache keys on this to tell one instance from another, and treats null as

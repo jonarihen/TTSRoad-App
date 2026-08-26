@@ -86,6 +86,7 @@ class AppNavigationTest {
         assertEquals("Fiction:1", AppScreen.Fiction(fiction(1)).saveKey)
         assertEquals("Fiction:2", AppScreen.Fiction(fiction(2)).saveKey)
         assertEquals("Devices", AppScreen.Devices.saveKey)
+        assertEquals("Stats", AppScreen.Stats.saveKey)
     }
 
     /** Devices hangs off Settings, so backing out of it lands back on Settings, not the library. */

@@ -3,6 +3,8 @@ package dk.perspektiva.ttsroad.data
 import com.squareup.moshi.Json
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 data class LoginRequest(
     val username: String,
@@ -1127,3 +1129,157 @@ data class FictionUpdateRequest(
     val tags: List<String>? = null,
     @param:Json(name = "clear_overrides") val clearOverrides: List<String>? = null,
 )
+
+/**
+ * `GET /api/mobile/stats` — this account's listening totals, as JSON (#117).
+ *
+ * The web has rendered these numbers at `/stats` since long before the app existed, which was
+ * backwards: the phone and the car write nearly every playback row they are computed from and were
+ * the only clients that could not show them. `jonarihen/TTSRoad#165` closed that.
+ *
+ * `weeks` sizes the activity grid and nothing else. Every other figure is lifetime, deliberately —
+ * one `last_listened_at` per chapter means a windowed total would count March's hours against this
+ * month.
+ */
+data class ListeningStatsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    /** When the server computed this. Not the last time anything was listened to. */
+    @param:Json(name = "generated_at") val generatedAt: String? = null,
+    /** Echoed back, and authoritative: the server clamps out-of-range values rather than guessing. */
+    val weeks: Int = 0,
+    val stats: ListeningStats = ListeningStats(),
+)
+
+/**
+ * The figures themselves, exactly as the web `/stats` page is handed them.
+ *
+ * **Render the labels; do not re-derive them.** `time_label`, `words_label`, `daily_average_label`
+ * and every string in [comparisons] and [milestones] arrive display-ready on purpose. The endpoint
+ * says why: re-implementing "3.2× the length of the Lord of the Rings audiobooks" in Kotlin would
+ * make this client and the browser drift into disagreeing about the same account. The raw numbers
+ * sit beside them for anything better formatted here — a progress bar, a sort.
+ */
+data class ListeningStats(
+    /**
+     * Whether this account has listened to anything at all.
+     *
+     * Its own field rather than an inference from [seconds]: a fresh account and a server that
+     * cannot answer are different states and deserve different words.
+     */
+    @param:Json(name = "has_data") val hasData: Boolean = false,
+    val seconds: Double = 0.0,
+    @param:Json(name = "time_label") val timeLabel: String = "",
+    val hours: Double = 0.0,
+    @param:Json(name = "chapters_finished") val chaptersFinished: Int = 0,
+    @param:Json(name = "chapters_finished_label") val chaptersFinishedLabel: String = "",
+    @param:Json(name = "chapters_in_progress") val chaptersInProgress: Int = 0,
+    @param:Json(name = "books_started") val booksStarted: Int = 0,
+    @param:Json(name = "books_finished") val booksFinished: Int = 0,
+    val words: Long = 0L,
+    @param:Json(name = "words_label") val wordsLabel: String = "",
+    @param:Json(name = "words_exact_label") val wordsExactLabel: String = "",
+    val pages: Long = 0L,
+    @param:Json(name = "pages_label") val pagesLabel: String = "",
+    @param:Json(name = "words_per_page") val wordsPerPage: Int = 0,
+    /**
+     * Chapters heard whose word count has not been backfilled yet.
+     *
+     * Non-zero means [words] and [pages] are a floor rather than a total, and the screen has to say
+     * so — the web page does.
+     */
+    @param:Json(name = "uncounted_chapters") val uncountedChapters: Int = 0,
+    @param:Json(name = "current_streak") val currentStreak: Int = 0,
+    @param:Json(name = "longest_streak") val longestStreak: Int = 0,
+    /** ISO-8601 with a `Z`, or null on an account that has finished nothing. */
+    @param:Json(name = "first_listened_at") val firstListenedAt: String? = null,
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
+    /** Averaged over every day since the first finish, quiet days included. */
+    @param:Json(name = "daily_average_label") val dailyAverageLabel: String = "",
+    @param:Json(name = "busiest_day") val busiestDay: BusiestListeningDay? = null,
+    /** Rows of seven cells, Monday first, oldest week first. */
+    @param:Json(name = "activity_weeks") val activityWeeks: List<List<ActivityDay>> = emptyList(),
+    @param:Json(name = "activity_days") val activityDays: Int = 0,
+    @param:Json(name = "top_fictions") val topFictions: List<TopListenedFiction> = emptyList(),
+    val comparisons: List<ListeningComparison> = emptyList(),
+    val milestones: List<ListeningMilestone> = emptyList(),
+)
+
+/** The single heaviest day on record, or null when nothing has been finished. */
+data class BusiestListeningDay(
+    /** `YYYY-MM-DD`. */
+    val date: String = "",
+    @param:Json(name = "time_label") val timeLabel: String = "",
+    val chapters: Int = 0,
+)
+
+/**
+ * One cell of the activity grid.
+ *
+ * Empty days are cells too — a calendar with the quiet days removed is a bar chart pretending to be
+ * a calendar. [level] is 0–4, scaled against the busiest day *inside the window*, so an hour a week
+ * and six hours a day both produce a readable strip. There is no per-day seconds figure: [label] is
+ * where the server puts the day in words, and it is what a screen reader should get.
+ */
+data class ActivityDay(
+    val date: String = "",
+    /** True for the days after today in the final week. Draw them as absent, not as quiet. */
+    val future: Boolean = false,
+    val chapters: Int = 0,
+    val level: Int = 0,
+    val label: String = "",
+)
+
+/** One book's share of the lifetime total, longest first. */
+data class TopListenedFiction(
+    val id: Int = 0,
+    val title: String = "",
+    val author: String = "",
+    val seconds: Double = 0.0,
+    @param:Json(name = "time_label") val timeLabel: String = "",
+    @param:Json(name = "chapters_finished") val chaptersFinished: Int = 0,
+    @param:Json(name = "total_chapters") val totalChapters: Int = 0,
+    /** 0–100. Zero when the server does not know how many chapters the fiction has. */
+    val percent: Int = 0,
+    val complete: Boolean = false,
+)
+
+/** "3.2× the length of the Lord of the Rings audiobooks", pre-formatted server-side. */
+data class ListeningComparison(
+    /** The multiplier, already rendered — "3.2×". */
+    val value: String = "",
+    val label: String = "",
+    val detail: String = "",
+)
+
+/**
+ * A badge, earned or still ahead.
+ *
+ * Thresholds are fixed rather than relative to the library, so a badge does not move when an admin
+ * adds a fiction. [icon] names a Lucide glyph the web uses; this client has no such set and shows
+ * [group] instead.
+ */
+data class ListeningMilestone(
+    val icon: String = "",
+    val group: String = "",
+    val title: String = "",
+    val earned: Boolean = false,
+    /** 0–100 toward the next one; 100 on an earned badge. */
+    val progress: Int = 0,
+    val detail: String = "",
+)
+
+/**
+ * [BusiestListeningDay.date] as epoch millis at the start of that day, or null if it will not parse.
+ *
+ * The server sends a bare `YYYY-MM-DD` here rather than a timestamp, so [Instant.parse] cannot read
+ * it and the screen needs a moment to hand to the platform date formatter. Resolved in [zone]
+ * because a calendar date is a local thing: the day the server calls the busiest is the day the
+ * listener lived through, not a UTC instant.
+ *
+ * Null rather than a throw — a date this client cannot read is worth falling back to the server's
+ * own string for, not worth taking the screen down over.
+ */
+fun BusiestListeningDay.startOfDayMillis(zone: ZoneId = ZoneId.systemDefault()): Long? =
+    runCatching {
+        LocalDate.parse(date.trim()).atStartOfDay(zone).toInstant().toEpochMilli()
+    }.getOrNull()
