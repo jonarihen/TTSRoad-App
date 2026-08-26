@@ -75,4 +75,77 @@ class TtsRoadSessionCommandsTest {
 
         assertEquals(listOf(CommandButton.SLOT_OVERFLOW), bookmark.slots.asList())
     }
+
+    @Test
+    fun `a server that cannot take pronunciation reports is offered no flag button`() {
+        // The server gates the write route as well as the read one, so a `false` here means a press
+        // would store nothing — on the one control whose point is being used without looking (#125).
+        assertFalse(
+            actions(TtsRoadSessionCommands.mediaButtonPreferences(pronunciationReports = false))
+                .contains(TtsRoadSessionCommands.ReportPronunciation),
+        )
+    }
+
+    @Test
+    fun `the default is no flag button either`() {
+        // Every cold start and every start from the car runs before capability discovery answers.
+        assertFalse(
+            actions(TtsRoadSessionCommands.mediaButtonPreferences())
+                .contains(TtsRoadSessionCommands.ReportPronunciation),
+        )
+    }
+
+    @Test
+    fun `a server with pronunciation reports gains the button without losing the skips`() {
+        val buttons = TtsRoadSessionCommands.mediaButtonPreferences(pronunciationReports = true)
+
+        assertEquals(
+            listOf(
+                TtsRoadSessionCommands.SkipBack,
+                TtsRoadSessionCommands.SkipForward,
+                TtsRoadSessionCommands.ReportPronunciation,
+            ),
+            actions(buttons),
+        )
+    }
+
+    @Test
+    fun `the flag button stays in the overflow, after the bookmark`() {
+        // Two overflow actions and two capabilities: neither may take a slot beside play/pause, and
+        // the order has to be stable so the car's overflow does not reshuffle between servers.
+        val buttons = TtsRoadSessionCommands.mediaButtonPreferences(
+            bookmarks = true,
+            pronunciationReports = true,
+        )
+
+        assertEquals(
+            listOf(
+                TtsRoadSessionCommands.SkipBack,
+                TtsRoadSessionCommands.SkipForward,
+                TtsRoadSessionCommands.Bookmark,
+                TtsRoadSessionCommands.ReportPronunciation,
+            ),
+            actions(buttons),
+        )
+        val flag = buttons.first {
+            it.sessionCommand?.customAction == TtsRoadSessionCommands.ReportPronunciation
+        }
+        assertEquals(listOf(CommandButton.SLOT_OVERFLOW), flag.slots.asList())
+    }
+
+    @Test
+    fun `each capability is gated on its own`() {
+        // A server with one and not the other is the ordinary case while a backend catches up, and
+        // neither flag may drag the other's button along with it.
+        assertEquals(
+            listOf(TtsRoadSessionCommands.Bookmark),
+            actions(TtsRoadSessionCommands.mediaButtonPreferences(bookmarks = true))
+                .filter { it != TtsRoadSessionCommands.SkipBack && it != TtsRoadSessionCommands.SkipForward },
+        )
+        assertEquals(
+            listOf(TtsRoadSessionCommands.ReportPronunciation),
+            actions(TtsRoadSessionCommands.mediaButtonPreferences(pronunciationReports = true))
+                .filter { it != TtsRoadSessionCommands.SkipBack && it != TtsRoadSessionCommands.SkipForward },
+        )
+    }
 }

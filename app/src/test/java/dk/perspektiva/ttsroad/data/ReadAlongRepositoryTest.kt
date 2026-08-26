@@ -450,6 +450,54 @@ class ReadAlongRepositoryTest {
 
         assertFalse(store.isPinned(chapterId = 10))
     }
+
+    /**
+     * The lookup the mispronunciation capture uses (#125), and the one thing it must never do.
+     *
+     * That press runs on the main thread of a possibly locked phone and files with or without a
+     * word, so a fetch here would trade the whole point of the action for an optional field.
+     */
+    @Test
+    fun `the loaded document is whatever is already in memory, and nothing else`() = runTest {
+        val repository = repository()
+
+        assertNull(
+            "nothing may be fetched to answer this",
+            repository.loadedReadAlong(chapterId = 10),
+        )
+
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        repository.readAlong(chapterId = 10)
+
+        val loaded = repository.loadedReadAlong(chapterId = 10)
+        assertNotNull(loaded)
+        assertTrue(loaded!!.hasTimings)
+        // Enqueued nothing for the second call: MockWebServer would have blocked had it asked.
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a document only on disk is not counted as loaded`() = runTest {
+        // The on-disk store holds pinned downloads and chapters read in an earlier session. Parsing
+        // one back is tens of milliseconds of main thread, which is not a price an optional field
+        // gets to charge — the reader's own `readAlong` is where that cost belongs.
+        val disk = FakeReadAlongStore()
+        disk.seed(chapterId = 10, entry = cachedEntry())
+
+        assertNull(repository(readAlongStore = disk).loadedReadAlong(chapterId = 10))
+    }
+
+    @Test
+    fun `signing out drops what the capture could quote`() = runTest {
+        val repository = repository()
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        repository.readAlong(chapterId = 10)
+
+        server.enqueue(MockResponse().setBody("""{"status":"ok","revoked":true}"""))
+        repository.logout()
+
+        assertNull(repository.loadedReadAlong(chapterId = 10))
+    }
 }
 
 private fun cachedEntry(etag: String? = "\"abc\""): CachedReadAlong = CachedReadAlong(

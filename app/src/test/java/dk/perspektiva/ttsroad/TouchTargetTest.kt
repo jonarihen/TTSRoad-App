@@ -168,9 +168,10 @@ class TouchTargetTest {
                     ),
                     skipIntervalMs = 30_000L,
                     sleepTimerState = SleepTimerState(),
-                    bookmarkFeedback = null,
+                    actionFeedback = null,
                     canRead = true,
                     canBookmark = true,
+                    canReportPronunciation = true,
                     canJumpBack = true,
                     canOpenQueue = true,
                     onRetry = {},
@@ -184,6 +185,7 @@ class TouchTargetTest {
                     onOpenSleepTimer = {},
                     onRead = {},
                     onBookmark = {},
+                    onReportPronunciation = {},
                     onOpenJumpBack = {},
                     onOpenChapters = {},
                     onOpenQueue = {},
@@ -196,7 +198,7 @@ class TouchTargetTest {
         }
         // Tertiary actions are TextButtons, which Material stops at 40 dp. Width is not asserted:
         // a label sets it well past 48 dp, and forcing a minimum would only pad short labels.
-        for (label in listOf("SPEED 1×", "SLEEP", "READ", "BOOKMARK", "JUMP BACK")) {
+        for (label in listOf("SPEED 1×", "SLEEP", "READ", "BOOKMARK", "SAID WRONG", "JUMP BACK")) {
             compose.onNodeWithText(label).assertHeightIsAtLeast(MinimumTarget)
         }
     }

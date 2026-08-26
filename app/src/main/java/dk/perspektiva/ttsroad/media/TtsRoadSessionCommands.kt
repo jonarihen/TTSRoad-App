@@ -12,17 +12,19 @@ import com.google.common.collect.ImmutableList
  * and the Android Auto transport row.
  *
  * Media3 has no built-in player command for "seek by N inside the current item" that surfaces as
- * a transport button, and none at all for "bookmark this", so these are custom session commands
- * handled in [TtsRoadMediaService]'s session callback.
+ * a transport button, and none at all for "bookmark this" or "that word was pronounced wrong", so
+ * these are custom session commands handled in [TtsRoadMediaService]'s session callback.
  */
 object TtsRoadSessionCommands {
     const val SkipBack = "dk.perspektiva.ttsroad.SKIP_BACK"
     const val SkipForward = "dk.perspektiva.ttsroad.SKIP_FORWARD"
     const val Bookmark = "dk.perspektiva.ttsroad.BOOKMARK"
+    const val ReportPronunciation = "dk.perspektiva.ttsroad.REPORT_PRONUNCIATION"
 
     val skipBackCommand = SessionCommand(SkipBack, Bundle.EMPTY)
     val skipForwardCommand = SessionCommand(SkipForward, Bundle.EMPTY)
     val bookmarkCommand = SessionCommand(Bookmark, Bundle.EMPTY)
+    val reportPronunciationCommand = SessionCommand(ReportPronunciation, Bundle.EMPTY)
 
     /**
      * Buttons for the session's media button preferences. [CommandButton.SLOT_BACK] and
@@ -34,9 +36,17 @@ object TtsRoadSessionCommands {
      * @param bookmarks whether the signed-in server can hold a bookmark. Off by default so a
      *   session built before capability discovery has finished — which is every cold start, and
      *   every start from the car with no UI running — offers nothing it might not be able to honour.
+     * @param pronunciationReports whether the server can store a captured mispronunciation. Off by
+     *   default for the same reason, and it matters more here: the server gates the write route as
+     *   well as the read one, so offering this button before the answer is known would invite a
+     *   press that cannot store anything — on the one control whose whole point is being used
+     *   without looking at the screen.
      */
     @OptIn(UnstableApi::class)
-    fun mediaButtonPreferences(bookmarks: Boolean = false): ImmutableList<CommandButton> {
+    fun mediaButtonPreferences(
+        bookmarks: Boolean = false,
+        pronunciationReports: Boolean = false,
+    ): ImmutableList<CommandButton> {
         val buttons = ImmutableList.builder<CommandButton>()
             .add(
                 CommandButton.Builder(CommandButton.ICON_SKIP_BACK_30)
@@ -61,6 +71,18 @@ object TtsRoadSessionCommands {
                 CommandButton.Builder(CommandButton.ICON_BOOKMARK_FILLED)
                     .setSessionCommand(bookmarkCommand)
                     .setDisplayName("Bookmark this moment")
+                    .setSlots(CommandButton.SLOT_OVERFLOW)
+                    .build(),
+            )
+        }
+        if (pronunciationReports) {
+            // Overflow, next to the bookmark, for the same reason and one more: this is pressed far
+            // less often than either skip, but it is pressed at a moment nothing else can capture —
+            // hearing a name said wrong, forty chapters in, nowhere near a keyboard (#125).
+            buttons.add(
+                CommandButton.Builder(CommandButton.ICON_FLAG_FILLED)
+                    .setSessionCommand(reportPronunciationCommand)
+                    .setDisplayName("Report a mispronunciation")
                     .setSlots(CommandButton.SLOT_OVERFLOW)
                     .build(),
             )

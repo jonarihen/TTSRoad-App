@@ -52,7 +52,7 @@ class PlayerLayoutTest {
         for (description in transportControls) {
             compose.onNodeWithContentDescription(description).performScrollTo().assertIsDisplayed()
         }
-        for (label in listOf("SPEED 1×", "SLEEP", "READ", "BOOKMARK", "JUMP BACK")) {
+        for (label in listOf("SPEED 1×", "SLEEP", "READ", "BOOKMARK", "SAID WRONG", "JUMP BACK")) {
             compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
         }
         compose.onNodeWithText("CHAPTERS 2/12").performScrollTo().assertIsDisplayed()
@@ -124,9 +124,10 @@ class PlayerLayoutTest {
                     ),
                     skipIntervalMs = 30_000L,
                     sleepTimerState = SleepTimerState(),
-                    bookmarkFeedback = null,
+                    actionFeedback = null,
                     canRead = true,
                     canBookmark = true,
+                    canReportPronunciation = true,
                     canJumpBack = true,
                     canOpenQueue = true,
                     onRetry = {},
@@ -140,6 +141,7 @@ class PlayerLayoutTest {
                     onOpenSleepTimer = {},
                     onRead = {},
                     onBookmark = {},
+                    onReportPronunciation = {},
                     onOpenJumpBack = {},
                     onOpenChapters = {},
                     onOpenQueue = {},

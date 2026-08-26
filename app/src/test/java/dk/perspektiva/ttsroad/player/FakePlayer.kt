@@ -56,11 +56,18 @@ class FakePlayer(
             fictionTitle: String? = null,
             artworkUri: String? = null,
             durationMs: Long = 60_000L,
+            /**
+             * The `fiction_id` / `chapter_id` extras every real queue entry carries. Null builds an
+             * item without them, which is what a fiction-level or malformed entry looks like — the
+             * case the capture actions have to refuse rather than file against chapter 0.
+             */
+            extras: android.os.Bundle? = null,
         ): MediaItemData {
             val metadata = MediaMetadata.Builder()
                 .setTitle(title)
                 .setAlbumTitle(fictionTitle)
                 .apply { artworkUri?.let { setArtworkUri(android.net.Uri.parse(it)) } }
+                .apply { extras?.let { setExtras(it) } }
                 .build()
             return MediaItemData.Builder(mediaId)
                 .setMediaItem(

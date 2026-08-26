@@ -670,6 +670,24 @@ class TtsRoadRepository(
         readAlongStore.unpin(chapterId)
     }
 
+    /**
+     * The read-along document for [chapterId] **only if it is already in memory**, else null.
+     *
+     * For the one caller that must not wait: the media-session capture of a mispronunciation, which
+     * runs on the main thread at the instant of a press, often with the phone locked (#125). The
+     * word under the playhead is a bonus on that capture and never a precondition — the contract
+     * says a report without one still points a human at ten seconds to listen to — so this is
+     * deliberately the cheapest possible lookup and nothing else.
+     *
+     * Note what it does *not* do. It never fetches, and unlike [readAlong] it never falls back to
+     * the on-disk store: parsing a chapter's worth of cues off the filesystem is tens of
+     * milliseconds of a locked phone's main thread spent on an optional field. In-memory means the
+     * reader has this chapter open, or had it open this session — which is exactly the case the
+     * issue describes as "a read-along document happens to be loaded".
+     */
+    fun loadedReadAlong(chapterId: Int): ReadAlongDocument? =
+        synchronized(readAlongCache) { readAlongCache[chapterId] }?.document
+
     /** Whatever copy of [chapterId] we already hold, promoting the on-disk one into memory. */
     private fun cachedReadAlong(chapterId: Int): CachedReadAlongDocument? {
         synchronized(readAlongCache) { readAlongCache[chapterId] }?.let { return it }
