@@ -447,4 +447,28 @@ interface TtsRoadApi {
 
     @DELETE("api/mobile/bookmarks/{bookmark_id}")
     suspend fun deleteBookmark(@Path("bookmark_id") bookmarkId: Int): BookmarkDeleteResponse
+
+    /**
+     * The caller's captured pronunciation problems, newest first.
+     *
+     * Resolved rows are hidden by default because the action creates open work; callers opt in when
+     * they need to show that an administrator has dealt with a report.
+     */
+    @GET("api/mobile/pronunciation-reports")
+    suspend fun pronunciationReports(
+        @Query("fiction_id") fictionId: Int? = null,
+        @Query("include_resolved") includeResolved: Boolean = false,
+    ): PronunciationReportsResponse
+
+    /** Store the listening moment, not a pronunciation rule. Any signed-in account may call it. */
+    @POST("api/mobile/pronunciation-reports")
+    suspend fun createPronunciationReport(
+        @Body request: CreatePronunciationReportRequest,
+    ): PronunciationReportWriteResponse
+
+    /** Undo the caller's own mistaken capture. Somebody else's id is intentionally a 404. */
+    @DELETE("api/mobile/pronunciation-reports/{report_id}")
+    suspend fun deletePronunciationReport(
+        @Path("report_id") reportId: Int,
+    ): PronunciationReportDeleteResponse
 }

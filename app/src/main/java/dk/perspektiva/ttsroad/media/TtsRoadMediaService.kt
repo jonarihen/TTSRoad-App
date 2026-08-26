@@ -257,17 +257,20 @@ class TtsRoadMediaService : MediaLibraryService() {
             .setSessionActivity(playerActivityIntent())
             .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
             .build()
-        // The bookmark button depends on what the server can hold, and that is not known when the
+        // The overflow buttons depend on what the server can hold, and that is not known when the
         // session is built — discovery is asynchronous, and a start from the car runs with no UI to
-        // have done it. Republishing the buttons when the answer arrives is what makes the button
-        // appear on a server that supports bookmarks and stay absent on one that does not.
+        // have done it. Republishing the buttons when the answer arrives is what makes each one
+        // appear on a server that supports it and stay absent on one that does not.
         serviceScope.launch {
             repository.currentCapabilities
-                .map { it.bookmarks }
+                .map { it.bookmarks to it.pronunciationReports }
                 .distinctUntilChanged()
-                .collect { bookmarks ->
+                .collect { (bookmarks, pronunciationReports) ->
                     session.setMediaButtonPreferences(
-                        TtsRoadSessionCommands.mediaButtonPreferences(bookmarks = bookmarks),
+                        TtsRoadSessionCommands.mediaButtonPreferences(
+                            bookmarks = bookmarks,
+                            pronunciationReports = pronunciationReports,
+                        ),
                     )
                 }
         }
@@ -568,6 +571,68 @@ class TtsRoadMediaService : MediaLibraryService() {
             // Everything else is the network: offline, a dead server, an expired token.
             else -> SessionError.ERROR_IO
         }
+        val error = SessionError(code, outcome.message)
+        session.sendError(controller, error)
+        return SessionResult(error)
+    }
+
+    /**
+     * Capture "that word was pronounced wrong, here", for the flag button on the notification, the
+     * lockscreen and the Android Auto overflow (#125).
+     *
+     * This is the point of the whole feature rather than a car-shaped extra of it. Wanting a
+     * pronunciation rule starts with *hearing* the mispronunciation, which happens in a car, on
+     * headphones, forty chapters into a serial — and by the time there is a keyboard the spelling
+     * is gone and so is the chapter. So the press stores the moment, not a rule: the rule editor,
+     * the dry run and the impact list are desk work and stay on the web.
+     *
+     * Everything worth having is read synchronously, before anything suspends, exactly as
+     * [bookmarkCurrentMoment] does — including the word, which is why it comes from
+     * [TtsRoadRepository.loadedReadAlong] rather than a fetch. Playback is never touched.
+     */
+    @OptIn(UnstableApi::class)
+    private fun reportPronunciationHere(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+    ): ListenableFuture<SessionResult> {
+        val target = pronunciationReportTargetFor(player) ?: return Futures.immediateFuture(
+            pronunciationReportResult(session, controller, PronunciationReportOutcome.NothingPlaying),
+        )
+        // Null in the ordinary case — a car has no reader open — and the contract expects that: a
+        // report with no word still names ten seconds for a human to listen to. Nothing here is
+        // allowed to fail the capture, so the lookup neither fetches nor throws.
+        val word = pronunciationWordAt(
+            document = repository.loadedReadAlong(target.chapterId),
+            positionSeconds = target.positionSeconds,
+        )
+
+        return serviceScope.future {
+            val outcome = pronunciationReportOutcomeFor(
+                runCatching {
+                    repository.createPronunciationReport(
+                        chapterId = target.chapterId,
+                        positionSeconds = target.positionSeconds,
+                        fictionId = target.fictionId,
+                        word = word,
+                    )
+                },
+            )
+            pronunciationReportResult(session, controller, outcome)
+        }
+    }
+
+    /**
+     * The [bookmarkResult] shape, with one difference worth the duplication: a refusal carries the
+     * server's own sentence. The open-report ceiling is the one failure a listener can act on, and
+     * "clear some in the browser" is only useful if it actually reaches them.
+     */
+    private fun pronunciationReportResult(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        outcome: PronunciationReportOutcome,
+    ): SessionResult {
+        val code = pronunciationReportErrorCode(outcome)
+            ?: return SessionResult(SessionResult.RESULT_SUCCESS)
         val error = SessionError(code, outcome.message)
         session.sendError(controller, error)
         return SessionResult(error)
@@ -906,6 +971,10 @@ class TtsRoadMediaService : MediaLibraryService() {
                         // offered is decided by the media button preferences, and a controller that
                         // asks anyway gets a "not supported" it can show rather than silence.
                         .add(TtsRoadSessionCommands.bookmarkCommand)
+                        // Same reasoning, and the same split: the capability decides the button,
+                        // this decides whether an assistant or a stale controller asking for it
+                        // gets an answer at all.
+                        .add(TtsRoadSessionCommands.reportPronunciationCommand)
                         .build(),
                 )
                 .build()
@@ -917,10 +986,13 @@ class TtsRoadMediaService : MediaLibraryService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
-            // Handled apart from the seeks below: it writes to the server rather than the player,
-            // so it answers asynchronously and never touches the playback position.
+            // Handled apart from the seeks below: these write to the server rather than the player,
+            // so they answer asynchronously and never touch the playback position.
             if (customCommand.customAction == TtsRoadSessionCommands.Bookmark) {
                 return service.bookmarkCurrentMoment(session, controller)
+            }
+            if (customCommand.customAction == TtsRoadSessionCommands.ReportPronunciation) {
+                return service.reportPronunciationHere(session, controller)
             }
             val delta = when (customCommand.customAction) {
                 TtsRoadSessionCommands.SkipBack -> -service.skipIntervalMs

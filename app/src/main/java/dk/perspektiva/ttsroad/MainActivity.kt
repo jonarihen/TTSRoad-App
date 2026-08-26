@@ -195,6 +195,7 @@ import dk.perspektiva.ttsroad.data.listeningStateJson
 import dk.perspektiva.ttsroad.data.parseListeningStateJson
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.MaintenanceResponse
+import dk.perspektiva.ttsroad.data.PronunciationReport
 import dk.perspektiva.ttsroad.data.ReadAlongDocument
 import dk.perspektiva.ttsroad.data.ReadAlongHighlight
 import dk.perspektiva.ttsroad.data.ReaderFontScales
@@ -242,6 +243,9 @@ import dk.perspektiva.ttsroad.download.formatStorageSize
 import dk.perspektiva.ttsroad.download.handledChapterIds
 import dk.perspektiva.ttsroad.download.nextChaptersToDownload
 import dk.perspektiva.ttsroad.download.streamingCacheChoiceLabel
+import dk.perspektiva.ttsroad.media.PronunciationReportOutcome
+import dk.perspektiva.ttsroad.media.pronunciationReportOutcomeFor
+import dk.perspektiva.ttsroad.media.pronunciationWordAt
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.nav.AppScreen
 import dk.perspektiva.ttsroad.nav.navigateTo
@@ -682,6 +686,7 @@ private fun MainScaffold(
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Device sessions"
         AppScreen.Bookmarks -> "Bookmarks"
+        AppScreen.PronunciationReports -> "Pronunciation"
         AppScreen.Queue -> "Up next"
         AppScreen.Stats -> "Listening stats"
         AppScreen.Logs -> "Server log"
@@ -811,6 +816,9 @@ private fun MainScaffold(
                     repository = repository,
                     onOpenDevices = { onScreenChange(AppScreen.Devices) },
                     onOpenBookmarks = { onScreenChange(AppScreen.Bookmarks) },
+                    onOpenPronunciationReports = {
+                        onScreenChange(AppScreen.PronunciationReports)
+                    },
                     onOpenQueue = { onScreenChange(AppScreen.Queue) },
                     onOpenStats = { onScreenChange(AppScreen.Stats) },
                     onOpenLogs = { onScreenChange(AppScreen.Logs) },
@@ -823,6 +831,12 @@ private fun MainScaffold(
                 )
 
                 AppScreen.Bookmarks -> BookmarksScreen(
+                    padding = padding,
+                    repository = repository,
+                    onOpenReader = { onScreenChange(it) },
+                )
+
+                AppScreen.PronunciationReports -> PronunciationReportsScreen(
                     padding = padding,
                     repository = repository,
                     onOpenReader = { onScreenChange(it) },
@@ -2093,10 +2107,19 @@ internal fun PlayerScreenBody(
     playerState: PlayerUiState,
     skipIntervalMs: Long,
     sleepTimerState: SleepTimerState,
-    /** Transient confirmation of a bookmark just made. Null most of the time. */
-    bookmarkFeedback: String?,
+    /**
+     * Transient confirmation of a write just made — a bookmark, a pronunciation report. Null most
+     * of the time.
+     *
+     * One slot rather than one per action: these are four-second acknowledgements of things done
+     * *while listening*, they are never both true, and a second identical line would only make the
+     * player taller for no reader.
+     */
+    actionFeedback: String?,
     canRead: Boolean,
     canBookmark: Boolean,
+    /** The server can store a captured mispronunciation, and there is a chapter to hang it on. */
+    canReportPronunciation: Boolean,
     canJumpBack: Boolean,
     /**
      * Marks in the chapter that is playing, for the strip under the scrub bar (#121).
@@ -2118,6 +2141,7 @@ internal fun PlayerScreenBody(
     onOpenSleepTimer: () -> Unit,
     onRead: () -> Unit,
     onBookmark: () -> Unit,
+    onReportPronunciation: () -> Unit,
     onOpenJumpBack: () -> Unit,
     onOpenChapters: () -> Unit,
     onOpenQueue: () -> Unit,
@@ -2154,7 +2178,7 @@ internal fun PlayerScreenBody(
             Spacer(modifier = Modifier.height(12.dp))
             PlaybackErrorBanner(message = message, onRetry = onRetry)
         }
-        bookmarkFeedback?.let { message ->
+        actionFeedback?.let { message ->
             MetaText(
                 text = "// $message",
                 color = AarisColor.Accent,
@@ -2339,6 +2363,12 @@ internal fun PlayerScreenBody(
                 if (canBookmark) {
                     PlayerActionButton(label = "BOOKMARK", onClick = onBookmark)
                 }
+                // Next to BOOKMARK because it is the same gesture — mark this moment, keep
+                // listening — and hidden on the same terms, since the server gates the write route
+                // as well as the read one (#125).
+                if (canReportPronunciation) {
+                    PlayerActionButton(label = "SAID WRONG", onClick = onReportPronunciation)
+                }
                 if (canJumpBack) {
                     PlayerActionButton(label = "JUMP BACK", onClick = onOpenJumpBack)
                 }
@@ -2411,16 +2441,21 @@ private fun PlayerScreen(
     // the stored answer the moment the sheet opens, with no flash of the wrong state.
     val fictionSpeeds by remember { ServiceLocator.fictionSpeedPreferences(context).overrides }
         .collectAsStateWithLifecycle(initialValue = emptyMap())
-    // Confirmation for the bookmark button. A mark made while listening gives no other sign that
-    // anything happened, and the alternative — opening the list — is the thing this avoids.
-    var bookmarkFeedback by remember { mutableStateOf<String?>(null) }
+    // Confirmation for the writes made from this screen — a bookmark, a pronunciation report.
+    // Either one made while listening gives no other sign that anything happened, and the
+    // alternative — opening the list — is the thing they exist to avoid.
+    var actionFeedback by remember { mutableStateOf<String?>(null) }
     // The marks in *this* chapter, for the strip under the scrub bar (#121). Scoped server-side:
     // `bookmarks()` takes a chapter id and had never been passed one, so the app was fetching the
     // whole account to render one chapter's worth.
     var chapterBookmarks by remember { mutableStateOf<List<Bookmark>>(emptyList()) }
+    // Counts bookmark writes, and is the refetch key below. The message used to be that key, which
+    // made every mark cost two fetches — one when it appeared, one when it cleared — and would now
+    // also refetch marks after a pronunciation report, which cannot change them.
+    var bookmarkWrites by remember { mutableStateOf(0) }
     // Re-fetched when the chapter changes and when a mark is made, which is exactly when the answer
     // can differ. Not on a timer: a bookmark list nobody has touched does not change under you.
-    LaunchedEffect(playingChapterId, capabilities.bookmarks, bookmarkFeedback) {
+    LaunchedEffect(playingChapterId, capabilities.bookmarks, bookmarkWrites) {
         val chapterId = playingChapterId?.takeIf { capabilities.bookmarks }
         chapterBookmarks = if (chapterId == null) {
             emptyList()
@@ -2438,20 +2473,21 @@ private fun PlayerScreen(
             durationMs = playerState.durationMs,
         )
     }
-    LaunchedEffect(bookmarkFeedback) {
+    LaunchedEffect(actionFeedback) {
         // Clears itself: it is a confirmation, not a state the screen should settle into.
-        if (bookmarkFeedback != null) {
+        if (actionFeedback != null) {
             delay(4_000)
-            bookmarkFeedback = null
+            actionFeedback = null
         }
     }
     PlayerScreenBody(
         playerState = playerState,
         skipIntervalMs = skipIntervalMs,
         sleepTimerState = sleepTimerState,
-        bookmarkFeedback = bookmarkFeedback,
+        actionFeedback = actionFeedback,
         canRead = capabilities.readAlong && playingChapterId != null,
         canBookmark = capabilities.bookmarks && playingChapterId != null,
+        canReportPronunciation = capabilities.pronunciationReports && playingChapterId != null,
         canJumpBack = jumpBackOptions.isNotEmpty(),
         canOpenQueue = capabilities.queue,
         bookmarkMarkers = markers,
@@ -2474,16 +2510,59 @@ private fun PlayerScreen(
             scope.launch {
                 // Deliberately does not touch playback: marking a line worth keeping is
                 // something you do *while* listening.
-                bookmarkFeedback = runCatching {
+                actionFeedback = runCatching {
                     repository.createBookmark(
                         chapterId = chapterId,
                         positionSeconds = playerState.positionMs / 1000.0,
                         label = playerState.title.takeIf { it.isNotBlank() },
                     )
                 }.fold(
-                    onSuccess = { "Bookmarked at ${formatDuration(playerState.positionMs)}" },
+                    onSuccess = {
+                        bookmarkWrites++
+                        "Bookmarked at ${formatDuration(playerState.positionMs)}"
+                    },
                     onFailure = { "Could not save the bookmark" },
                 )
+            }
+        },
+        onReportPronunciation = {
+            val chapterId = playingChapterId ?: return@PlayerScreenBody
+            // Captured here, off the state the screen is already drawing, so the report lands where
+            // the tap did rather than wherever the round trip finished. The word comes from the
+            // read-along document only if one is already in memory — usually it is not, and the
+            // contract is explicit that a report without one is still worth filing.
+            val positionMs = playerState.positionMs
+            val positionSeconds = positionMs / 1000.0
+            val word = pronunciationWordAt(
+                document = repository.loadedReadAlong(chapterId),
+                positionSeconds = positionSeconds,
+            )
+            scope.launch {
+                // Playback is untouched, exactly as for a bookmark: you flag a mispronunciation
+                // because you are still listening to the sentence after it.
+                val outcome = pronunciationReportOutcomeFor(
+                    runCatching {
+                        repository.createPronunciationReport(
+                            chapterId = chapterId,
+                            positionSeconds = positionSeconds,
+                            fictionId = playerState.fictionId,
+                            word = word,
+                        )
+                    },
+                )
+                actionFeedback = when (outcome) {
+                    // Success says what was captured, because the whole question a second later is
+                    // "did it get the word, or just the spot?".
+                    PronunciationReportOutcome.Filed -> if (word == null) {
+                        "Reported at ${formatDuration(positionMs)}"
+                    } else {
+                        "Reported \"$word\" at ${formatDuration(positionMs)}"
+                    }
+
+                    // Everything else already carries a sentence, and for the ceiling's 409 it is
+                    // the server's own.
+                    else -> outcome.message
+                }
             }
         },
         onOpenJumpBack = { showJumpBack = true },
@@ -3026,6 +3105,7 @@ private fun SettingsScreen(
     repository: TtsRoadRepository,
     onOpenDevices: () -> Unit,
     onOpenBookmarks: () -> Unit,
+    onOpenPronunciationReports: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenStats: () -> Unit,
     onOpenLogs: () -> Unit,
@@ -3191,6 +3271,22 @@ private fun SettingsScreen(
                     )
                     OutlinedButton(onClick = onOpenBookmarks, shape = RectangleShape) {
                         Text("BOOKMARKS")
+                    }
+                }
+                // The same flag that decides whether the player and the car offer the action at
+                // all, so the capture and the place it lands appear and disappear together (#125).
+                if (capabilities.pronunciationReports) {
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    MetaText(
+                        text = "Words you flagged as said wrong, and where you heard them. " +
+                            "Fixing one is a rule, and rules are made in the browser.",
+                        color = AarisColor.Dim,
+                    )
+                    OutlinedButton(
+                        onClick = onOpenPronunciationReports,
+                        shape = RectangleShape,
+                    ) {
+                        Text("PRONUNCIATION REPORTS")
                     }
                 }
                 // Same gate the add-to-queue actions already use, so the screen and the actions
@@ -3973,6 +4069,236 @@ private fun BookmarkCard(
                 bookmark.chapterNumber?.let { AarisTag(text = "CH ${chapterNumberLabel(it)}") }
             }
             bookmark.note?.let { MetaText(text = it, color = AarisColor.Dim) }
+            if (onDelete != null) {
+                TextButton(onClick = onDelete) {
+                    Text("DELETE", color = AarisColor.Danger)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The mispronunciations captured from the player and the car, newest first (#125).
+ *
+ * The point of the capture action is that it can be used without looking — at the wheel, on a walk,
+ * with the phone locked — and the price of that is a press with no visible result. This screen is
+ * the other half: what did I actually file, and undo the one I fumbled. Nothing else. Resolving a
+ * report, reading a whole fiction's, and turning any of them into a pronunciation rule are
+ * admin-side and stay on the web's Text Tools page, where the dry run and the impact list live.
+ *
+ * Open reports only by default, because that is the list that describes outstanding work. The
+ * server's `include_resolved` is what the ALL filter asks for, and a resolved row is worth seeing
+ * mostly to explain why something you reported has stopped happening.
+ */
+@Composable
+private fun PronunciationReportsScreen(
+    padding: PaddingValues,
+    repository: TtsRoadRepository,
+    onOpenReader: (AppScreen.Reader) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    var reports by remember { mutableStateOf<List<PronunciationReport>?>(null) }
+    var includeResolved by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isBusy by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf<PronunciationReport?>(null) }
+
+    fun load() {
+        scope.launch {
+            isLoading = true
+            error = null
+            runCatching { repository.pronunciationReports(includeResolved = includeResolved) }
+                // Null means the server cannot take reports at all, which the capability gate on
+                // the Settings button should already have caught; empty means none are filed.
+                .onSuccess { reports = it.orEmpty() }
+                .onFailure { error = it.message ?: "Could not load your pronunciation reports" }
+            isLoading = false
+        }
+    }
+
+    // Re-runs when the filter changes: `include_resolved` is a server-side query, not something to
+    // filter a stale list by, and the resolved rows were never fetched to begin with.
+    LaunchedEffect(includeResolved) { load() }
+
+    val loaded = reports
+    when {
+        isLoading && loaded == null && error == null -> LoadingPane(padding)
+        loaded == null -> ErrorPane(
+            padding = padding,
+            message = error ?: "Could not load your pronunciation reports",
+            onRetry = ::load,
+        )
+
+        else -> PronunciationReportsBody(
+            padding = padding,
+            reports = loaded,
+            isLoading = isLoading,
+            error = error,
+            includeResolved = includeResolved,
+            isBusy = isBusy,
+            onSetIncludeResolved = { includeResolved = it },
+            // Read-along is where a report leads, exactly as a bookmark does: seeing the sentence
+            // is how you work out the spelling you could not catch by ear.
+            onOpenReader = if (capabilities.readAlong) {
+                { report ->
+                    onOpenReader(
+                        AppScreen.Reader(
+                            chapterId = report.chapterId,
+                            title = report.chapterTitle ?: "Chapter",
+                        ),
+                    )
+                }
+            } else {
+                null
+            },
+            onDelete = { confirmDelete = it },
+            onRefresh = ::load,
+        )
+    }
+
+    confirmDelete?.let { report ->
+        ConfirmDialog(
+            title = "DELETE REPORT",
+            body = "This report will be removed. It is the undo for a mistaken tap, so it only " +
+                "ever removes your own.",
+            confirmLabel = "DELETE IT",
+            onConfirm = {
+                confirmDelete = null
+                scope.launch {
+                    isBusy = true
+                    error = null
+                    runCatching { repository.deletePronunciationReport(report.id) }
+                        .onFailure { error = it.message ?: "Could not delete the report" }
+                    isBusy = false
+                    // Reload rather than removing locally: the server owns the list, and an admin
+                    // working through it in the browser is changing the same rows.
+                    load()
+                }
+            },
+            onDismiss = { confirmDelete = null },
+        )
+    }
+}
+
+/**
+ * Everything the reports screen *shows*, with none of what it is wired to.
+ *
+ * Split out for the same reason [PlayerScreenBody] is: the interesting question — does a report
+ * with no word still render as something useful, does the ALL filter say which list you are looking
+ * at — is answerable at a stated viewport on the JVM, and none of the repository behind it is.
+ */
+@Composable
+internal fun PronunciationReportsBody(
+    padding: PaddingValues,
+    reports: List<PronunciationReport>,
+    isLoading: Boolean,
+    error: String?,
+    includeResolved: Boolean,
+    isBusy: Boolean,
+    onSetIncludeResolved: (Boolean) -> Unit,
+    onOpenReader: ((PronunciationReport) -> Unit)?,
+    onDelete: (PronunciationReport) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        if (isLoading) {
+            ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+        }
+        error?.let { MetaText(text = it, color = AarisColor.Danger) }
+
+        AarisChoiceRow(
+            options = listOf(false, true),
+            selected = includeResolved,
+            label = { showAll -> if (showAll) "ALL" else "OPEN" },
+            onSelect = onSetIncludeResolved,
+        )
+
+        if (reports.isEmpty()) {
+            MetaText(text = "// Nothing reported", color = AarisColor.Accent)
+            EmptyCard(
+                if (includeResolved) {
+                    "Nothing has been reported from this account yet. Tap SAID WRONG in the " +
+                        "player, or the flag in the car, the moment you hear a name mangled."
+                } else {
+                    "No open reports. Anything you filed has been dealt with in the browser."
+                },
+            )
+        } else {
+            MetaText(
+                text = if (reports.size == 1) "// 1 report" else "// ${reports.size} reports",
+                color = AarisColor.Accent,
+            )
+            reports.forEach { report ->
+                PronunciationReportCard(
+                    report = report,
+                    onOpen = onOpenReader?.takeIf { report.chapterId > 0 }?.let { open ->
+                        { open(report) }
+                    },
+                    onDelete = { onDelete(report) }.takeIf { !isBusy },
+                )
+            }
+        }
+
+        OutlinedButton(
+            onClick = onRefresh,
+            enabled = !isLoading && !isBusy,
+            shape = RectangleShape,
+        ) {
+            Text("REFRESH")
+        }
+    }
+}
+
+/**
+ * One captured moment.
+ *
+ * The word is the headline when there is one and the position is the headline when there is not,
+ * which is the honest ordering: a report filed from a locked phone knows the second it happened
+ * and nothing else, and that second is still the whole value of it.
+ */
+@Composable
+private fun PronunciationReportCard(
+    report: PronunciationReport,
+    onOpen: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+) {
+    AarisCard {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (onOpen != null) Modifier.clickable(onClick = onOpen) else Modifier)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = report.word ?: "Word not captured",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (report.word == null) AarisColor.Muted else AarisColor.Ink,
+            )
+            // The payload carries the fiction and chapter titles precisely so a list like this
+            // needs no extra request per row.
+            report.fictionTitle?.let { MetaText(text = it, color = AarisColor.Muted) }
+            report.chapterTitle?.let { MetaText(text = it, color = AarisColor.Dim) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AarisTag(text = formatDuration((report.positionSeconds * 1000).toLong()))
+                report.chapterNumber?.let { AarisTag(text = "CH ${chapterNumberLabel(it)}") }
+                // Only ever an admin's doing, from the web. Worth saying, because "it stopped
+                // being wrong" and "nobody has looked at this" are different answers.
+                if (report.resolved) {
+                    AarisTag(text = "RESOLVED", color = AarisColor.Accent)
+                }
+            }
+            report.note?.let { MetaText(text = it, color = AarisColor.Dim) }
             if (onDelete != null) {
                 TextButton(onClick = onDelete) {
                     Text("DELETE", color = AarisColor.Danger)

@@ -23,6 +23,24 @@ Notable changes to the TTSRoad Android client.
   the opposite of what it looks like. Signing out removes the note rather than blanking it, so the
   previous account's book cannot survive on a home screen.
   ([#150](https://github.com/jonarihen/TTSRoad-App/issues/150))
+- **"That name is said wrong" is now something you can say from the car.** Wanting a pronunciation
+  rule starts with *hearing* the mispronunciation, and that happens forty chapters into a serial, on
+  headphones or at the wheel — nowhere near the browser where rules are actually made. By the time
+  there is a keyboard the spelling is gone and so, usually, is the chapter. The player gains **SAID
+  WRONG** beside BOOKMARK, and the media session gains a flag action that reaches the Android Auto
+  overflow, the media notification and the lockscreen: one press, phone still locked, playback
+  untouched, and the chapter and the exact second are filed for review in a browser later. When a
+  timed read-along document happens to be loaded, the word under the playhead goes with the report;
+  most of the time none is loaded, and that is fine by design — a report that names ten seconds to
+  listen back to is the whole value, so the action never waits for a word and never refuses without
+  one. Settings → **PRONUNCIATION REPORTS** is where they land, open ones first with a delete on
+  each, because a press that files something invisible and cannot be undone is a press nobody makes
+  twice. Everything the small screen buys nothing for stays on the web: the rule editor, the dry
+  run, the impact list and the raw → cleaned → spoken preview are desk work, and were never the
+  reason to reach for a phone mid-chapter. Every surface disappears entirely on a server that cannot
+  store a report — the backend gates writing as well as reading, which matters more than usual for a
+  control whose entire point is being used without looking at it.
+  ([#125](https://github.com/jonarihen/TTSRoad-App/issues/125))
 - **The server's own log, on the phone.** "Why did that chapter fail" and "is the poller running"
   are questions you have with the app open, and the answer was a laptop away: the pipeline's log
   lived only on the web console, so the client that made you want to ask was the one client that

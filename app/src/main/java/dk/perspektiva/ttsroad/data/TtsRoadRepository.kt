@@ -691,6 +691,24 @@ class TtsRoadRepository(
         readAlongStore.unpin(chapterId)
     }
 
+    /**
+     * The read-along document for [chapterId] **only if it is already in memory**, else null.
+     *
+     * For the one caller that must not wait: the media-session capture of a mispronunciation, which
+     * runs on the main thread at the instant of a press, often with the phone locked (#125). The
+     * word under the playhead is a bonus on that capture and never a precondition — the contract
+     * says a report without one still points a human at ten seconds to listen to — so this is
+     * deliberately the cheapest possible lookup and nothing else.
+     *
+     * Note what it does *not* do. It never fetches, and unlike [readAlong] it never falls back to
+     * the on-disk store: parsing a chapter's worth of cues off the filesystem is tens of
+     * milliseconds of a locked phone's main thread spent on an optional field. In-memory means the
+     * reader has this chapter open, or had it open this session — which is exactly the case the
+     * issue describes as "a read-along document happens to be loaded".
+     */
+    fun loadedReadAlong(chapterId: Int): ReadAlongDocument? =
+        synchronized(readAlongCache) { readAlongCache[chapterId] }?.document
+
     /** Whatever copy of [chapterId] we already hold, promoting the on-disk one into memory. */
     private fun cachedReadAlong(chapterId: Int): CachedReadAlongDocument? {
         synchronized(readAlongCache) { readAlongCache[chapterId] }?.let { return it }
@@ -1263,6 +1281,69 @@ class TtsRoadRepository(
         } catch (e: HttpException) {
             // Deleting something already deleted — from the browser, or a double tap — is the
             // outcome the caller wanted, not an error to put on screen.
+            if (e.code() == 404) true else throw e
+        }
+    }
+
+    /**
+     * This account's captured pronunciation problems, or null when the server has no capture store.
+     *
+     * Null and empty are deliberately different: null hides the feature, while an empty list is a
+     * supported server on which the listener has not filed anything matching the filters.
+     */
+    suspend fun pronunciationReports(
+        fictionId: Int? = null,
+        includeResolved: Boolean = false,
+    ): List<PronunciationReport>? {
+        if (!_currentCapabilities.value.pronunciationReports) return null
+        return withAuthorizedApi {
+            it.pronunciationReports(
+                fictionId = fictionId,
+                includeResolved = includeResolved,
+            )
+        }.reports
+    }
+
+    /**
+     * Capture where a pronunciation problem was heard, or null when the server cannot store one.
+     *
+     * [word] is optional by contract and must stay that way: a media-session command normally has
+     * the chapter and position but no timed read-along document. Non-finite and negative positions
+     * are flattened before Moshi sees them; NaN and infinity are not valid JSON, and losing the
+     * entire locked-phone capture over a bad clock value would lose the only useful information.
+     *
+     * A real server refusal, including the open-report ceiling's 409, propagates as an
+     * [HttpException] so the UI can show the backend's specific `detail`.
+     */
+    suspend fun createPronunciationReport(
+        chapterId: Int,
+        positionSeconds: Double = 0.0,
+        fictionId: Int? = null,
+        word: String? = null,
+        note: String? = null,
+    ): PronunciationReport? {
+        if (!_currentCapabilities.value.pronunciationReports) return null
+        val safePosition = positionSeconds.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+        return withAuthorizedApi {
+            it.createPronunciationReport(
+                CreatePronunciationReportRequest(
+                    chapterId = chapterId,
+                    fictionId = fictionId,
+                    positionSeconds = safePosition,
+                    word = word?.trim()?.takeIf { text -> text.isNotEmpty() },
+                    note = note?.trim()?.takeIf { text -> text.isNotEmpty() },
+                ),
+            )
+        }.report
+    }
+
+    /** True when the report is gone. A 404 counts because it is already not there. */
+    suspend fun deletePronunciationReport(reportId: Int): Boolean {
+        if (!_currentCapabilities.value.pronunciationReports) return false
+        return try {
+            withAuthorizedApi { it.deletePronunciationReport(reportId) }
+            true
+        } catch (e: HttpException) {
             if (e.code() == 404) true else throw e
         }
     }

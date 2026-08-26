@@ -42,6 +42,16 @@ sealed interface AppScreen {
     data object Bookmarks : AppScreen
 
     /**
+     * The mispronunciations captured from the player and the car, newest first. Reached from
+     * Settings.
+     *
+     * Exists because the capture action creates open work for somebody: a press that files a report
+     * and offers no way to see or unfile it is a press nobody makes twice. Read-only apart from
+     * delete — resolving one, and reading a whole fiction's, are admin jobs and live on the web.
+     */
+    data object PronunciationReports : AppScreen
+
+    /**
      * The cross-library Up Next queue. Reached from the player and from Settings.
      *
      * The queue has been writable since 0.11.0 and had nowhere to be looked at: a chapter could be
@@ -85,6 +95,7 @@ val AppScreen.saveKey: String
         AppScreen.Settings -> "Settings"
         AppScreen.Devices -> "Devices"
         AppScreen.Bookmarks -> "Bookmarks"
+        AppScreen.PronunciationReports -> "PronunciationReports"
         AppScreen.Queue -> "Queue"
         AppScreen.Stats -> "Stats"
         AppScreen.Logs -> "Logs"

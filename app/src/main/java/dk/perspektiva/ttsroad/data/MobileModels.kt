@@ -1021,6 +1021,61 @@ data class UpdateBookmarkRequest(
 )
 
 /**
+ * A pronunciation problem captured while listening.
+ *
+ * This is deliberately an observation, not a pronunciation rule. The phone records the moment it
+ * knows for certain and the web's Text Tools page owns the pattern, replacement, dry-run and impact
+ * decisions. Joined titles travel with every row so an account-wide list needs no request per item.
+ */
+data class PronunciationReport(
+    val id: Int = 0,
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    @param:Json(name = "fiction_slug") val fictionSlug: String? = null,
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
+    @param:Json(name = "chapter_title") val chapterTitle: String? = null,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    val word: String? = null,
+    val note: String? = null,
+    @param:Json(name = "reported_by") val reportedBy: String? = null,
+    val resolved: Boolean = false,
+    @param:Json(name = "resolved_at") val resolvedAt: String? = null,
+    @param:Json(name = "created_at") val createdAt: String? = null,
+)
+
+data class PronunciationReportsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val reports: List<PronunciationReport> = emptyList(),
+)
+
+data class PronunciationReportWriteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val report: PronunciationReport? = null,
+)
+
+data class PronunciationReportDeleteResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    val id: Int = 0,
+)
+
+/**
+ * The locked-phone capture payload. Only [chapterId] is required by the server.
+ *
+ * [fictionId] is still worth sending when known, but the server derives it from the chapter rather
+ * than trusting the pair. [word] is absent in the common case: it is known only when a timed
+ * read-along document happens to be loaded, and must never gate the action.
+ */
+data class CreatePronunciationReportRequest(
+    @param:Json(name = "chapter_id") val chapterId: Int,
+    @param:Json(name = "fiction_id") val fictionId: Int? = null,
+    @param:Json(name = "position_seconds") val positionSeconds: Double? = null,
+    val word: String? = null,
+    val note: String? = null,
+)
+
+/**
  * One item of `POST /api/mobile/playback/sync`.
  *
  * [clientUpdatedAt] is what makes the batch endpoint different from `/playback/progress`: the
