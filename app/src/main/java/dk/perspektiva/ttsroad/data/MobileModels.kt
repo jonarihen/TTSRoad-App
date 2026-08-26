@@ -85,6 +85,10 @@ data class LibraryResponse(
     val fictions: List<FictionSummary> = emptyList(),
     @param:Json(name = "continue_listening") val continueListening: List<ChapterSummary> = emptyList(),
     @param:Json(name = "recent_chapters") val recentChapters: List<ChapterSummary> = emptyList(),
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    @param:Json(name = "updated_since") val updatedSince: String? = null,
+    val delta: Boolean = false,
+    val deleted: List<Int> = emptyList(),
 )
 
 data class ChaptersResponse(
@@ -92,6 +96,48 @@ data class ChaptersResponse(
     val fiction: FictionSummary,
     val total: Int = 0,
     val chapters: List<ChapterSummary> = emptyList(),
+    @param:Json(name = "server_time") val serverTime: String? = null,
+    @param:Json(name = "updated_since") val updatedSince: String? = null,
+    val delta: Boolean = false,
+    val deleted: List<Int> = emptyList(),
+)
+
+/** One fiction named by `GET /api/mobile/sync` because some part of it moved. */
+data class DeltaFictionChange(
+    @param:Json(name = "fiction_id") val fictionId: Int,
+    val slug: String? = null,
+    val title: String? = null,
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
+    @param:Json(name = "changed_chapters") val changedChapters: Int = 0,
+    @param:Json(name = "deleted_chapters") val deletedChapters: Int = 0,
+    @param:Json(name = "changed_playback") val changedPlayback: Int = 0,
+) {
+    /** Whether a loaded chapter list has anything to pull for this fiction. */
+    val chaptersMoved: Boolean
+        get() = changedChapters > 0 || deletedChapters > 0 || changedPlayback > 0
+}
+
+data class DeltaChanged(
+    val library: Boolean = false,
+    val fictions: List<DeltaFictionChange> = emptyList(),
+    val playback: Int = 0,
+    val bookmarks: Int = 0,
+)
+
+data class DeltaDeleted(
+    val fictions: List<Int> = emptyList(),
+    val chapters: List<Int> = emptyList(),
+    val bookmarks: List<Int> = emptyList(),
+)
+
+/** The cheap index request that precedes sparse library and chapter pulls (#110). */
+data class DeltaSyncResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "server_time") val serverTime: String,
+    @param:Json(name = "updated_since") val updatedSince: String? = null,
+    val delta: Boolean = false,
+    val changed: DeltaChanged = DeltaChanged(),
+    val deleted: DeltaDeleted = DeltaDeleted(),
 )
 
 /** The `source_type` values the server sends. A fiction may carry a key newer than this build. */
@@ -609,6 +655,63 @@ data class ListeningStateImportResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
     val status: String = "",
     val report: Map<String, Any?> = emptyMap(),
+)
+
+/**
+ * `GET /api/mobile/exports` — the finished M4B audiobooks on the server (#113).
+ *
+ * Written for this app specifically, and deliberately read-only: starting an export and deleting
+ * one stay on the web console. Every entry is flagged `playable_in_app: false` for a reason worth
+ * repeating here — the app streams a fiction chapter by chapter with a position per chapter, which
+ * is strictly better in-app than one multi-gigabyte file carrying a single position. What an export
+ * is *for* is handing to a third-party audiobook player.
+ *
+ * [ffmpegAvailable] is not a capability and is not redundant with one. `audiobook_export` says the
+ * route exists; this says whether the server can currently encode anything at all. A client that
+ * showed an empty list on a server without ffmpeg would be reporting the wrong problem.
+ */
+data class AudiobookExportsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    @param:Json(name = "ffmpeg_available") val ffmpegAvailable: Boolean = false,
+    val exports: List<AudiobookExport> = emptyList(),
+)
+
+/**
+ * One finished M4B file.
+ *
+ * A *file*, not a request: a split export of a nine-hundred-chapter serial is several entries
+ * sharing a batch, told apart by [partIndex] of [partCount]. Each is downloaded, and deleted on the
+ * web, on its own.
+ *
+ * [sizeLabel] and [durationLabel] are the server's own words for [sizeBytes] and [durationSeconds],
+ * and are preferred when shown. The web storage page quotes those exact strings, and two clients
+ * disagreeing over whether a file is 1.4 GB or 1.5 GB is a support question nobody needs.
+ *
+ * [requiresBearerAuth] is the awkward part, and is always true: [downloadUrl] needs the
+ * `Authorization` header, so it is not a link the system browser or DownloadManager can be handed.
+ */
+data class AudiobookExport(
+    val id: Int = 0,
+    @param:Json(name = "fiction_id") val fictionId: Int = 0,
+    @param:Json(name = "fiction_title") val fictionTitle: String? = null,
+    /** The export's own title — "Ashes of the Sun, Part 2" — which is not the fiction's. */
+    val title: String? = null,
+    val filename: String? = null,
+    @param:Json(name = "part_index") val partIndex: Int = 1,
+    @param:Json(name = "part_count") val partCount: Int = 1,
+    @param:Json(name = "chapter_count") val chapterCount: Int = 0,
+    /** Null on an unnumbered chapter — the server's own reason for storing chapter ids as well. */
+    @param:Json(name = "first_chapter_number") val firstChapterNumber: Int? = null,
+    @param:Json(name = "last_chapter_number") val lastChapterNumber: Int? = null,
+    @param:Json(name = "duration_seconds") val durationSeconds: Double = 0.0,
+    @param:Json(name = "duration_label") val durationLabel: String? = null,
+    @param:Json(name = "size_bytes") val sizeBytes: Long = 0L,
+    @param:Json(name = "size_label") val sizeLabel: String? = null,
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    @param:Json(name = "completed_at") val completedAt: String? = null,
+    @param:Json(name = "download_url") val downloadUrl: String? = null,
+    @param:Json(name = "requires_bearer_auth") val requiresBearerAuth: Boolean = true,
+    @param:Json(name = "playable_in_app") val playableInApp: Boolean = false,
 )
 
 /**

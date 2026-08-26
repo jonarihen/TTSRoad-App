@@ -164,4 +164,35 @@ class ServerCapabilitiesTest {
 
         assertNull(capabilities.maxChaptersPerPage)
     }
+
+    @Test
+    fun `the epub ceiling survives being a double, which is the only kind of number Moshi makes`() {
+        // 100 MB is 104857600, which is well past what a Float holds exactly and is parsed into a
+        // Double before anything here sees it. Reading it as an Int would also silently work for
+        // this value and stop working the day a server raises the limit past 2 GB.
+        val capabilities = ServerCapabilities.from(
+            CapabilitiesResponse(
+                capabilities = mapOf("epub_upload" to true),
+                limits = mapOf("max_epub_bytes" to 104857600.0),
+            ),
+        )
+
+        assertTrue(capabilities.epubUpload)
+        assertEquals(104857600L, capabilities.maxEpubBytes)
+        assertEquals(104857600L, capabilities.effectiveMaxEpubBytes)
+    }
+
+    @Test
+    fun `a server that offers epub upload without publishing a ceiling gets the documented one`() {
+        // The flag and the limit shipped together, but a client cannot assume that: the fallback is
+        // the value the server itself compiles in, so it refuses exactly what the server would.
+        val capabilities = ServerCapabilities.from(
+            CapabilitiesResponse(capabilities = mapOf("epub_upload" to true)),
+        )
+
+        assertTrue(capabilities.epubUpload)
+        assertNull(capabilities.maxEpubBytes)
+        assertEquals(DefaultMaxEpubBytes, capabilities.effectiveMaxEpubBytes)
+        assertEquals(DefaultMaxEpubBytes, ServerCapabilities.Baseline.effectiveMaxEpubBytes)
+    }
 }

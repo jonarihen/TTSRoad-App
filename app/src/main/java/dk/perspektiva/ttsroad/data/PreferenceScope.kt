@@ -30,8 +30,7 @@ object PreferenceScope {
      * Deliberately never synced: see `AccountPreferences.kt`. The line exists because "kept across
      * restarts" was all the old copy said, which left the reader of it to assume either answer.
      */
-    const val DevicePlayer: String =
-        "Kept on this phone, not on your account — earbuds and speakers want different settings."
+    const val DevicePlayer: String = "Kept on this phone, not on your account."
 
     /** A setting that follows the account whenever the server can hold it. */
     fun account(syncsWithAccount: Boolean): String = if (syncsWithAccount) {

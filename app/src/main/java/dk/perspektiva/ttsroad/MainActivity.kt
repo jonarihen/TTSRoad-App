@@ -151,11 +151,15 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.data.AudiobookExportRow
+import dk.perspektiva.ttsroad.data.AudiobookExportsResponse
 import dk.perspektiva.ttsroad.data.ChapterFilter
 import dk.perspektiva.ttsroad.data.Bookmark
 import dk.perspektiva.ttsroad.data.CapabilityCatalog
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.DefaultMaxEpubBytes
 import dk.perspektiva.ttsroad.data.DeviceSession
+import dk.perspektiva.ttsroad.data.EpubPickerMimeTypes
 import dk.perspektiva.ttsroad.data.FictionAddResult
 import dk.perspektiva.ttsroad.data.FictionEditResult
 import dk.perspektiva.ttsroad.data.FictionMetadataDraft
@@ -168,6 +172,7 @@ import dk.perspektiva.ttsroad.data.MetadataFieldDescription
 import dk.perspektiva.ttsroad.data.MetadataFieldTags
 import dk.perspektiva.ttsroad.data.MetadataFieldTitle
 import dk.perspektiva.ttsroad.data.PickedCover
+import dk.perspektiva.ttsroad.data.PickedEpub
 import dk.perspektiva.ttsroad.data.QueueAdvanceResponse
 import dk.perspektiva.ttsroad.data.QueueItem
 import dk.perspektiva.ttsroad.data.QueueResponse
@@ -177,6 +182,8 @@ import dk.perspektiva.ttsroad.data.sanitizeQueueWhenEmpty
 import dk.perspektiva.ttsroad.data.fictionMetadataPatch
 import dk.perspektiva.ttsroad.data.formatFictionTags
 import dk.perspektiva.ttsroad.data.readPickedCover
+import dk.perspektiva.ttsroad.data.readPickedEpub
+import dk.perspektiva.ttsroad.data.megabyteLabel
 import dk.perspektiva.ttsroad.data.formatExpiresIn
 import dk.perspektiva.ttsroad.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.data.FeedsResponse
@@ -220,6 +227,8 @@ import dk.perspektiva.ttsroad.data.readerAutoScrollOffsetPx
 import dk.perspektiva.ttsroad.data.shouldKeepReaderScreenOn
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
+import dk.perspektiva.ttsroad.data.audiobookExportEncoderNote
+import dk.perspektiva.ttsroad.data.audiobookExportRows
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
@@ -2526,6 +2535,11 @@ private fun PlayerScreen(
                         },
                     )
                 }
+                MetaText(
+                    text = PreferenceScope.DevicePlayer,
+                    color = AarisColor.Dim,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             }
             speedOptions(playerState.speed).forEach { preset ->
@@ -3044,6 +3058,24 @@ private fun SettingsScreen(
         }
     }
 
+    // Finished M4B exports (#113). Two gates, like every other admin surface: the capability says
+    // the server has the route, `is_admin` says this account may reach it. Asking without the
+    // second is a 403 the user cannot act on.
+    var exports by remember { mutableStateOf<AudiobookExportsResponse?>(null) }
+    var exportsError by remember { mutableStateOf<String?>(null) }
+    val canListExports = capabilities.audiobookExport && session.isAdmin
+
+    LaunchedEffect(canListExports) {
+        exportsError = null
+        exports = if (!canListExports) {
+            null
+        } else {
+            runCatching { repository.audiobookExports() }
+                .onFailure { exportsError = it.message ?: "Could not load the export list" }
+                .getOrNull()
+        }
+    }
+
     /**
      * Write the account's listening state to a file the user chose (#116).
      *
@@ -3357,7 +3389,7 @@ private fun SettingsScreen(
                             text = "Shortens the long pauses synthesised speech leaves around " +
                                 "headings and scene breaks. Off by default, because the web " +
                                 "player has no equivalent and leaving it on makes the same " +
-                                "chapter finish sooner here.",
+                                "chapter finish sooner here. " + PreferenceScope.DevicePlayer,
                             color = AarisColor.Dim,
                         )
                     }
@@ -3373,7 +3405,7 @@ private fun SettingsScreen(
                 MetaText(text = "Volume boost")
                 MetaText(
                     text = "Lifts chapters converted at a lower level, so a quiet one does not " +
-                        "mean reaching for the volume.",
+                        "mean reaching for the volume. " + PreferenceScope.DevicePlayer,
                     color = AarisColor.Dim,
                 )
                 AarisChoiceRow(
@@ -3578,6 +3610,71 @@ private fun SettingsScreen(
                             "are added, so an old backup cannot undo newer listening.",
                         color = AarisColor.Dim,
                     )
+                }
+            }
+        }
+
+        // Whole-book M4B files the server has already made (#113). Read-only and admin-only,
+        // exactly as the server has it: starting an export and deleting one stay on the web
+        // console. The app deliberately does not *play* these — it streams a fiction chapter by
+        // chapter with a position per chapter, and one multi-gigabyte file carrying a single
+        // position is a downgrade, not a feature. What they are for is another audiobook player.
+        if (canListExports) {
+            MetaText(text = "// Audiobook exports", color = AarisColor.Accent)
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MetaText(
+                        text = "Finished M4B files on this server, for handing to another " +
+                            "audiobook player. Making one and deleting one are still jobs for " +
+                            "the web console.",
+                        color = AarisColor.Dim,
+                    )
+                    exportsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    // ffmpeg is reported per request, not as a capability: the route existing and
+                    // the machine behind it being able to encode are two different questions, and
+                    // an empty list would answer the wrong one.
+                    audiobookExportEncoderNote(exports)?.let {
+                        MetaText(text = it, color = AarisColor.Warning)
+                    }
+                    val rows = remember(exports, session.serverUrl) {
+                        audiobookExportRows(exports) {
+                            ServerUrls.rewriteHost(it, session.serverUrl)
+                        }
+                    }
+                    if (rows.isEmpty()) {
+                        // The error above already says why an empty list is empty, when it is.
+                        if (exportsError == null) {
+                            MetaText(
+                                text = if (exports == null) {
+                                    "Loading…"
+                                } else {
+                                    "Nothing has been exported on this server yet."
+                                },
+                                color = AarisColor.Muted,
+                            )
+                        }
+                    } else {
+                        MetaText(
+                            text = "A download carries your account's bearer token, so these links " +
+                                "do nothing in a plain browser. Share one to something that can " +
+                                "send the header.",
+                            color = AarisColor.Dim,
+                        )
+                        rows.forEachIndexed { index, row ->
+                            if (index > 0) {
+                                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                            }
+                            AudiobookExportListItem(
+                                row = row,
+                                onShare = { shareText(context, it, row.title) },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -5194,10 +5291,17 @@ private fun FictionsScreen(
                     // Adding lives on the browse screen rather than the shelf because this is the
                     // screen that already answers "what is on this server", and a fiction has to
                     // exist here before it can be followed onto a shelf.
-                    if (capabilities.fictionManagement && isAdmin) {
+                    // Two separate server capabilities, deliberately: a deployment may take JSON
+                    // fiction CRUD without accepting file uploads, or the reverse. Either one is
+                    // enough to draw the section — it just holds fewer controls (#114).
+                    if (isAdmin && (capabilities.fictionManagement || capabilities.epubUpload)) {
                         fullWidthItem(key = "add-fiction") {
                             AddFictionSection(
+                                canAddByUrl = capabilities.fictionManagement,
+                                canUploadEpub = capabilities.epubUpload,
+                                maxEpubBytes = capabilities.effectiveMaxEpubBytes,
                                 onAdd = { url -> repository.addFiction(url) },
+                                onUploadEpub = { book -> repository.uploadEpub(book) },
                                 onAdded = refresh,
                             )
                         }
@@ -5273,27 +5377,101 @@ private fun FictionsScreen(
 }
 
 /**
- * Paste a fiction URL and track it. Admin-only, and hidden entirely on a server without
- * `fiction_management`.
+ * The two ways a fiction gets into the library from a phone: paste a URL, or hand over a book that
+ * is already on the device. Admin-only, and each half is hidden unless the server advertises it.
  *
- * A single field is the whole interaction on purpose. The URL is usually already in the clipboard
- * from browsing on the phone, and everything else the create endpoint accepts — voice, rate, the
- * sync window — has a server-side default and is a poor thing to be choosing on a phone.
+ * A single field is the whole interaction for the URL path on purpose. The URL is usually already in
+ * the clipboard from browsing on the phone, and everything else the create endpoint accepts — voice,
+ * rate, the sync window — has a server-side default and is a poor thing to be choosing on a phone.
+ * The upload takes the same view: no voice picker, just the file.
  *
  * The server's refusal is shown verbatim rather than replaced with a generic failure: it is the half
  * that knows which sites have adapters, and "Fiction already tracked" is a different instruction to
- * the user than "that is not a URL I can read".
+ * the user than "that is not a URL I can read". The same goes for an EPUB the server recognises by
+ * content hash — "already uploaded" is an answer, not an error to retry.
+ *
+ * Internal rather than private so the capability gating can be tested: which controls a server can
+ * back is the whole behaviour here, and it is invisible from the outside when it is wrong.
  */
 @Composable
-private fun AddFictionSection(
-    onAdd: suspend (String) -> FictionAddResult,
-    onAdded: () -> Unit,
+internal fun AddFictionSection(
+    canAddByUrl: Boolean = true,
+    canUploadEpub: Boolean = false,
+    /** This server's advertised ceiling, so an oversized book is refused before it is uploaded. */
+    maxEpubBytes: Long = DefaultMaxEpubBytes,
+    onAdd: suspend (String) -> FictionAddResult = { FictionAddResult.Unsupported },
+    onUploadEpub: suspend (PickedEpub.Ready) -> FictionAddResult = { FictionAddResult.Unsupported },
+    onAdded: () -> Unit = {},
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var url by rememberSaveable { mutableStateOf("") }
     var isAdding by remember { mutableStateOf(false) }
+    var isUploading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var isError by remember { mutableStateOf(false) }
+
+    /** What to say about a result, and whether the list behind this needs to be refetched. */
+    fun adopt(result: FictionAddResult, clearsUrl: Boolean) {
+        when (result) {
+            is FictionAddResult.Added -> {
+                isError = false
+                message = result.fiction?.title?.let { "Tracking \"$it\"." } ?: "Fiction added."
+                // Cleared only on success, so a rejected URL stays in the field to be corrected
+                // rather than having to be pasted again.
+                if (clearsUrl) url = ""
+                // The new fiction is not in the loaded list, and conversion has only just been
+                // queued, so the list has to come from the server again.
+                onAdded()
+            }
+
+            is FictionAddResult.Refused -> {
+                isError = true
+                message = result.message
+            }
+
+            FictionAddResult.Unsupported -> {
+                isError = true
+                message = "This server cannot add fictions."
+            }
+        }
+    }
+
+    /**
+     * Pick a book off the device and send it.
+     *
+     * `OpenDocument` rather than the visual-media picker the cover upload uses: an EPUB is a
+     * document, and it is as likely to be in Downloads or a cloud drive as anywhere the gallery
+     * knows about. The URI it hands back is readable for as long as this screen lives, which is
+     * longer than the upload takes.
+     */
+    val pickEpub = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        // A cancelled picker is not an event: no message, no state change.
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            isUploading = true
+            message = null
+            // Off the main thread: the metadata query talks to a content provider that may be
+            // backed by anything, including a network.
+            val picked = withContext(Dispatchers.IO) {
+                readPickedEpub(context.contentResolver, uri, maxEpubBytes)
+            }
+            when (picked) {
+                is PickedEpub.Rejected -> {
+                    isError = true
+                    message = picked.message
+                }
+
+                is PickedEpub.Ready -> {
+                    val result = runCatching { onUploadEpub(picked) }.getOrElse { failure ->
+                        FictionAddResult.Refused(failure.message ?: "Could not upload that book.")
+                    }
+                    adopt(result, clearsUrl = false)
+                }
+            }
+            isUploading = false
+        }
+    }
 
     Column(
         // No horizontal gutter of its own: this is a full-width row of the browse grid now, and
@@ -5303,61 +5481,56 @@ private fun AddFictionSection(
             .padding(top = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        OutlinedTextField(
-            value = url,
-            onValueChange = {
-                url = it
-                message = null
-            },
-            label = { Text("ADD A FICTION BY URL OR ID") },
-            placeholder = { Text("Royal Road URL or ID") },
-            singleLine = true,
-            enabled = !isAdding,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(
-            onClick = {
-                scope.launch {
-                    isAdding = true
+        val isBusy = isAdding || isUploading
+        if (canAddByUrl) {
+            OutlinedTextField(
+                value = url,
+                onValueChange = {
+                    url = it
                     message = null
-                    val result = runCatching { onAdd(url) }.getOrElse { failure ->
-                        isError = true
-                        message = failure.message ?: "Could not add this fiction."
+                },
+                label = { Text("ADD A FICTION BY URL OR ID") },
+                placeholder = { Text("Royal Road URL or ID") },
+                singleLine = true,
+                enabled = !isBusy,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = {
+                    scope.launch {
+                        isAdding = true
+                        message = null
+                        val result = runCatching { onAdd(url) }.getOrElse { failure ->
+                            FictionAddResult.Refused(
+                                failure.message ?: "Could not add this fiction.",
+                            )
+                        }
+                        adopt(result, clearsUrl = true)
                         isAdding = false
-                        return@launch
                     }
-                    when (result) {
-                        is FictionAddResult.Added -> {
-                            isError = false
-                            message = result.fiction?.title?.let { "Tracking \"$it\"." }
-                                ?: "Fiction added."
-                            // Cleared only on success, so a rejected URL stays in the field to be
-                            // corrected rather than having to be pasted again.
-                            url = ""
-                            // The new fiction is not in the loaded list, and conversion has only
-                            // just been queued, so the list has to come from the server again.
-                            onAdded()
-                        }
-
-                        is FictionAddResult.Refused -> {
-                            isError = true
-                            message = result.message
-                        }
-
-                        FictionAddResult.Unsupported -> {
-                            isError = true
-                            message = "This server cannot add fictions."
-                        }
-                    }
-                    isAdding = false
-                }
-            },
-            enabled = !isAdding && url.isNotBlank(),
-            shape = RectangleShape,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (isAdding) "ADDING" else "ADD FICTION")
+                },
+                enabled = !isBusy && url.isNotBlank(),
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isAdding) "ADDING" else "ADD FICTION")
+            }
+        }
+        if (canUploadEpub) {
+            OutlinedButton(
+                onClick = { pickEpub.launch(EpubPickerMimeTypes) },
+                enabled = !isBusy,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isUploading) "UPLOADING" else "UPLOAD AN EPUB")
+            }
+            MetaText(
+                text = "A book already on this phone. Chapters are detected automatically, and " +
+                    "narration starts on the server. Up to ${megabyteLabel(maxEpubBytes)}.",
+                color = AarisColor.Dim,
+            )
         }
         message?.let {
             MetaText(text = it, color = if (isError) AarisColor.Danger else AarisColor.Muted)
@@ -5927,6 +6100,43 @@ private fun ShareUrlRow(label: String, url: String?, onShare: (String) -> Unit) 
         MetaText(text = url, color = AarisColor.Dim, maxLines = 2)
         OutlinedButton(onClick = { onShare(url) }, shape = RectangleShape) {
             Text("SHARE")
+        }
+    }
+}
+
+/**
+ * One finished M4B export: what it is, how big it is, when it finished, and where it lives (#113).
+ *
+ * There is no play button, and that is the design rather than an omission — the app streams a
+ * fiction chapter by chapter with a position per chapter, which beats one multi-gigabyte file with
+ * a single position everywhere except inside another app. Nor is there a download button: the URL
+ * needs the account's `Authorization` header, so the phone cannot hand it to the system browser or
+ * to DownloadManager and expect anything but a 401. Sharing is the honest action for a link that
+ * only means something to something holding a token.
+ */
+@Composable
+private fun AudiobookExportListItem(row: AudiobookExportRow, onShare: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = row.title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = AarisColor.Ink,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        row.detail.takeIf { it.isNotBlank() }?.let { MetaText(text = it, color = AarisColor.Muted) }
+        row.finished?.let { MetaText(text = "Finished $it", color = AarisColor.Dim) }
+        val url = row.downloadUrl
+        if (url == null) {
+            // The URL is built from the server's own BASE_URL and can come back empty. Saying so
+            // beats a SHARE button that shares nothing.
+            MetaText(text = "This server did not give a download link.", color = AarisColor.Dim)
+        } else {
+            MetaText(text = url, color = AarisColor.Dim, maxLines = 2)
+            OutlinedButton(onClick = { onShare(url) }, shape = RectangleShape) {
+                Text("SHARE LINK")
+            }
         }
     }
 }

@@ -44,6 +44,8 @@ import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.effectiveSpeed
+import dk.perspektiva.ttsroad.data.libraryMoved
+import dk.perspektiva.ttsroad.data.mergeLibraryDelta
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.PendingProgressStore
@@ -97,6 +99,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var progressSync: ProgressSync
     private var shakeDetector: ShakeDetector? = null
     private var lastLibrary: LibraryResponse? = null
+    private var lastLibraryCursor: String? = null
 
     // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
     // outage later in the night gets a fresh set of attempts rather than giving up immediately.
@@ -686,7 +689,33 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun serverUrl(): String = tokenStore.current().serverUrl
 
     private suspend fun library(): LibraryResponse? {
-        val loaded = runCatching { repository.library() }.getOrNull()
+        // Android Auto can start the service in a fresh process without MainActivity having run
+        // capability discovery. Do it here once so the car benefits from delta sync too.
+        if (repository.currentCapabilities.value.advertised.isEmpty()) {
+            repository.refreshCurrentCapabilities()
+        }
+        val previous = lastLibrary
+        val cursor = lastLibraryCursor
+        val loaded = runCatching {
+            if (previous != null && cursor != null &&
+                repository.currentCapabilities.value.deltaSync
+            ) {
+                val index = repository.deltaSync(cursor)
+                val refreshed = if (index?.libraryMoved() == true) {
+                    mergeLibraryDelta(previous, repository.library(updatedSince = cursor))
+                } else {
+                    previous
+                }
+                if (index != null) {
+                    lastLibraryCursor = index.serverTime
+                    refreshed.copy(serverTime = index.serverTime)
+                } else {
+                    refreshed
+                }
+            } else {
+                repository.library().also { lastLibraryCursor = it.serverTime }
+            }
+        }.getOrNull()
         if (loaded != null) {
             lastLibrary = loaded
         }

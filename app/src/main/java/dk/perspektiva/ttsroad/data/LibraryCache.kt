@@ -60,6 +60,12 @@ class LibraryCache(private val repository: TtsRoadRepository) {
 
     private val chapterStates = mutableMapOf<Int, MutableStateFlow<Cached<List<ChapterSummary>>>>()
 
+    // Server-issued cursors only. A device clock can be wrong, and advancing a cursor before every
+    // sparse pull succeeds would skip whatever the failed pull was meant to carry (#110).
+    private var libraryCursor: String? = null
+    private var browseAllCursor: String? = null
+    private val chapterCursors = mutableMapOf<Int, String>()
+
     // One in-flight load per key. A pull-to-refresh landing on top of the initial load should not
     // produce two requests racing to write the same state.
     private var libraryJob: Job? = null
@@ -82,7 +88,7 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         libraryJob?.cancel()
         libraryJob = scope.launch {
             _library.value = _library.value.copy(isRefreshing = true, error = null)
-            _library.value = runCatching { repository.library() }.fold(
+            _library.value = runCatching { refreshedLibrary() }.fold(
                 onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
                     // Keep the stale content: a failed refresh should not throw away a library the
@@ -96,6 +102,53 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         }
     }
 
+    /**
+     * Use the sync index to update the shelf and every chapter list already held in memory.
+     *
+     * The cursor is committed last. Sparse merges are idempotent, so a failure after one chapter
+     * list was updated simply repeats that row next time instead of advancing past data another
+     * list never received.
+     */
+    private suspend fun refreshedLibrary(): LibraryResponse {
+        val existing = _library.value.value
+        val cursor = libraryCursor
+        if (existing == null || cursor == null || !repository.currentCapabilities.value.deltaSync) {
+            return repository.library().also { libraryCursor = it.serverTime }
+        }
+
+        val index = repository.deltaSync(cursor)
+            ?: return repository.library().also { libraryCursor = it.serverTime }
+
+        index.fictionsWithChapterChanges().forEach { fictionId ->
+            val state = chapterStates[fictionId] ?: return@forEach
+            val chapters = state.value.value ?: return@forEach
+            // Each chapter list carries its own watermark, and it is not the library's. A list
+            // loaded before the shelf last synced is behind that cursor, so asking with the
+            // library's reading would skip everything that moved in between and then advance past
+            // it. No watermark at all means no baseline to be sparse against, so that is a full
+            // pull rather than a guess.
+            val update = repository.chapters(
+                fictionId = fictionId,
+                updatedSince = chapterCursors[fictionId],
+            )
+            state.value = Cached(value = mergeChapterDelta(chapters, update))
+            update.serverTime?.let { chapterCursors[fictionId] = it }
+        }
+
+        index.deleted.fictions.forEach { fictionId ->
+            chapterStates[fictionId]?.value = Cached(value = emptyList())
+            chapterCursors.remove(fictionId)
+        }
+
+        val refreshed = if (index.libraryMoved()) {
+            mergeLibraryDelta(existing, repository.library(updatedSince = cursor))
+        } else {
+            existing
+        }
+        libraryCursor = index.serverTime
+        return refreshed.copy(serverTime = index.serverTime)
+    }
+
     fun ensureBrowseAll() {
         if (_browseAll.value.hasContent || browseAllJob?.isActive == true) return
         refreshBrowseAll()
@@ -105,7 +158,7 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         browseAllJob?.cancel()
         browseAllJob = scope.launch {
             _browseAll.value = _browseAll.value.copy(isRefreshing = true, error = null)
-            _browseAll.value = runCatching { repository.library(LibraryScopeAll) }.fold(
+            _browseAll.value = runCatching { refreshedBrowseAll() }.fold(
                 onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
                     _browseAll.value.copy(
@@ -115,6 +168,24 @@ class LibraryCache(private val repository: TtsRoadRepository) {
                 },
             )
         }
+    }
+
+    /** Browse-all is one payload, so its delta is already the cheapest possible change check. */
+    private suspend fun refreshedBrowseAll(): LibraryResponse {
+        val existing = _browseAll.value.value
+        val cursor = browseAllCursor
+        val refreshed = if (
+            existing != null && cursor != null && repository.currentCapabilities.value.deltaSync
+        ) {
+            mergeLibraryDelta(
+                existing,
+                repository.library(scope = LibraryScopeAll, updatedSince = cursor),
+            )
+        } else {
+            repository.library(LibraryScopeAll)
+        }
+        browseAllCursor = refreshed.serverTime ?: browseAllCursor
+        return refreshed
     }
 
     /**
@@ -192,8 +263,25 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         val state = chapterState(fictionId)
         chapterJobs[fictionId] = scope.launch {
             state.value = state.value.copy(isRefreshing = true, error = null)
-            state.value = runCatching { repository.chapters(fictionId) }.fold(
-                onSuccess = { Cached(value = it.chapters) },
+            state.value = runCatching {
+                val current = state.value.value
+                val cursor = chapterCursors[fictionId]
+                val response = if (
+                    current != null && cursor != null && repository.currentCapabilities.value.deltaSync
+                ) {
+                    repository.chapters(fictionId, updatedSince = cursor)
+                } else {
+                    repository.chapters(fictionId)
+                }
+                val chapters = if (current == null) {
+                    response.chapters
+                } else {
+                    mergeChapterDelta(current, response)
+                }
+                response.serverTime?.let { chapterCursors[fictionId] = it }
+                chapters
+            }.fold(
+                onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
                     state.value.copy(
                         isRefreshing = false,
@@ -231,9 +319,12 @@ class LibraryCache(private val repository: TtsRoadRepository) {
     fun clear() {
         libraryJob?.cancel()
         browseAllJob?.cancel()
+        libraryCursor = null
+        browseAllCursor = null
         _browseAll.value = Cached()
         chapterJobs.values.forEach(Job::cancel)
         chapterJobs.clear()
+        chapterCursors.clear()
         _library.value = Cached()
         chapterStates.values.forEach { it.value = Cached() }
         chapterStates.clear()

@@ -79,7 +79,8 @@ again after login before loading the library. Cache the result per base URL, and
     "device_management": true
   },
   "limits": {
-    "max_chapters_per_page": 200
+    "max_chapters_per_page": 200,
+    "max_epub_bytes": 104857600
   }
 }
 ```
@@ -372,6 +373,37 @@ This is all additive — `api_version` stays `1`. Against an older server:
   The echoed fiction is the only place the difference shows: **no `metadata_overrides` key means the
   server cannot hold a hand-edited field**, and a client should not offer one. Note that absent and
   `[]` are different answers — the second means "nothing has been edited yet".
+
+### Importing an EPUB
+
+Admin-only, and gated on its own capability: `epub_upload` is deliberately separate from
+`fiction_management`, because a deployment may accept JSON fiction CRUD without accepting files.
+A client needs the flag *and* `is_admin` before it offers the control.
+
+```http
+POST /api/mobile/fictions/upload-epub
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+
+file=<the .epub, 100 MB max>
+```
+
+The part must be named exactly `file`. `voice`, `rate` and `enabled` are optional form fields; left
+out, the server applies its own defaults. Answers `201` with the same `{api_version, status,
+fiction}` envelope as `POST /api/mobile/fictions`, carrying the fiction the book became — chapters
+are split out of the EPUB and queued for narration in the background.
+
+Two of the server's rules matter on the client side:
+
+- **The filename decides, not the content type.** Anything whose name does not end in `.epub` is a
+  `400`, and the `Content-Type` of the part is never inspected. A document provider that reports an
+  EPUB as `application/octet-stream` is common, so filter the picker loosely and check the name.
+- **The ceiling is published.** `limits.max_epub_bytes` is there so a client can refuse an oversized
+  file *before* uploading it; the server answers `413` only after the bytes have arrived. Fall back
+  to 100 MB when a server offers the route without publishing the limit.
+
+A book the server has seen before is a `409` — it deduplicates on the content hash of the file, so
+this means "already in the library", not "that failed". Show the `detail` verbatim.
 
 ### Save Playback Progress
 

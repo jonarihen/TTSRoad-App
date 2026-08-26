@@ -55,8 +55,7 @@ class CapabilityCatalogTest {
     fun `a supported flag the app does not use says so instead of claiming a tick`() {
         // These are true on the server and unused here. A bare "Yes" would promise the user a
         // feature that is not in the app.
-        assertNotNull(CapabilityCatalog.note("delta_sync", supported = true))
-        assertNotNull(CapabilityCatalog.note("audiobook_export", supported = true))
+        assertNotNull(CapabilityCatalog.note("voice_preview", supported = true))
         assertNotNull(CapabilityCatalog.note("live_events", supported = true))
     }
 
@@ -65,6 +64,13 @@ class CapabilityCatalogTest {
         assertNull(CapabilityCatalog.note("readalong", supported = true))
         assertNull(CapabilityCatalog.note("bookmarks", supported = true))
         assertNull(CapabilityCatalog.note("queue", supported = true))
+        // Used since #114: the panel said "not used yet" about a button that is now on the browse
+        // screen, which is worse than saying nothing.
+        assertNull(CapabilityCatalog.note("epub_upload", supported = true))
+        // Refreshes have been driven by the sync index since #110, so the qualifier came off.
+        assertNull(CapabilityCatalog.note("delta_sync", supported = true))
+        // Listing exports shipped in #113, so the "not used yet" qualifier came off with it.
+        assertNull(CapabilityCatalog.note("audiobook_export", supported = true))
     }
 
     @Test

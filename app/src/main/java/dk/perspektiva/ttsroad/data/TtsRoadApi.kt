@@ -21,6 +21,17 @@ import retrofit2.http.Query
  */
 const val NoAuthHeader = "X-TtsRoad-No-Auth"
 
+/**
+ * Marks a request that may legitimately take minutes, so the shared client lends it a longer clock.
+ *
+ * The client's 60-second read timeout is sized for JSON, and an EPUB upload is not: the phone may
+ * be pushing a hundred megabytes up a mobile connection, and the server then parses the book,
+ * splits its chapters and writes them all before it answers `201`. Timing that out would report a
+ * failure for an import that in fact succeeded — and the retry it invites comes back `409`. Stripped
+ * by the interceptor, like [NoAuthHeader]; it never reaches the wire.
+ */
+const val SlowUploadHeader = "X-TtsRoad-Slow-Upload"
+
 interface TtsRoadApi {
     @Headers("$NoAuthHeader: 1")
     @GET("api/mobile/capabilities")
@@ -55,6 +66,7 @@ interface TtsRoadApi {
     @GET("api/mobile/library")
     suspend fun library(
         @Query("scope") scope: String = LibraryScopeFollowed,
+        @Query("updated_since") updatedSince: String? = null,
     ): LibraryResponse
 
     @GET("api/mobile/fictions/{fiction_id}/chapters")
@@ -62,7 +74,12 @@ interface TtsRoadApi {
         @Path("fiction_id") fictionId: Int,
         @Query("playable_only") playableOnly: Boolean = false,
         @Query("include_excluded") includeExcluded: Boolean = false,
+        @Query("updated_since") updatedSince: String? = null,
     ): ChaptersResponse
+
+    /** Cheap change index used before pulling sparse library and chapter payloads (#110). */
+    @GET("api/mobile/sync")
+    suspend fun deltaSync(@Query("updated_since") updatedSince: String): DeltaSyncResponse
 
     /**
      * Content hashes for one fiction's converted chapters — what a download index needs and nothing
@@ -167,6 +184,23 @@ interface TtsRoadApi {
         @Path("fiction_id") fictionId: Int,
         @Part file: MultipartBody.Part,
     ): FictionWriteResponse
+
+    /**
+     * Import a book from the device. Admin-only, and answers the same envelope as [addFiction] with
+     * the fiction the EPUB became.
+     *
+     * Gated on `epub_upload` rather than on `fiction_management`, which is the server's own
+     * distinction: taking files is a different thing to accept than taking JSON, and a deployment
+     * may reasonably do one without the other.
+     *
+     * The part must be named `file`; anything else is a 422. `voice`, `rate` and `enabled` are
+     * optional form fields this client leaves to the server's defaults — the same argument the
+     * add-by-URL form makes, that a voice is a poor thing to be choosing on a phone.
+     */
+    @Multipart
+    @Headers("$SlowUploadHeader: 1")
+    @POST("api/mobile/fictions/upload-epub")
+    suspend fun uploadEpub(@Part file: MultipartBody.Part): FictionWriteResponse
 
     /** Destroys the fiction, its chapters and its audio, for every account on the server. */
     @DELETE("api/mobile/fictions/{fiction_id}")
@@ -277,6 +311,16 @@ interface TtsRoadApi {
     suspend fun rotateFictionFeedToken(
         @Path("fiction_id") fictionId: Int,
     ): MaintenanceResponse
+
+    /**
+     * The finished M4B audiobooks on the server (#113).
+     *
+     * Admin-only server-side, and read-only by design: starting an export and deleting one stay on
+     * the web console. The reply also carries `ffmpeg_available`, which is what lets a client say
+     * "this server cannot make one right now" instead of offering a button that would fail.
+     */
+    @GET("api/mobile/exports")
+    suspend fun audiobookExports(): AudiobookExportsResponse
 
     /** Every position and chosen mark on this account, as a portable document (#116). */
     @GET("api/mobile/listening-state")
