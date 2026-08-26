@@ -49,6 +49,15 @@ sealed interface AppScreen {
      * without a car or a browser (#108).
      */
     data object Queue : AppScreen
+
+    /**
+     * Listening statistics, reached from Settings.
+     *
+     * Its own destination rather than a Settings card because it is the one screen here that is
+     * read rather than operated, and because it holds two independent sources — what this device
+     * recorded, and what the account's server has aggregated — neither of which fits in a row.
+     */
+    data object Stats : AppScreen
 }
 
 /** Stable key for per-entry saved UI state (scroll offsets, search text). */
@@ -68,6 +77,7 @@ val AppScreen.saveKey: String
         AppScreen.Devices -> "Devices"
         AppScreen.Bookmarks -> "Bookmarks"
         AppScreen.Queue -> "Queue"
+        AppScreen.Stats -> "Stats"
     }
 
 /** The stack every session starts from. */

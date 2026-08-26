@@ -33,6 +33,16 @@ private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
 const val DefaultPlaybackSyncBatchLimit: Int = 100
 
 /**
+ * Weeks of activity grid to ask for, and the range the server accepts.
+ *
+ * Twelve is the server's own default and what the web page shows. The bounds are the server's too:
+ * anything outside them is a `422` rather than a clamp, so the client clamps before asking.
+ */
+const val DefaultActivityWeeks: Int = 12
+const val MinActivityWeeks: Int = 1
+const val MaxActivityWeeks: Int = 53
+
+/**
  * Outcome of tracking a new fiction.
  *
  * A sealed result rather than an exception because every failure here is one the user can act on by
@@ -131,6 +141,21 @@ class TtsRoadRepository(
     private data class CachedReadAlongDocument(
         val etag: String?,
         val document: ReadAlongDocument,
+    )
+
+    /**
+     * The last stats payload seen for each `weeks` value, with the `ETag` that answered it.
+     *
+     * Keyed by `weeks` because a different grid size will not answer the previous `ETag` — the
+     * server folds it into the revision. In memory only: these are lifetime figures that move every
+     * time anything is played, so a copy surviving a process restart would be stale far more often
+     * than it would be useful, and re-asking costs one conditional request.
+     */
+    private val listeningStatsCache = HashMap<Int, CachedListeningStats>()
+
+    private data class CachedListeningStats(
+        val etag: String?,
+        val response: ListeningStatsResponse,
     )
 
     private val _currentCapabilities = MutableStateFlow(ServerCapabilities.Baseline)
@@ -807,6 +832,44 @@ class TtsRoadRepository(
      * Null is not "no feeds" — it means this server has no way to *tell* the app what the URLs are,
      * so nothing should be drawn rather than a share button that shares nothing.
      */
+    /**
+     * This account's listening totals, or null when the server has no such endpoint.
+     *
+     * Null and a thrown failure mean different things to the screen and must stay distinguishable:
+     * null is "this server cannot answer that", a permanent state the UI explains once, while a
+     * throw is "it could not answer *now*", which is worth a retry button.
+     *
+     * The `ETag` is what makes reopening the screen cheap. This is aggregation over every playback
+     * row the account owns, and the server offers a conditional request precisely because a Stats
+     * screen is the kind of thing people bounce in and out of. A `304` carries no body, which is
+     * why the cached payload rather than the empty response is what answers one.
+     */
+    suspend fun listeningStats(weeks: Int = DefaultActivityWeeks): ListeningStatsResponse? =
+        withContext(Dispatchers.IO) {
+            if (!_currentCapabilities.value.listeningStats) return@withContext null
+            // Clamped rather than passed through: the server answers 422 outside 1..53, and a
+            // screen choosing its own grid size should never be able to produce one.
+            val requested = weeks.coerceIn(MinActivityWeeks, MaxActivityWeeks)
+            val cached = synchronized(listeningStatsCache) { listeningStatsCache[requested] }
+            authorized { api ->
+                // Only conditional when there is something to revalidate, so a 304 can never
+                // arrive without a payload to answer it with.
+                val response = api.listeningStats(requested, cached?.etag)
+                when {
+                    response.code() == 304 -> cached?.response
+                    response.isSuccessful -> response.body()?.also { body ->
+                        val etag = response.headers()["ETag"]
+                        synchronized(listeningStatsCache) {
+                            listeningStatsCache[requested] = CachedListeningStats(etag, body)
+                        }
+                    }
+
+                    // Rethrown so `authorized` can see a 401 and expire the session.
+                    else -> throw HttpException(response)
+                }
+            }
+        }
+
     suspend fun feeds(scope: String = LibraryScopeFollowed): FeedsResponse? {
         if (!_currentCapabilities.value.feedUrls) return null
         return withAuthorizedApi { it.feeds(scope) }

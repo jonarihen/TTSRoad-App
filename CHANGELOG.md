@@ -6,6 +6,20 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **The device that does the listening can finally show it.** The web has had a Stats page for as
+  long as TTSRoad has — hours listened, chapters finished against chapters still open, a per-day
+  activity grid, streaks, where the hours went, badges — and the app, which writes nearly every
+  playback row those figures are counted from, was the only client that could not display any of
+  it. Settings → **LISTENING STATS** now shows both halves of the answer. The top of the screen is
+  worked out on the phone from the same playback log that powers jump-back: how long you have
+  actually been listening today, split by book, with no network involved. Underneath it are the
+  account's lifetime totals, streaks, twelve weeks of activity and the milestones, from the server's
+  `/api/mobile/stats`. The two are kept apart on purpose, because each answers something the other
+  cannot: the local half is a recent window of roughly eight hours and says so rather than implying
+  a total it has no way to hold, while the server counts a chapter's hours against the day it was
+  last touched and so can total a year but not a morning. A server too old to publish the endpoint
+  says that plainly, which is a different sentence from an account that has not listened to
+  anything yet. ([#117](https://github.com/jonarihen/TTSRoad-App/issues/117))
 - **Podcast feed links, from the phone.** Serving a private podcast feed is what TTSRoad is for, and
   the phone is where a podcast app lives — yet the only way to get a tokenised feed URL onto the
   phone was to mail it to yourself from a laptop. Settings now shows the combined feed and the OPML

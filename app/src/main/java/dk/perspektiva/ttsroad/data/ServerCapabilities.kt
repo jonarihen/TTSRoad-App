@@ -111,6 +111,15 @@ data class ServerCapabilities(
     val fictionMaintenance: Boolean = false,
 
     /**
+     * The listening figures the web `/stats` page renders, as JSON on `/api/mobile/stats` (#117).
+     *
+     * The phone and the car write nearly every playback row those figures are computed from, and
+     * were the only clients that could not show them. False means the server predates the endpoint,
+     * and the Stats screen falls back to what this device can work out on its own.
+     */
+    val listeningStats: Boolean = false,
+
+    /**
      * The podcast URLs this account can hand to a podcast app, and the lever that revokes them
      * (#115).
      *
@@ -193,6 +202,7 @@ data class ServerCapabilities(
                 epubUpload = flags.flag("epub_upload"),
                 chapterMaintenance = flags.flag("chapter_maintenance"),
                 fictionMaintenance = flags.flag("fiction_maintenance"),
+                listeningStats = flags.flag("listening_stats"),
                 feedUrls = flags.flag("feed_urls"),
                 listeningStateBackup = flags.flag("listening_state_backup"),
                 accountSecurity = flags.flag("account_security"),

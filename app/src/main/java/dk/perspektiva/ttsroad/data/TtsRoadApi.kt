@@ -234,6 +234,24 @@ interface TtsRoadApi {
     suspend fun disableTwoFactor(@Body request: TwoFactorDisableRequest): TwoFactorCodes
 
     /**
+     * This account's listening totals, streaks, activity grid and badges (#117).
+     *
+     * Returns the raw [Response] rather than the body for the same reason [readAlong] does: the
+     * route carries an `ETag` and honours `If-None-Match`, and this is per-user aggregation over
+     * every playback row the account owns. A Stats screen that gets opened often should be sending
+     * the conditional request.
+     *
+     * [weeks] sizes the activity grid and nothing else — every other figure is lifetime. It is
+     * validated server-side to 1..53 and answers a `422` outside that, so the caller clamps rather
+     * than passing a user-supplied number straight through.
+     */
+    @GET("api/mobile/stats")
+    suspend fun listeningStats(
+        @Query("weeks") weeks: Int,
+        @Header("If-None-Match") ifNoneMatch: String? = null,
+    ): Response<ListeningStatsResponse>
+
+    /**
      * Every podcast URL this account can hand to a podcast app (#115).
      *
      * Scoped to the caller's shelf by default — the URLs they would actually share — the same

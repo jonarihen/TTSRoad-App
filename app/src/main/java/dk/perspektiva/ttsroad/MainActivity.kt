@@ -673,6 +673,7 @@ private fun MainScaffold(
         AppScreen.Devices -> "Device sessions"
         AppScreen.Bookmarks -> "Bookmarks"
         AppScreen.Queue -> "Up next"
+        AppScreen.Stats -> "Listening stats"
     }
 
     Scaffold(
@@ -800,6 +801,7 @@ private fun MainScaffold(
                     onOpenDevices = { onScreenChange(AppScreen.Devices) },
                     onOpenBookmarks = { onScreenChange(AppScreen.Bookmarks) },
                     onOpenQueue = { onScreenChange(AppScreen.Queue) },
+                    onOpenStats = { onScreenChange(AppScreen.Stats) },
                 )
 
                 AppScreen.Devices -> DevicesScreen(
@@ -819,6 +821,11 @@ private fun MainScaffold(
                     repository = repository,
                     playbackController = playbackController,
                     onOpenPlayer = { onScreenChange(AppScreen.Player) },
+                )
+
+                AppScreen.Stats -> ListeningStatsScreen(
+                    padding = padding,
+                    repository = repository,
                 )
             }
         }
@@ -2997,6 +3004,7 @@ private fun SettingsScreen(
     onOpenDevices: () -> Unit,
     onOpenBookmarks: () -> Unit,
     onOpenQueue: () -> Unit,
+    onOpenStats: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -3155,6 +3163,17 @@ private fun SettingsScreen(
                     OutlinedButton(onClick = onOpenQueue, shape = RectangleShape) {
                         Text("UP NEXT")
                     }
+                }
+                // Not gated on the capability: the local half of that screen is computed on the
+                // phone and works against any server, so the button always leads somewhere (#117).
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(
+                    text = "How long you have been listening — today on this phone, and all " +
+                        "time on the account.",
+                    color = AarisColor.Dim,
+                )
+                OutlinedButton(onClick = onOpenStats, shape = RectangleShape) {
+                    Text("LISTENING STATS")
                 }
             }
         }
@@ -6485,7 +6504,7 @@ private fun SectionHeader(
 }
 
 @Composable
-private fun EmptyCard(message: String) {
+internal fun EmptyCard(message: String) {
     AarisCard {
         MetaText(
             text = message,
@@ -7006,7 +7025,7 @@ private fun ErrorPane(
 }
 
 @Composable
-private fun SettingsItem(label: String, value: String) {
+internal fun SettingsItem(label: String, value: String) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         MetaText(text = label)
         Text(
