@@ -1,5 +1,6 @@
 -keep class dk.perspektiva.ttsroad.data.** { *; }
 -keep class dk.perspektiva.ttsroad.player.HistorySnapshot { *; }
+-keep class dk.perspektiva.ttsroad.widget.NowPlayingSnapshot { *; }
 -keep class dk.perspektiva.ttsroad.update.UpdateManager$GithubRelease { *; }
 -keep class dk.perspektiva.ttsroad.update.UpdateManager$GithubAsset { *; }
 -keep class kotlin.Metadata { *; }
