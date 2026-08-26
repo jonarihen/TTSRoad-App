@@ -100,6 +100,16 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- **A refresh asks what changed instead of refetching the library.** Every pull-to-refresh and every
+  screen entry pulled full payloads — including the whole chapter list of a four-hundred-chapter
+  serial — to discover, most of the time, that nothing had moved. The server has advertised
+  `delta_sync` since before the app could parse it, and the app parsed it and never read it. Now a
+  refresh spends one small request asking the sync index what moved, and pulls sparsely for only the
+  books it names; when the answer is "nothing", that one request is the entire cost. Cursors come
+  from the server, never the device clock, and are committed only after the pull they belong to
+  succeeds — a refresh that fails on a bad connection repeats itself rather than skipping the
+  chapters it never received. A server without the flag keeps refetching in full, exactly as before.
+  ([#110](https://github.com/jonarihen/TTSRoad-App/issues/110))
 - **Third-rank text is readable.** The `Dim` token was 2.19:1 against the hover surface and 2.39:1
   on a card, well under the 4.5:1 floor — so remaining time, chapter metadata, bookmark notes,
   search snippets and every Settings explanation were effectively decorative for anyone with
