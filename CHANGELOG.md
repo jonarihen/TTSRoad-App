@@ -23,6 +23,23 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- **Settings reads as bands now, not as one unbroken column of cards.** The screen was already
+  grouped — nine `// Session`, `// Server`, `// Playback`, `// Audio` captions and the rest — but in
+  the weakest idiom the app has: an accent line with no rule under it, which at eleven repetitions
+  down one scroll separates nothing. They are the section rule now, the same landmark the home
+  screen uses. Two bands that were drawn from their own files, **account security** and **server
+  storage**, join them: a header only `SettingsScreen` could draw is most of the reason those two
+  ended up with a caption in the first place. **Playback** and **Audio** were one subject filed
+  under two look-alike cards — skip silence and volume boost are how a chapter *sounds*, which is
+  not a different question from how it *plays* — so they are one band, divided rather than doubled.
+  Which kicker each band wears follows the rule written down with the section rule: a number for a
+  band drawn on every visit, a mnemonic for one a capability or an admin flag can take away. That
+  distinction is now a list in one place rather than eleven independent decisions, and a test holds
+  it there — the failure it guards is the eleventh band, added behind a capability, given the next
+  number in the sequence because the band above it has one, quietly making every number below it
+  depend on what the server happens to publish.
+  ([#162](https://github.com/jonarihen/TTSRoad-App/issues/162))
+
 - **The player's eight equal buttons now have two ranks, and the app has a written rule for rank.**
   AARIS says no radius, thin border, mono uppercase label. Applied to one control that is handsome;
   applied to every control on a screen it makes a stack of identical grey rectangles with nothing
@@ -44,7 +61,6 @@ Notable changes to the TTSRoad Android client.
   and could not be reached a third time; it also picks up the 48 dp touch target it never had, which
   matters where its neighbour deletes a chapter for everybody.
   ([#159](https://github.com/jonarihen/TTSRoad-App/issues/159))
-
 - **The section rule now runs through the whole app instead of just the home screen.** The accent
   `§` kicker, the uppercase title and the hairline under them are what make the home screen read as
   designed rather than assembled — and they appeared on exactly three screens out of thirteen. The

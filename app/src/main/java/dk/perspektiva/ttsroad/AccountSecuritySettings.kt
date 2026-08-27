@@ -73,7 +73,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
             .onFailure { rejected(it.message ?: "Could not read two-factor status") }
     }
 
-    MetaText(text = "// Account security", color = AarisColor.Accent)
+    SettingsSectionHeader(SettingsSection.AccountSecurity)
     AarisCard {
         Column(
             modifier = Modifier.fillMaxWidth().padding(16.dp),

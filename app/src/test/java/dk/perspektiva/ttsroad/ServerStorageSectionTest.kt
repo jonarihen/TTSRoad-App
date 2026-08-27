@@ -106,8 +106,21 @@ class ServerStorageSectionTest {
         render(allowed = false)
 
         // Not a paragraph about being refused: nothing on the Settings page suggested this card
-        // exists, so explaining its absence is noise.
-        compose.onNodeWithText("// SERVER STORAGE").assertDoesNotExist()
+        // exists, so explaining its absence is noise. Both halves of the section rule, because a
+        // band that took its heading away and left the kicker would still be a landmark to nothing.
+        compose.onNodeWithText("§ DISK").assertDoesNotExist()
+        compose.onNodeWithText("SERVER STORAGE").assertDoesNotExist()
+    }
+
+    @Test
+    fun `an admin gets the band headed by the section rule, not an accent caption`() {
+        render()
+
+        // A mnemonic and not an ordinal, because this whole band disappears on a server without
+        // the capability and on an account without the flag (#162). A number here would count
+        // something the reader cannot see.
+        compose.onNodeWithText("§ DISK").assertIsDisplayed()
+        compose.onNodeWithText("SERVER STORAGE").assertIsDisplayed()
     }
 
     @Test

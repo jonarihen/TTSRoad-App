@@ -112,7 +112,7 @@ internal fun ServerStorageSection(
     // expected it, and a paragraph about a permission they do not have is noise.
     if (!allowed) return
 
-    MetaText(text = "// Server storage", color = AarisColor.Accent)
+    SettingsSectionHeader(SettingsSection.ServerStorage)
     AarisCard {
         Column(
             modifier = Modifier
