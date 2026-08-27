@@ -2,6 +2,28 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Changed
+
+- **The section rule now runs through the whole app instead of just the home screen.** The accent
+  `§` kicker, the uppercase title and the hairline under them are what make the home screen read as
+  designed rather than assembled — and they appeared on exactly three screens out of thirteen. The
+  reason turned out to be mechanical rather than aesthetic: the component was private to
+  `MainActivity`, so the screens living in their own files could import `AarisCard`, `MetaText` and
+  `AarisTag` but not this one. What grew in its place was a weaker stand-in — a plain `// Something`
+  accent line, 54 of them against the header's five. Bookmarks, pronunciation reports, Up Next,
+  device sessions, the server log and All fictions now carry a real header, and All fictions gained
+  a count that finally says what its filter did (`12 OF 240`). The `//` line keeps the job it is
+  good at: a caption *inside* a card or a sheet, where a full rule would be too much furniture. The
+  split between the two is written down on the component now, along with the rule for which kicker
+  to use — a running ordinal for sections that are always present and always in the same order, a
+  short mnemonic for anything conditional. A conditional section must never be numbered: the fiction
+  screen shows why, since numbering there would make **Chapters** `01` or `02` depending on whether
+  the reader happened to leave a bookmark. The header's trailing action also picks up the 48 dp
+  touch target it never had, which matters most where it sits at the top of a list that scrolls.
+  ([#158](https://github.com/jonarihen/TTSRoad-App/issues/158))
+
 ## 0.13.0 — 2026-08-26
 
 ### Added

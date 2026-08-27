@@ -291,6 +291,7 @@ import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
+import dk.perspektiva.ttsroad.ui.SectionHeader
 import dk.perspektiva.ttsroad.ui.ReaderPalette
 import dk.perspektiva.ttsroad.ui.readerPalette
 import kotlin.math.roundToLong
@@ -3991,13 +3992,16 @@ private fun BookmarksScreen(
             error?.let { MetaText(text = it, color = AarisColor.Danger) }
 
             if (loaded.isEmpty()) {
-                MetaText(text = "// No bookmarks", color = AarisColor.Accent)
+                SectionHeader(kicker = "BM", title = "No bookmarks")
                 EmptyCard(
                     "Tap BOOKMARK in the player to mark where you are. Marks made here show up " +
                         "in the browser too.",
                 )
             } else {
-                MetaText(text = "// ${loaded.size} bookmarks", color = AarisColor.Accent)
+                SectionHeader(
+                    kicker = "BM",
+                    title = if (loaded.size == 1) "1 bookmark" else "${loaded.size} bookmarks",
+                )
                 loaded.forEach { bookmark ->
                     BookmarkCard(
                         bookmark = bookmark,
@@ -4235,7 +4239,7 @@ internal fun PronunciationReportsBody(
         )
 
         if (reports.isEmpty()) {
-            MetaText(text = "// Nothing reported", color = AarisColor.Accent)
+            SectionHeader(kicker = "PR", title = "Nothing reported")
             EmptyCard(
                 if (includeResolved) {
                     "Nothing has been reported from this account yet. Tap SAID WRONG in the " +
@@ -4245,9 +4249,9 @@ internal fun PronunciationReportsBody(
                 },
             )
         } else {
-            MetaText(
-                text = if (reports.size == 1) "// 1 report" else "// ${reports.size} reports",
-                color = AarisColor.Accent,
+            SectionHeader(
+                kicker = "PR",
+                title = if (reports.size == 1) "1 report" else "${reports.size} reports",
             )
             reports.forEach { report ->
                 PronunciationReportCard(
@@ -4435,7 +4439,7 @@ private fun QueueScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (unsupported) {
-                MetaText(text = "// Not available", color = AarisColor.Accent)
+                SectionHeader(kicker = "Q", title = "Not available")
                 EmptyCard(
                     "This server has no cross-library queue. Update the backend to line chapters " +
                         "up across books.",
@@ -4450,15 +4454,15 @@ private fun QueueScreen(
 
             val items = loaded?.items.orEmpty()
             if (items.isEmpty()) {
-                MetaText(text = "// Nothing queued", color = AarisColor.Accent)
+                SectionHeader(kicker = "Q", title = "Nothing queued")
                 EmptyCard(
                     "Long-press a chapter and choose PLAY NEXT or ADD TO QUEUE. The queue is " +
                         "shared with the browser and with Android Auto's Up Next.",
                 )
             } else {
-                MetaText(
-                    text = if (items.size == 1) "// 1 queued" else "// ${items.size} queued",
-                    color = AarisColor.Accent,
+                SectionHeader(
+                    kicker = "Q",
+                    title = if (items.size == 1) "1 queued" else "${items.size} queued",
                 )
                 items.forEachIndexed { index, item ->
                     QueueRow(
@@ -4732,7 +4736,7 @@ private fun DevicesScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 if (unsupported) {
-                    MetaText(text = "// Not available", color = AarisColor.Accent)
+                    SectionHeader(kicker = "DEV", title = "Not available")
                     EmptyCard(
                         "This server is older than the device-session API. Update the backend to " +
                             "manage sign-ins from here.",
@@ -4743,7 +4747,7 @@ private fun DevicesScreen(
                     }
                     error?.let { MetaText(text = it, color = AarisColor.Danger) }
 
-                    MetaText(text = "// This device", color = AarisColor.Accent)
+                    SectionHeader(kicker = "01", title = "This device")
                     val current = loaded.orEmpty().firstOrNull { it.isCurrent(session) }
                     if (current == null) {
                         EmptyCard("This session is not in the list yet")
@@ -4751,7 +4755,7 @@ private fun DevicesScreen(
                         DeviceCard(device = current, isCurrent = true, onRevoke = null)
                     }
 
-                    MetaText(text = "// Other sessions", color = AarisColor.Accent)
+                    SectionHeader(kicker = "02", title = "Other sessions")
                     if (others.isEmpty()) {
                         EmptyCard("Nothing else is signed in")
                     } else {
@@ -5729,6 +5733,19 @@ private fun FictionsScreen(
                                 }
                             } else {
                                 null
+                            },
+                        )
+                    }
+                    // The one landmark on a screen that is otherwise a wall of covers, and the
+                    // only place the filter reports what it did: "12 OF 240" is the difference
+                    // between a search that found little and a shelf that holds little.
+                    fullWidthItem(key = "results") {
+                        SectionHeader(
+                            kicker = "ALL",
+                            title = when {
+                                filtered.size == fictions.size && fictions.size == 1 -> "1 fiction"
+                                filtered.size == fictions.size -> "${fictions.size} fictions"
+                                else -> "${filtered.size} of ${fictions.size}"
                             },
                         )
                     }
@@ -7315,35 +7332,6 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
                 modifier = Modifier.fillMaxSize(),
             )
         }
-    }
-}
-
-@Composable
-private fun SectionHeader(
-    kicker: String,
-    title: String,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null,
-) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MetaText(text = "§ $kicker", color = AarisColor.Accent)
-            if (actionLabel != null && onAction != null) {
-                TextButton(onClick = onAction) {
-                    Text(actionLabel.uppercase())
-                }
-            }
-        }
-        Text(
-            text = title.uppercase(),
-            style = MaterialTheme.typography.titleLarge,
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
     }
 }
 
