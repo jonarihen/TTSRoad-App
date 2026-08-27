@@ -288,6 +288,7 @@ import dk.perspektiva.ttsroad.player.queueRows
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
 import dk.perspektiva.ttsroad.player.SleepTimerState
+import dk.perspektiva.ttsroad.ui.AarisActionRow
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisChoiceRow
 import dk.perspektiva.ttsroad.ui.AarisColor
@@ -1860,7 +1861,7 @@ private fun ChapterBulkSheet(
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
             )
         }
-        BulkAction(
+        AarisActionRow(
             title = "Mark all previous as played",
             subtitle = if (previousIds.isEmpty()) {
                 "Nothing before this chapter"
@@ -1870,7 +1871,7 @@ private fun ChapterBulkSheet(
             enabled = previousIds.isNotEmpty(),
             onClick = { onMark(previousIds) },
         )
-        BulkAction(
+        AarisActionRow(
             title = "Mark all as played",
             subtitle = "${allIds.size} chapters",
             enabled = allIds.isNotEmpty(),
@@ -1880,7 +1881,7 @@ private fun ChapterBulkSheet(
             // Only a chapter with audio can be queued — the server rejects the rest anyway, and
             // offering it would be offering something that silently does nothing.
             val playable = chapter.audio != null
-            BulkAction(
+            AarisActionRow(
                 title = "Play next",
                 subtitle = if (playable) {
                     "After the chapter playing now"
@@ -1890,7 +1891,7 @@ private fun ChapterBulkSheet(
                 enabled = playable,
                 onClick = { queue(true) },
             )
-            BulkAction(
+            AarisActionRow(
                 title = "Add to queue",
                 subtitle = if (playable) "At the end of Up Next" else "No audio for this chapter yet",
                 enabled = playable,
@@ -1900,7 +1901,7 @@ private fun ChapterBulkSheet(
         // Repair, below the everyday actions. #107 was filed because "N failed" was stated on the
         // fiction screen and nothing in the app could act on it — this is the per-chapter half.
         onRetry?.let { retry ->
-            BulkAction(
+            AarisActionRow(
                 title = if (chapter.hasError) "Convert again" else "Convert this chapter again",
                 subtitle = if (chapter.hasError) {
                     "Queue it for another attempt"
@@ -1913,7 +1914,7 @@ private fun ChapterBulkSheet(
         }
         onSetExcluded?.let { setExcluded ->
             val excluded = chapter.excluded
-            BulkAction(
+            AarisActionRow(
                 title = if (excluded) "Include this chapter" else "Exclude this chapter",
                 subtitle = if (excluded) {
                     "Put it back on every feed and player"
@@ -1925,7 +1926,7 @@ private fun ChapterBulkSheet(
             )
         }
         onDelete?.let { delete ->
-            BulkAction(
+            AarisActionRow(
                 title = "Delete this chapter",
                 subtitle = "Deletes it and its audio from the server, for everyone",
                 enabled = !isBusy,
@@ -1933,34 +1934,6 @@ private fun ChapterBulkSheet(
             )
         }
         Spacer(modifier = Modifier.height(16.dp))
-    }
-}
-
-@Composable
-private fun BulkAction(
-    title: String,
-    subtitle: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    Column {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = enabled, onClick = onClick)
-                .padding(horizontal = 20.dp, vertical = 14.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                // Disabled, not de-emphasised: Dim is readable body text now, and reusing it here
-                // would leave the row looking available.
-                color = if (enabled) AarisColor.Ink else AarisColor.Disabled,
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            MetaText(text = subtitle, color = AarisColor.Dim)
-        }
-        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
     }
 }
 
@@ -2353,6 +2326,13 @@ internal fun PlayerScreenBody(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            // Rank one: acts on the moment being heard. Accent, and first (#159).
+            //
+            // The split between these two groups is "changes or marks what is playing right now"
+            // against "takes me somewhere else", not importance. It is the one that survives the
+            // way the player is actually used — at the wheel, on headphones, phone locked — where
+            // the first group is pressed without looking and the second is never pressed without.
+            // Eight equally loud buttons made both kinds cost the same glance.
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
                 // cycle-only button.
@@ -2367,36 +2347,56 @@ internal fun PlayerScreenBody(
                     enabled = playerState.hasMedia || sleepTimerState.isArmed,
                     color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
                 )
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                // Hidden entirely on a server without read-along, rather than shown and then 404ing.
-                if (canRead) {
-                    PlayerActionButton(label = "READ", onClick = onRead)
-                }
-                // Same gating as READ: hidden outright on a server without bookmarks, rather than
-                // offered and then failing.
+                // Hidden outright on a server without bookmarks, rather than offered and then
+                // failing. Stays in rank one deliberately: #125's whole point is that marking a
+                // moment is a press made without looking, so demoting it would undo the feature.
                 if (canBookmark) {
                     PlayerActionButton(label = "BOOKMARK", onClick = onBookmark)
                 }
-                // Next to BOOKMARK because it is the same gesture — mark this moment, keep
+                // Beside BOOKMARK because it is the same gesture — mark this moment, keep
                 // listening — and hidden on the same terms, since the server gates the write route
                 // as well as the read one (#125).
                 if (canReportPronunciation) {
                     PlayerActionButton(label = "SAID WRONG", onClick = onReportPronunciation)
                 }
+            }
+            // Rank two: leaves the player. Muted, so the eye reaches the group above first.
+            //
+            // Every one of these opens another screen or a sheet, which means it is already a
+            // control you are looking at the phone to use. Material's TextButton takes its content
+            // colour from the scheme's primary, so before this they were all accent — the same
+            // orange as pause.
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Hidden entirely on a server without read-along, rather than shown and then 404ing.
+                if (canRead) {
+                    PlayerActionButton(
+                        label = "READ",
+                        onClick = onRead,
+                        color = AarisColor.Muted,
+                    )
+                }
                 if (canJumpBack) {
-                    PlayerActionButton(label = "JUMP BACK", onClick = onOpenJumpBack)
+                    PlayerActionButton(
+                        label = "JUMP BACK",
+                        onClick = onOpenJumpBack,
+                        color = AarisColor.Muted,
+                    )
                 }
                 if (playerState.queue.size > 1) {
                     PlayerActionButton(
                         label = "CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}",
                         onClick = onOpenChapters,
+                        color = AarisColor.Muted,
                     )
                 }
                 // Not the same list as CHAPTERS, and the labels have to earn the difference:
                 // CHAPTERS is this book, UP NEXT is what was lined up across books.
                 if (canOpenQueue) {
-                    PlayerActionButton(label = "UP NEXT", onClick = onOpenQueue)
+                    PlayerActionButton(
+                        label = "UP NEXT",
+                        onClick = onOpenQueue,
+                        color = AarisColor.Muted,
+                    )
                 }
             }
         }
@@ -6670,33 +6670,33 @@ private fun FictionMaintenanceSheet(
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
         )
         onRetryFailed?.let { retry ->
-            BulkAction(
+            AarisActionRow(
                 title = "Retry failed chapters",
                 subtitle = "${fiction.errorChapters} failed",
                 enabled = !isBusy,
                 onClick = retry,
             )
         }
-        BulkAction(
+        AarisActionRow(
             title = "Fetch all chapters",
             subtitle = "Re-reads the whole chapter list, not just the recent tail",
             enabled = !isBusy,
             onClick = onPollFull,
         )
-        BulkAction(
+        AarisActionRow(
             title = "Re-apply chapter filter",
             subtitle = "Excludes chapters the filter matches. Never un-excludes: one taken out " +
                 "by hand had a reason.",
             enabled = !isBusy,
             onClick = onApplyFilter,
         )
-        BulkAction(
+        AarisActionRow(
             title = "Refresh MP3 tags",
             subtitle = "Rewrites the tags on files that already exist. No audio is re-made.",
             enabled = !isBusy,
             onClick = onRetag,
         )
-        BulkAction(
+        AarisActionRow(
             title = "Re-narrate every chapter",
             subtitle = "${fiction.totalChapters} chapters, converted again from scratch. This is " +
                 "the expensive one.",
