@@ -100,7 +100,8 @@ class PronunciationReportsLayoutTest {
     fun `the list counts what it is showing`() {
         renderReports(listOf(withWord, withoutWord))
 
-        compose.onNodeWithText("// 2 REPORTS").assertIsDisplayed()
+        compose.onNodeWithText("§ PR").assertIsDisplayed()
+        compose.onNodeWithText("2 REPORTS").assertIsDisplayed()
     }
 
     @Test
@@ -134,7 +135,8 @@ class PronunciationReportsLayoutTest {
     fun `an empty list explains where reports come from`() {
         renderReports(emptyList())
 
-        compose.onNodeWithText("// NOTHING REPORTED").assertIsDisplayed()
+        compose.onNodeWithText("§ PR").assertIsDisplayed()
+        compose.onNodeWithText("NOTHING REPORTED").assertIsDisplayed()
     }
 
     @Test

@@ -5,8 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,15 +19,18 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.semantics.selected
@@ -329,5 +335,85 @@ fun <T> AarisChoiceRow(
                 Text(label(option))
             }
         }
+    }
+}
+
+/**
+ * The AARIS section rule: an accent kicker, an uppercase title, and a hairline under both.
+ *
+ * This is the app's structural device — the thing that says which surface you are on once the top
+ * bar has scrolled away, and the reason the home screen reads as designed rather than assembled.
+ * It lived as a private composable inside `MainActivity` until #158, which is most of why the
+ * screens in their own files never used it: they import [AarisCard], [MetaText] and [AarisTag]
+ * already, and could not reach this one. **Every scrolling screen opens with one of these**, a
+ * screen whose whole body is a single list included.
+ *
+ * ## Which kicker
+ *
+ * Two forms, and the choice is not taste — it follows from whether the section can disappear.
+ *
+ * - **A two-digit ordinal (`01`, `02`, `03`)** for a screen whose sections are a fixed sequence
+ *   that is always present, like the home screen's three rails. The number is a position the
+ *   reader can rely on, and it stays put between visits.
+ * - **A short mnemonic (`CH`, `BM`, `Q`)** for a section that is conditional, or that stands alone
+ *   on its screen.
+ *
+ * A conditional section must never be numbered. The fiction screen is the case that proves it:
+ * its bookmarks block only appears when the fiction has bookmarks, so numbering the two sections
+ * there would make **Chapters** `01` or `02` depending on something the reader did days ago in a
+ * different screen. A kicker that moves is worse than no kicker — it looks like a count of
+ * something, and it is counting nothing.
+ *
+ * Keep mnemonics unique within a screen, and keep them to four characters; past that they stop
+ * reading as a code and start competing with the title beside them.
+ *
+ * ## Not to be confused with the `//` line
+ *
+ * `MetaText("// Something", color = AarisColor.Accent)` is the app's other accent label, and there
+ * are 54 of them against this header's handful. That ratio is the drift #158 is about, but it is
+ * not an instruction to convert all 54 — most are doing honest work at a smaller scale. The split:
+ *
+ * - **`§` (this)** heads a *screen-level* section — a band of the page, with a rule under it,
+ *   that the reader scrolls between.
+ * - **`//`** labels a group *inside* a card, a sheet or a dialog — "// Playback speed" above a
+ *   speed picker. It is a caption, not a landmark, and it deliberately carries no rule.
+ *
+ * A `//` line that is the first thing in a scrolling screen is a section header wearing the wrong
+ * clothes, and should become one of these.
+ *
+ * @param kicker the ordinal or mnemonic, rendered after a `§`. Uppercased for you.
+ * @param title the section name. Uppercased for you.
+ * @param actionLabel optional trailing action — "Refresh", "Browse all". Uppercased for you.
+ */
+@Composable
+fun SectionHeader(
+    kicker: String,
+    title: String,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(text = "§ ${kicker.uppercase()}", color = AarisColor.Accent)
+            if (actionLabel != null && onAction != null) {
+                TextButton(
+                    onClick = onAction,
+                    modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                ) {
+                    Text(actionLabel.uppercase())
+                }
+            }
+        }
+        Text(
+            text = title.uppercase(),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
     }
 }

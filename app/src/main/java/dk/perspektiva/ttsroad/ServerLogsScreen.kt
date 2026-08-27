@@ -45,6 +45,7 @@ import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
+import dk.perspektiva.ttsroad.ui.SectionHeader
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import kotlinx.coroutines.launch
 
@@ -169,12 +170,12 @@ internal fun ServerLogsScreen(
     ) {
         serverLogsUnavailableNote(capabilities, session.isAdmin)?.let { note ->
             // Two silences that are not interchangeable — see the note itself for which is which.
-            MetaText(text = "// Not available", color = AarisColor.Accent)
+            SectionHeader(kicker = "LOG", title = "Not available")
             EmptyCard(note)
             return@Column
         }
 
-        MetaText(text = "// Filter", color = AarisColor.Accent)
+        SectionHeader(kicker = "FLT", title = "Filter")
         AarisCard {
             Column(
                 modifier = Modifier
@@ -221,7 +222,10 @@ internal fun ServerLogsScreen(
                 if (isLoading) {
                     ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
                 }
-                MetaText(text = "// ${rows.size} lines", color = AarisColor.Accent)
+                SectionHeader(
+                    kicker = "LOG",
+                    title = if (rows.size == 1) "1 line" else "${rows.size} lines",
+                )
                 AarisCard {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         rows.forEachIndexed { index, row ->
