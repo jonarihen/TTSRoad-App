@@ -12,6 +12,7 @@ import dk.perspektiva.ttsroad.player.QueueItem
 import dk.perspektiva.ttsroad.player.SleepTimerState
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -56,6 +57,30 @@ class PlayerLayoutTest {
             compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
         }
         compose.onNodeWithText("CHAPTERS 2/12").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp")
+    fun `marking the moment outranks leaving the player`() {
+        // #159's split, asserted by position because colour is not in the semantics tree.
+        //
+        // The rule is "changes or marks what is playing right now" above "takes me somewhere
+        // else", and it is not cosmetic: BOOKMARK and SAID WRONG are pressed at the wheel without
+        // looking (#125), while READ, CHAPTERS and UP NEXT all open something you have to look at.
+        // Before this they were one undifferentiated group of eight.
+        renderPlayer()
+
+        val markTop = listOf("BOOKMARK", "SAID WRONG")
+            .map { compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.top }
+            .max()
+        val leaveTop = listOf("READ", "JUMP BACK", "UP NEXT")
+            .map { compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.top }
+            .min()
+
+        assertTrue(
+            "marking actions ($markTop) must sit above navigation actions ($leaveTop)",
+            markTop < leaveTop,
+        )
     }
 
     @Test

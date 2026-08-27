@@ -23,6 +23,28 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- **The player's eight equal buttons now have two ranks, and the app has a written rule for rank.**
+  AARIS says no radius, thin border, mono uppercase label. Applied to one control that is handsome;
+  applied to every control on a screen it makes a stack of identical grey rectangles with nothing
+  for the eye to land on. That is what "too many buttons" actually was — 52 full-width controls, a
+  fiction header reaching ten of them, and a player whose eight tertiary actions all rendered in the
+  same accent orange as pause, because Material's `TextButton` takes its colour from the scheme's
+  primary. Colour was the only thing differentiating anything, and colour here carries *severity*,
+  not rank, so a rare destructive action and an everyday one looked equally loud.
+  The player now splits along the line that survives how it is actually used — at the wheel, on
+  headphones, phone locked. **Acts on the moment being heard** (speed, sleep, bookmark, said wrong)
+  sits first and keeps the accent; **leaves the player** (read, jump back, chapters, up next) is
+  muted below it. Bookmark and Said wrong deliberately stay in the loud group: pressing them without
+  looking is the entire point of those features, and demoting them would have undone one to tidy the
+  other. The rule behind it is written down beside the components rather than left to taste, in
+  three ranks — one filled primary per screen, secondary in a *row* rather than a stack of
+  full-width bands, and anything rare or destructive as a row in a sheet. The test for the third
+  rank: if a control needs a sentence under it to be safe to press, it is not a button.
+  That row is now a shared primitive. It had proved itself twice as a private helper in two sheets
+  and could not be reached a third time; it also picks up the 48 dp touch target it never had, which
+  matters where its neighbour deletes a chapter for everybody.
+  ([#159](https://github.com/jonarihen/TTSRoad-App/issues/159))
+
 - **The section rule now runs through the whole app instead of just the home screen.** The accent
   `§` kicker, the uppercase title and the hairline under them are what make the home screen read as
   designed rather than assembled — and they appeared on exactly three screens out of thirteen. The

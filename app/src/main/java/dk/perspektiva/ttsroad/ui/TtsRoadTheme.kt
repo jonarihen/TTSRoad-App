@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -414,6 +415,76 @@ fun SectionHeader(
             style = MaterialTheme.typography.titleLarge,
         )
         Spacer(modifier = Modifier.height(8.dp))
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+    }
+}
+
+/**
+ * # Control rank
+ *
+ * AARIS says *no radius, thin border, mono uppercase label*. Applied to one control that is
+ * handsome; applied to every control on a screen it produces a stack of identical grey rectangles
+ * with nothing for the eye to land on. That is the mechanism behind #159 — the fiction header
+ * reached **ten** full-width buttons and the player **eight** equal text buttons, and the complaint
+ * that arrived was "too many buttons", when the real fault was that none of them outranked another.
+ *
+ * Colour was doing the only differentiating, and colour here carries *severity*
+ * ([AarisColor.Warning], [AarisColor.Danger]), not rank — so a rare destructive action and an
+ * everyday one looked equally loud, just differently tinted.
+ *
+ * Three ranks. Pick by how often the control is reached for, not by how important it feels:
+ *
+ * 1. **Primary** — at most **one per screen**. Filled, accent, full width. The thing the screen
+ *    exists for: RESUME on a fiction, play/pause on the player.
+ * 2. **Secondary** — outlined, and **laid out in a row, not a column**. Two or three per screen.
+ *    Wanting a second action is normal; giving each one its own full-width band is what makes a
+ *    screen read as a control panel. `fillMaxWidth()` is the exception here, not the default.
+ * 3. **Tertiary / housekeeping** — [AarisActionRow] inside a sheet or a collapsed block. Anything
+ *    rare, destructive, or needing its consequence spelled out. Never in the primary scroll.
+ *
+ * The test for rank three is simple: if the control needs a sentence under it to be safe to press,
+ * it is not a button, it is a row — and it belongs behind something.
+ */
+@Composable
+fun AarisActionRow(
+    title: String,
+    /**
+     * The consequence, in one line — and when [enabled] is false, **the reason why not**.
+     *
+     * This is the whole argument for the row over a button. "Regenerating makes everyone
+     * re-subscribe" and "No audio for this chapter yet" cannot ride on a button's label, and
+     * trailing them under one as loose [MetaText] leaves the reader to guess which control the
+     * sentence belongs to.
+     */
+    subtitle: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Overrides the title colour. For a destructive row — pass [AarisColor.Danger]. */
+    color: Color = Color.Unspecified,
+) {
+    Column(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = MinTouchTargetSize)
+                .clickable(enabled = enabled, onClick = onClick)
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                // Disabled, not de-emphasised: Dim is readable body text, and reusing it here
+                // would leave an unavailable row looking available.
+                color = when {
+                    !enabled -> AarisColor.Disabled
+                    color != Color.Unspecified -> color
+                    else -> AarisColor.Ink
+                },
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            MetaText(text = subtitle, color = AarisColor.Dim)
+        }
         HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
     }
 }
