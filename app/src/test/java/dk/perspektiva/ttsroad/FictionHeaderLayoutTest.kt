@@ -159,4 +159,35 @@ class FictionHeaderLayoutTest {
         compose.onNodeWithText("MORE").assertDoesNotExist()
         compose.onNodeWithText("RESUME").assertIsDisplayed()
     }
+
+    @Test
+    fun `the reader sheet does not expose admin maintenance`() {
+        compose.setContent {
+            TtsRoadTheme {
+                FictionMaintenanceSheet(
+                    fiction = fiction,
+                    isBusy = false,
+                    onDismiss = {},
+                    onPoll = {},
+                    feedUrl = "https://example.test/feed/fiction.xml",
+                    onShareFeed = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("Check for new chapters").assertIsDisplayed()
+        compose.onNodeWithText("Share podcast feed").assertIsDisplayed()
+        compose.onNodeWithText("// Admin").assertDoesNotExist()
+        for (adminOnly in listOf(
+            "Fetch all chapters",
+            "Re-apply chapter filter",
+            "Refresh MP3 tags",
+            "Re-narrate every chapter",
+            "Regenerate feed link",
+            "Edit details",
+            "Delete fiction",
+        )) {
+            compose.onNodeWithText(adminOnly).assertDoesNotExist()
+        }
+    }
 }

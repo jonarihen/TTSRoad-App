@@ -1606,34 +1606,52 @@ private fun FictionScreen(
                     fiction = fiction,
                     isBusy = isMaintaining,
                     onDismiss = { showMaintenance = false },
-                    onPollFull = {
-                        showMaintenance = false
-                        maintain(describe = { "Re-reading the whole chapter list." }) {
-                            repository.pollFiction(fiction.id, full = true)
+                    onPollFull = if (capabilities.fictionMaintenance && isAdmin) {
+                        {
+                            showMaintenance = false
+                            maintain(describe = { "Re-reading the whole chapter list." }) {
+                                repository.pollFiction(fiction.id, full = true)
+                            }
                         }
+                    } else {
+                        null
                     },
-                    onApplyFilter = {
-                        showMaintenance = false
-                        maintain(
-                            describe = { response ->
-                                response.detail?.takeIf { it.isNotBlank() }
-                                    ?: "Excluded ${response.excludedCount ?: 0} chapters."
-                            },
-                        ) { repository.applyChapterFilter(fiction.id) }
-                    },
-                    onRetag = {
-                        showMaintenance = false
-                        maintain(describe = { "Rewriting tags on ${it.fileCount ?: 0} files." }) {
-                            repository.retagFiction(fiction.id)
+                    onApplyFilter = if (capabilities.fictionMaintenance && isAdmin) {
+                        {
+                            showMaintenance = false
+                            maintain(
+                                describe = { response ->
+                                    response.detail?.takeIf { it.isNotBlank() }
+                                        ?: "Excluded ${response.excludedCount ?: 0} chapters."
+                                },
+                            ) { repository.applyChapterFilter(fiction.id) }
                         }
+                    } else {
+                        null
+                    },
+                    onRetag = if (capabilities.fictionMaintenance && isAdmin) {
+                        {
+                            showMaintenance = false
+                            maintain(describe = { "Rewriting tags on ${it.fileCount ?: 0} files." }) {
+                                repository.retagFiction(fiction.id)
+                            }
+                        }
+                    } else {
+                        null
                     },
                     // The one action here that spends real time and outbound requests, so it is
                     // the one that asks first. Everything else in this sheet is cheap or reversible.
-                    onReconvertAll = {
-                        showMaintenance = false
-                        confirmReconvert = true
+                    onReconvertAll = if (capabilities.fictionMaintenance && isAdmin) {
+                        {
+                            showMaintenance = false
+                            confirmReconvert = true
+                        }
+                    } else {
+                        null
                     },
-                    onRetryFailed = if (fiction.errorChapters > 0) {
+                    onRetryFailed = if (
+                        capabilities.fictionMaintenance && isAdmin && fiction.errorChapters > 0
+                    ) {
                         {
                             showMaintenance = false
                             maintain(describe = { "Requeued ${it.resetCount ?: 0} chapters." }) {
@@ -6670,15 +6688,15 @@ private fun shareText(context: Context, text: String, title: String) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FictionMaintenanceSheet(
+internal fun FictionMaintenanceSheet(
     fiction: FictionSummary,
     isBusy: Boolean,
     onDismiss: () -> Unit,
-    onPollFull: () -> Unit,
-    onApplyFilter: () -> Unit,
-    onRetag: () -> Unit,
-    onReconvertAll: () -> Unit,
-    onRetryFailed: (() -> Unit)?,
+    onPollFull: (() -> Unit)? = null,
+    onApplyFilter: (() -> Unit)? = null,
+    onRetag: (() -> Unit)? = null,
+    onReconvertAll: (() -> Unit)? = null,
+    onRetryFailed: (() -> Unit)? = null,
     /** Ask the source for new chapters now (#112). Null on a server without the routes. */
     onPoll: (() -> Unit)? = null,
     /** This fiction's podcast feed URL, or null on a server that cannot report one (#115). */
@@ -6726,59 +6744,78 @@ private fun FictionMaintenanceSheet(
             }
         }
 
-        val hasAdminActions = onEdit != null || onRotateFeed != null || onDelete != null
-        MetaText(
-            text = if (hasAdminActions) "// Admin" else "// Maintenance",
-            color = AarisColor.Accent,
-            modifier = Modifier.padding(
-                start = 20.dp,
-                end = 20.dp,
-                top = if (hasReaderActions) 16.dp else 0.dp,
-                bottom = 8.dp,
-            ),
-        )
-        onEdit?.let { edit ->
+        val hasAdminActions = listOf(
+            onPollFull,
+            onApplyFilter,
+            onRetag,
+            onReconvertAll,
+            onRetryFailed,
+            onRotateFeed,
+            onEdit,
+            onDelete,
+        ).any { it != null }
+        if (hasAdminActions) {
+            MetaText(
+                text = "// Admin",
+                color = AarisColor.Accent,
+                modifier = Modifier.padding(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = if (hasReaderActions) 16.dp else 0.dp,
+                    bottom = 8.dp,
+                ),
+            )
+            onEdit?.let { edit ->
+                AarisActionRow(
+                    title = "Edit details",
+                    subtitle = "Title, author, synopsis, tags and cover art",
+                    enabled = !isBusy,
+                    onClick = edit,
+                )
+            }
+            onRetryFailed?.let { retry ->
+                AarisActionRow(
+                    title = "Retry failed chapters",
+                    subtitle = "${fiction.errorChapters} failed",
+                    enabled = !isBusy,
+                    onClick = retry,
+                )
+            }
+        }
+        onPollFull?.let { pollFull ->
             AarisActionRow(
-                title = "Edit details",
-                subtitle = "Title, author, synopsis, tags and cover art",
+                title = "Fetch all chapters",
+                subtitle = "Re-reads the whole chapter list, not just the recent tail",
                 enabled = !isBusy,
-                onClick = edit,
+                onClick = pollFull,
             )
         }
-        onRetryFailed?.let { retry ->
+        onApplyFilter?.let { applyFilter ->
             AarisActionRow(
-                title = "Retry failed chapters",
-                subtitle = "${fiction.errorChapters} failed",
+                title = "Re-apply chapter filter",
+                subtitle = "Excludes chapters the filter matches. Never un-excludes: one taken out " +
+                    "by hand had a reason.",
                 enabled = !isBusy,
-                onClick = retry,
+                onClick = applyFilter,
             )
         }
-        AarisActionRow(
-            title = "Fetch all chapters",
-            subtitle = "Re-reads the whole chapter list, not just the recent tail",
-            enabled = !isBusy,
-            onClick = onPollFull,
-        )
-        AarisActionRow(
-            title = "Re-apply chapter filter",
-            subtitle = "Excludes chapters the filter matches. Never un-excludes: one taken out " +
-                "by hand had a reason.",
-            enabled = !isBusy,
-            onClick = onApplyFilter,
-        )
-        AarisActionRow(
-            title = "Refresh MP3 tags",
-            subtitle = "Rewrites the tags on files that already exist. No audio is re-made.",
-            enabled = !isBusy,
-            onClick = onRetag,
-        )
-        AarisActionRow(
-            title = "Re-narrate every chapter",
-            subtitle = "${fiction.totalChapters} chapters, converted again from scratch. This is " +
-                "the expensive one.",
-            enabled = !isBusy,
-            onClick = onReconvertAll,
-        )
+        onRetag?.let { retag ->
+            AarisActionRow(
+                title = "Refresh MP3 tags",
+                subtitle = "Rewrites the tags on files that already exist. No audio is re-made.",
+                enabled = !isBusy,
+                onClick = retag,
+            )
+        }
+        onReconvertAll?.let { reconvertAll ->
+            AarisActionRow(
+                title = "Re-narrate every chapter",
+                subtitle = "${fiction.totalChapters} chapters, converted again from scratch. This is " +
+                    "the expensive one.",
+                enabled = !isBusy,
+                onClick = reconvertAll,
+            )
+        }
         onRotateFeed?.let { rotate ->
             AarisActionRow(
                 title = "Regenerate feed link",
