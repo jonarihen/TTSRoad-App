@@ -1338,37 +1338,7 @@ private fun FictionScreen(
                                 fictionListeningSummary(chapters)
                             },
                             playbackSpeed = playerState.speed,
-                            // Two gates, both needed: the server has to have the routes, and this
-                            // account has to be the admin they are restricted to. The server does
-                            // the enforcing either way — hiding it just avoids offering a 403.
-                            onEdit = onEditDetails.takeIf { capabilities.fictionManagement && isAdmin },
-                            onDelete = if (capabilities.fictionManagement && isAdmin) {
-                                { confirmDelete = true }
-                            } else {
-                                null
-                            },
-                            isDeleting = isDeleting,
                             isMaintaining = isMaintaining,
-                            // Poll is not admin-gated, and that is the server's decision rather
-                            // than a looser one taken here: it is rate-limited server-side and a
-                            // fresh chapter benefits every reader.
-                            onPoll = if (capabilities.fictionMaintenance) {
-                                {
-                                    maintain(
-                                        describe = { response ->
-                                            when {
-                                                response.fullIngest -> "Re-reading the whole chapter list."
-                                                (response.partialSync ?: 0) > 0 ->
-                                                    "Checking the last ${response.partialSync} chapters."
-
-                                                else -> "Checking the source now."
-                                            }
-                                        },
-                                    ) { repository.pollFiction(fiction.id) }
-                                }
-                            } else {
-                                null
-                            },
                             // Admin-only, because the server's route is. The count above it is not
                             // gated — a non-admin still sees that something failed, they just
                             // cannot be the one to requeue it.
@@ -1383,17 +1353,17 @@ private fun FictionScreen(
                             } else {
                                 null
                             },
-                            onMaintain = if (capabilities.fictionMaintenance && isAdmin) {
+                            // One door for everything that is not RESUME, FOLLOW or DOWNLOAD
+                            // (#160). Open whenever the sheet would hold at least one row —
+                            // deliberately not gated on admin, since checking for new chapters and
+                            // sharing the feed are open to any account and the sheet gates its own
+                            // rows one by one.
+                            onMore = if (
+                                capabilities.fictionMaintenance ||
+                                feedUrl != null ||
+                                (capabilities.fictionManagement && isAdmin)
+                            ) {
                                 { showMaintenance = true }
-                            } else {
-                                null
-                            },
-                            feedUrl = feedUrl,
-                            onShareFeed = { url ->
-                                shareText(context, url, "${fiction.title} podcast feed")
-                            },
-                            onRotateFeed = if (capabilities.fictionMaintenance && isAdmin) {
-                                { confirmRotateFeed = true }
                             } else {
                                 null
                             },
@@ -1673,6 +1643,63 @@ private fun FictionScreen(
                     } else {
                         null
                     },
+                    // Moved off the header by #160. The gates are unchanged — each is exactly the
+                    // pair of conditions the button carried when it was a full-width band.
+                    //
+                    // Poll is not admin-gated, and that is the server's decision rather than a
+                    // looser one taken here: the route is rate-limited server-side and a fresh
+                    // chapter benefits every reader.
+                    onPoll = if (capabilities.fictionMaintenance) {
+                        {
+                            showMaintenance = false
+                            maintain(
+                                describe = { response ->
+                                    when {
+                                        response.fullIngest -> "Re-reading the whole chapter list."
+                                        (response.partialSync ?: 0) > 0 ->
+                                            "Checking the last ${response.partialSync} chapters."
+
+                                        else -> "Checking the source now."
+                                    }
+                                },
+                            ) { repository.pollFiction(fiction.id) }
+                        }
+                    } else {
+                        null
+                    },
+                    feedUrl = feedUrl,
+                    onShareFeed = { url ->
+                        showMaintenance = false
+                        shareText(context, url, "${fiction.title} podcast feed")
+                    },
+                    onRotateFeed = if (capabilities.fictionMaintenance && isAdmin) {
+                        {
+                            showMaintenance = false
+                            confirmRotateFeed = true
+                        }
+                    } else {
+                        null
+                    },
+                    // Two gates, both needed: the server has to have the routes, and this account
+                    // has to be the admin they are restricted to. The server enforces either way —
+                    // hiding it just avoids offering a 403.
+                    onEdit = if (capabilities.fictionManagement && isAdmin) {
+                        {
+                            showMaintenance = false
+                            onEditDetails()
+                        }
+                    } else {
+                        null
+                    },
+                    onDelete = if (capabilities.fictionManagement && isAdmin) {
+                        {
+                            showMaintenance = false
+                            confirmDelete = true
+                        }
+                    } else {
+                        null
+                    },
+                    isDeleting = isDeleting,
                 )
             }
 
@@ -6264,8 +6291,16 @@ private fun FictionGridCard(fiction: FictionSummary, onClick: () -> Unit) {
     }
 }
 
+/**
+ * Everything above the chapter list on a fiction screen.
+ *
+ * Internal rather than private for the same reason `PlayerScreenBody` is: the whole subject of
+ * #160 is what this lays out and in what rank, and that is invisible from the outside when it is
+ * wrong. Its parameters are deliberately data and lambdas rather than the objects they came from,
+ * so it renders on the JVM without a repository or a live controller.
+ */
 @Composable
-private fun FictionDetailHeader(
+internal fun FictionDetailHeader(
     fiction: FictionSummary,
     chapters: List<ChapterSummary>,
     onPlay: (ChapterSummary) -> Unit,
@@ -6277,24 +6312,27 @@ private fun FictionDetailHeader(
     isFollowBusy: Boolean = false,
     listeningSummary: FictionListeningSummary = FictionListeningSummary(),
     playbackSpeed: Float = 1f,
-    /** Null unless this account is an admin on a server that can edit fictions. */
-    onEdit: (() -> Unit)? = null,
-    /** Null unless this account is an admin on a server that can delete fictions. */
-    onDelete: (() -> Unit)? = null,
-    isDeleting: Boolean = false,
-    /** Ask the source for new chapters now (#112). Null on a server without the routes. */
-    onPoll: (() -> Unit)? = null,
-    /** Requeue this fiction's failed chapters (#107). Null when there is nothing to requeue. */
+    /**
+     * Requeue this fiction's failed chapters (#107). Null when there is nothing to requeue.
+     *
+     * The one action that stayed on the face of the header rather than moving into the sheet with
+     * the rest of #160, and it stays for a reason that is not importance: it is **conditional on a
+     * fault**. It appears when `errorChapters > 0` and vanishes when the fault clears, so it is not
+     * a permanent control competing with RESUME — it is the fix offered next to the count that
+     * reports the problem, which was the whole complaint in #107.
+     */
     onRetryFailed: (() -> Unit)? = null,
-    /** Open the rest of the maintenance actions. Admin-only, so null for everyone else. */
-    onMaintain: (() -> Unit)? = null,
-    /** A maintenance request is in flight; every one of these controls waits for it. */
+    /**
+     * Open the sheet holding everything else this fiction can be told to do.
+     *
+     * Null only when the sheet would be empty. Deliberately **not** admin-gated: checking the
+     * source for new chapters and sharing the podcast feed are things any reader does, and the
+     * sheet gates its own rows individually. Gating the door on admin would have hidden two
+     * non-admin actions behind an admin flag.
+     */
+    onMore: (() -> Unit)? = null,
+    /** A request is in flight; the controls that would race it wait for it. */
     isMaintaining: Boolean = false,
-    /** This fiction's podcast feed URL, or null on a server that cannot report one (#115). */
-    feedUrl: String? = null,
-    onShareFeed: ((String) -> Unit)? = null,
-    /** Admin only: this token is shared, so rotating it re-subscribes everyone. */
-    onRotateFeed: (() -> Unit)? = null,
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
@@ -6336,6 +6374,9 @@ private fun FictionDetailHeader(
             }
         }
 
+        // Rank one, and the only one on this screen (#160). Everything below it used to be a
+        // full-width band of the same weight, ten of them for an admin, so the control the screen
+        // exists for was one rectangle among ten rather than the obvious thing to press.
         target?.let { chapter ->
             Button(
                 onClick = { onPlay(chapter) },
@@ -6346,24 +6387,57 @@ private fun FictionDetailHeader(
             }
         }
 
-        onSetFollowing?.let { setFollowing ->
-            OutlinedButton(
-                onClick = { setFollowing(!isFollowing) },
-                enabled = !isFollowBusy,
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = if (isFollowing) AarisColor.Accent else AarisColor.Muted,
-                ),
+        // Rank two, in a row rather than a stack. FlowRow and not Row: three short labels fit
+        // side by side on a normal phone and wrap rather than truncate on a narrow one, which is
+        // the failure #99 already paid for elsewhere. The sentences that used to trail each of
+        // these as its own paragraph are still below — they explain the state, not the button.
+        if (onSetFollowing != null || onDownloadNext != null || onMore != null) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    when {
-                        isFollowBusy -> "WORKING"
-                        isFollowing -> "FOLLOWING"
-                        else -> "FOLLOW"
-                    },
-                )
+                onSetFollowing?.let { setFollowing ->
+                    OutlinedButton(
+                        onClick = { setFollowing(!isFollowing) },
+                        enabled = !isFollowBusy,
+                        shape = RectangleShape,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (isFollowing) AarisColor.Accent else AarisColor.Muted,
+                        ),
+                    ) {
+                        Text(
+                            when {
+                                isFollowBusy -> "WORKING"
+                                isFollowing -> "FOLLOWING"
+                                else -> "FOLLOW"
+                            },
+                        )
+                    }
+                }
+                onDownloadNext?.let { download ->
+                    OutlinedButton(
+                        onClick = download,
+                        enabled = downloadSummary.remaining > 0,
+                        shape = RectangleShape,
+                    ) {
+                        // The count moved to the line under the row. In a row of three it was the
+                        // label that would not fit, and "12 not downloaded" says it anyway.
+                        Text(if (downloadSummary.remaining > 0) "DOWNLOAD" else "DOWNLOADED")
+                    }
+                }
+                onMore?.let { more ->
+                    OutlinedButton(
+                        onClick = more,
+                        enabled = !isMaintaining,
+                        shape = RectangleShape,
+                    ) {
+                        Text(if (isMaintaining) "WORKING" else "MORE")
+                    }
+                }
             }
+        }
+
+        onSetFollowing?.let {
             MetaText(
                 text = if (isFollowing) {
                     "On your library. Unfollowing leaves it on the server."
@@ -6403,22 +6477,8 @@ private fun FictionDetailHeader(
             }
         }
 
-        onDownloadNext?.let { download ->
+        onDownloadNext?.let {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(
-                    onClick = download,
-                    enabled = downloadSummary.remaining > 0,
-                    shape = RectangleShape,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        if (downloadSummary.remaining > 0) {
-                            "DOWNLOAD NEXT ${minOf(DownloadBatchSize, downloadSummary.remaining)}"
-                        } else {
-                            "ALL CHAPTERS DOWNLOADED"
-                        },
-                    )
-                }
                 MetaText(
                     text = buildString {
                         append("${downloadSummary.downloaded} offline")
@@ -6466,20 +6526,6 @@ private fun FictionDetailHeader(
         // "which voice is this" and "why has nothing new arrived" had no answer on a phone (#111).
         ProductionMeta(fiction)
 
-        // In the header rather than the sheet, and deliberately: "the author posted an hour ago,
-        // where is it" is the single most likely reason to want the phone to *do* something to a
-        // fiction rather than play it, and the server leaves this route open to any account.
-        onPoll?.let { poll ->
-            OutlinedButton(
-                onClick = poll,
-                enabled = !isMaintaining,
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (isMaintaining) "WORKING" else "CHECK FOR NEW CHAPTERS")
-            }
-        }
-
         if (fiction.tags.isNotEmpty()) {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -6509,84 +6555,6 @@ private fun FictionDetailHeader(
                         modifier = Modifier.clickable { descExpanded = !descExpanded },
                     )
                 }
-            }
-        }
-
-        // The podcast URL for this book (#115). Above the admin block rather than in it: handing
-        // a feed to a podcast app is something any reader does, not housekeeping.
-        feedUrl?.takeIf { it.isNotBlank() }?.let { url ->
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                onShareFeed?.let { share ->
-                    OutlinedButton(
-                        onClick = { share(url) },
-                        shape = RectangleShape,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("SHARE PODCAST FEED")
-                    }
-                }
-                MetaText(
-                    text = "Subscribe a podcast app to this book. The link carries a token — " +
-                        "anyone holding it can listen without signing in.",
-                    color = AarisColor.Dim,
-                )
-                onRotateFeed?.let { rotate ->
-                    OutlinedButton(
-                        onClick = rotate,
-                        enabled = !isMaintaining,
-                        shape = RectangleShape,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Warning),
-                    ) {
-                        Text("REGENERATE FEED LINK")
-                    }
-                    MetaText(
-                        text = "This link is shared by everyone subscribed to this book, so " +
-                            "regenerating it makes all of them re-subscribe.",
-                        color = AarisColor.Dim,
-                    )
-                }
-            }
-        }
-
-        // Admin housekeeping from here down, below everything anyone reaches for mid-listen.
-        // Correcting a title or a synopsis is a rare, deliberate act, and it should not sit next to
-        // RESUME.
-        onEdit?.let { edit ->
-            OutlinedButton(
-                onClick = edit,
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("EDIT DETAILS")
-            }
-        }
-
-        // The other half of EDIT DETAILS (#112). Renaming a book from a phone was only half
-        // applied while the files carrying the old title could not be rewritten from the same
-        // place — and a count of failed chapters was stated and could not be acted on (#107).
-        onMaintain?.let { maintain ->
-            OutlinedButton(
-                onClick = maintain,
-                enabled = !isMaintaining,
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (isMaintaining) "WORKING" else "MAINTENANCE")
-            }
-        }
-
-        // Last in the header, and the only destructive control on the screen. Deleting is admin
-        // housekeeping, not something anyone does mid-listen, so it sits below everything that is.
-        onDelete?.let { delete ->
-            OutlinedButton(
-                onClick = delete,
-                enabled = !isDeleting,
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Danger),
-            ) {
-                Text(if (isDeleting) "DELETING" else "DELETE FICTION")
             }
         }
     }
@@ -6682,16 +6650,23 @@ private fun shareText(context: Context, text: String, title: String) {
 }
 
 /**
- * The rest of the fiction maintenance actions, behind one button (#112).
+ * Everything a fiction can be told to do, apart from play (#112, widened by #160).
  *
- * A sheet rather than four more buttons in the header. The header is what someone opens to press
- * RESUME, and every action here is a rare, deliberate act with a cost — the two at the bottom spend
- * real server time, and one of them is four hundred conversions on a long serial. Poll is the
- * exception and lives in the header, because "has the author posted" is a question people have
- * while listening.
+ * It began as the overflow for four admin maintenance actions. #160 moved the rest of the header's
+ * stack in here, because ten full-width buttons above a chapter list is not a menu — it is a wall,
+ * and ordering it by rarity only moved the wall further down. What is left on the header is RESUME,
+ * FOLLOW, DOWNLOAD, MORE, and a retry that exists only while something is broken.
  *
- * Each action says what it will do and what it costs, because none of them can be undone and two
- * of them are indistinguishable from the outside until they finish.
+ * Two bands, and the split is who the action belongs to rather than how dangerous it is. **This
+ * book** is what any reader does: ask the source for new chapters, hand the feed to a podcast app.
+ * **Admin** is everything the server restricts, ending in the two that cost real time and the one
+ * that cannot be undone.
+ *
+ * `//` captions rather than the section rule, deliberately — inside a sheet a full rule is too
+ * much furniture, which is the split written down on [SectionHeader].
+ *
+ * Every row states what it will do and what it costs. None of these can be undone, and two are
+ * indistinguishable from the outside until they finish.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -6704,13 +6679,72 @@ private fun FictionMaintenanceSheet(
     onRetag: () -> Unit,
     onReconvertAll: () -> Unit,
     onRetryFailed: (() -> Unit)?,
+    /** Ask the source for new chapters now (#112). Null on a server without the routes. */
+    onPoll: (() -> Unit)? = null,
+    /** This fiction's podcast feed URL, or null on a server that cannot report one (#115). */
+    feedUrl: String? = null,
+    onShareFeed: ((String) -> Unit)? = null,
+    /** Admin only: this token is shared, so rotating it re-subscribes everyone. */
+    onRotateFeed: (() -> Unit)? = null,
+    /** Null unless this account is an admin on a server that can edit fictions. */
+    onEdit: (() -> Unit)? = null,
+    /** Null unless this account is an admin on a server that can delete fictions. */
+    onDelete: (() -> Unit)? = null,
+    isDeleting: Boolean = false,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        val hasReaderActions = onPoll != null || (feedUrl != null && onShareFeed != null)
+        if (hasReaderActions) {
+            MetaText(
+                text = "// This book",
+                color = AarisColor.Accent,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+            )
+            onPoll?.let { poll ->
+                AarisActionRow(
+                    // "The author posted an hour ago, where is it" is the single most likely
+                    // reason to want the phone to *do* something to a fiction rather than play it,
+                    // so it is the first row here. Not admin-gated, and that is the server's
+                    // decision rather than a looser one taken here: the route is rate-limited
+                    // server-side and a fresh chapter benefits every reader.
+                    title = "Check for new chapters",
+                    subtitle = "Asks the source now, instead of waiting for the next poll",
+                    enabled = !isBusy,
+                    onClick = poll,
+                )
+            }
+            feedUrl?.takeIf { it.isNotBlank() }?.let { url ->
+                onShareFeed?.let { share ->
+                    AarisActionRow(
+                        title = "Share podcast feed",
+                        subtitle = "Subscribe a podcast app to this book. The link carries a " +
+                            "token — anyone holding it can listen without signing in.",
+                        enabled = true,
+                        onClick = { share(url) },
+                    )
+                }
+            }
+        }
+
+        val hasAdminActions = onEdit != null || onRotateFeed != null || onDelete != null
         MetaText(
-            text = "// Maintenance",
+            text = if (hasAdminActions) "// Admin" else "// Maintenance",
             color = AarisColor.Accent,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+            modifier = Modifier.padding(
+                start = 20.dp,
+                end = 20.dp,
+                top = if (hasReaderActions) 16.dp else 0.dp,
+                bottom = 8.dp,
+            ),
         )
+        onEdit?.let { edit ->
+            AarisActionRow(
+                title = "Edit details",
+                subtitle = "Title, author, synopsis, tags and cover art",
+                enabled = !isBusy,
+                onClick = edit,
+            )
+        }
         onRetryFailed?.let { retry ->
             AarisActionRow(
                 title = "Retry failed chapters",
@@ -6745,6 +6779,29 @@ private fun FictionMaintenanceSheet(
             enabled = !isBusy,
             onClick = onReconvertAll,
         )
+        onRotateFeed?.let { rotate ->
+            AarisActionRow(
+                title = "Regenerate feed link",
+                subtitle = "This link is shared by everyone subscribed to this book, so " +
+                    "regenerating it makes all of them re-subscribe.",
+                enabled = !isBusy,
+                onClick = rotate,
+                color = AarisColor.Warning,
+            )
+        }
+        // Last, and the only row here that destroys something. It was the last control in the
+        // header for the same reason; the difference is that it is no longer one rectangle among
+        // ten identical ones, and it now says what it takes with it.
+        onDelete?.let { delete ->
+            AarisActionRow(
+                title = if (isDeleting) "Deleting…" else "Delete fiction",
+                subtitle = "Removes the book, its chapters and their audio from the server, " +
+                    "for everyone",
+                enabled = !isBusy && !isDeleting,
+                onClick = delete,
+                color = AarisColor.Danger,
+            )
+        }
         Spacer(modifier = Modifier.height(16.dp))
     }
 }

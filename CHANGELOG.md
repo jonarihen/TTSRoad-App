@@ -23,6 +23,24 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- **The fiction screen leads with one button instead of ten.** For an admin the header stacked
+  RESUME, FOLLOW, DOWNLOAD, RETRY, CHECK FOR NEW CHAPTERS, SHARE PODCAST FEED, REGENERATE FEED LINK,
+  EDIT DETAILS, MAINTENANCE and DELETE FICTION — ten full-width bands of identical weight, with four
+  paragraphs of explanation threaded between them, above the chapter list the screen exists for.
+  The code already sorted them by rarity and said so in its comments, but ordering ten identical
+  rectangles by rarity does not make them fewer; it moves the wall further down the page. Now:
+  **RESUME** alone as the filled control, **FOLLOW · DOWNLOAD · MORE** on one line under it, and
+  everything else behind MORE as rows that state their consequence — which is the only place a
+  sentence like "regenerating makes everyone re-subscribe" can sit without the reader having to
+  guess which button it belongs to. The door is deliberately not admin-gated: checking the source
+  for new chapters and handing the feed to a podcast app are things any reader does, and the sheet
+  gates its own rows one by one. **Retry failed chapters** is the one action that stayed on the
+  face, and it stays because it is conditional on a fault rather than permanent — it appears beside
+  the count that reports the problem and disappears when the problem clears, which was the whole
+  complaint in #107. The header had no layout test before this, which is some of how it reached ten;
+  it has one now, and it asserts rank rather than appearance.
+  ([#160](https://github.com/jonarihen/TTSRoad-App/issues/160))
+
 - **Settings reads as bands now, not as one unbroken column of cards.** The screen was already
   grouped — nine `// Session`, `// Server`, `// Playback`, `// Audio` captions and the rest — but in
   the weakest idiom the app has: an accent line with no rule under it, which at eleven repetitions
@@ -39,7 +57,6 @@ Notable changes to the TTSRoad Android client.
   number in the sequence because the band above it has one, quietly making every number below it
   depend on what the server happens to publish.
   ([#162](https://github.com/jonarihen/TTSRoad-App/issues/162))
-
 - **The player's eight equal buttons now have two ranks, and the app has a written rule for rank.**
   AARIS says no radius, thin border, mono uppercase label. Applied to one control that is handsome;
   applied to every control on a screen it makes a stack of identical grey rectangles with nothing
