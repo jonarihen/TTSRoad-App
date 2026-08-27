@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.player
 
 import dk.perspektiva.ttsroad.data.AudioInfo
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.LibraryProgress
 import dk.perspektiva.ttsroad.data.PlaybackInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,6 +40,39 @@ class FictionListeningSummaryTest {
         assertEquals(3, summary.unplayed)
         assertEquals(1800.0, summary.remainingSeconds, 0.001)
         assertTrue(summary.hasRemaining)
+    }
+
+    @Test
+    fun `the library aggregate becomes the detail summary without new arithmetic`() {
+        val summary = LibraryProgress(
+            chaptersReady = 73,
+            chaptersPlayed = 12,
+            chaptersUnplayed = 61,
+            durationSeconds = 196_692.0,
+            remainingSeconds = 150_031.0,
+            remainingLabel = "41h 41m",
+        ).toFictionListeningSummary()
+
+        assertEquals(73, summary.playable)
+        assertEquals(12, summary.played)
+        assertEquals(61, summary.unplayed)
+        assertEquals(150_031.0, summary.remainingSeconds, 0.001)
+        assertEquals("41h 41m", summary.remainingLabel)
+        assertTrue(summary.hasRemaining)
+    }
+
+    @Test
+    fun `a zero remainder with known duration is a finished answer`() {
+        val summary = LibraryProgress(
+            chaptersReady = 2,
+            chaptersPlayed = 2,
+            durationSeconds = 1200.0,
+            remainingSeconds = 0.0,
+            remainingLabel = "0m",
+        ).toFictionListeningSummary()
+
+        assertTrue(summary.hasRemaining)
+        assertEquals("0m", summary.remainingLabel)
     }
 
     @Test

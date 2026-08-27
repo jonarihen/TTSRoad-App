@@ -147,6 +147,36 @@ object SourceType {
     const val Patreon = "patreon"
 }
 
+/**
+ * One caller's listening state for a fiction, aggregated by the server in the library request.
+ *
+ * This deliberately lives in `data/`: Moshi reflects over it, and release builds keep that package
+ * wholesale. Every member is defaulted so a server can add this object gradually, while the
+ * [FictionSummary.progress] reference remains nullable to distinguish an older server that never
+ * sent an aggregate from a current server saying there is genuinely nothing left.
+ */
+data class LibraryProgress(
+    @param:Json(name = "chapters_total") val chaptersTotal: Int = 0,
+    @param:Json(name = "chapters_ready") val chaptersReady: Int = 0,
+    @param:Json(name = "chapters_played") val chaptersPlayed: Int = 0,
+    @param:Json(name = "chapters_unplayed") val chaptersUnplayed: Int = 0,
+    @param:Json(name = "duration_seconds") val durationSeconds: Double = 0.0,
+    @param:Json(name = "duration_label") val durationLabel: String? = null,
+    @param:Json(name = "remaining_seconds") val remainingSeconds: Double = 0.0,
+    @param:Json(name = "remaining_label") val remainingLabel: String? = null,
+) {
+    /**
+     * The share of known listening time still unheard, or null when there is no duration to divide.
+     *
+     * This is the relative counterpart to [remainingSeconds]: it lets a short untouched book sort
+     * as less finished than a much longer one with more absolute time left but most of it heard.
+     */
+    val remainingFraction: Double?
+        get() = durationSeconds.takeIf { it.isFinite() && it > 0.0 }?.let { duration ->
+            (remainingSeconds / duration).coerceIn(0.0, 1.0)
+        }
+}
+
 data class FictionSummary(
     val id: Int = 0,
     val title: String = "Untitled",
@@ -162,6 +192,13 @@ data class FictionSummary(
     @param:Json(name = "pending_chapters") val pendingChapters: Int = 0,
     @param:Json(name = "error_chapters") val errorChapters: Int = 0,
     @param:Json(name = "processing_chapters") val processingChapters: Int = 0,
+    /**
+     * Per-user progress computed in the library query, without fetching this fiction's chapters.
+     *
+     * Null means the server predates the aggregate. A zero-valued object is different: a current
+     * server did answer and this fiction really has no ready or remaining chapters.
+     */
+    val progress: LibraryProgress? = null,
     /**
      * Whether this fiction is on the caller's shelf.
      *

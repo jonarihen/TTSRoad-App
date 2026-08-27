@@ -12,6 +12,7 @@ class FictionSortTest {
         rating: Double? = null,
         createdAt: String? = null,
         updatedAt: String? = null,
+        progress: LibraryProgress? = null,
     ) = FictionSummary(
         id = id,
         title = title,
@@ -19,6 +20,7 @@ class FictionSortTest {
         rating = rating,
         createdAt = createdAt,
         updatedAt = updatedAt,
+        progress = progress,
     )
 
     @Test
@@ -118,6 +120,37 @@ class FictionSortTest {
         val sorted = rows.sortedForBrowsing(FictionSort.Rating)
 
         assertEquals(listOf(3, 1, 4, 2), sorted.map { it.id })
+    }
+
+    @Test
+    fun `most left is absolute remaining time with an older server last`() {
+        val rows = listOf(
+            fiction(id = 1, progress = LibraryProgress(durationSeconds = 7200.0, remainingSeconds = 900.0)),
+            fiction(id = 2, progress = null),
+            fiction(id = 3, progress = LibraryProgress(durationSeconds = 3600.0, remainingSeconds = 3600.0)),
+            fiction(id = 4, progress = LibraryProgress(durationSeconds = 14_400.0, remainingSeconds = 1800.0)),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.MostLeft)
+
+        assertEquals(listOf(3, 4, 1, 2), sorted.map { it.id })
+    }
+
+    @Test
+    fun `least finished is relative to the fiction length`() {
+        val rows = listOf(
+            // Two hours left, but eight of ten hours already heard.
+            fiction(id = 1, progress = LibraryProgress(durationSeconds = 36_000.0, remainingSeconds = 7200.0)),
+            // Only one hour left, but this two-hour book is less finished.
+            fiction(id = 2, progress = LibraryProgress(durationSeconds = 7200.0, remainingSeconds = 3600.0)),
+            fiction(id = 3, progress = LibraryProgress(durationSeconds = 1800.0, remainingSeconds = 1800.0)),
+            fiction(id = 4, progress = LibraryProgress()),
+            fiction(id = 5, progress = null),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.LeastFinished)
+
+        assertEquals(listOf(3, 2, 1, 4, 5), sorted.map { it.id })
     }
 
     @Test
