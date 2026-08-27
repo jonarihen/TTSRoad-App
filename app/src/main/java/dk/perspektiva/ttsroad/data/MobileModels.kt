@@ -209,6 +209,24 @@ data class FictionSummary(
     @param:Json(name = "source_type") val sourceType: String? = null,
     /** When the server last checked the source for new chapters. ISO-8601, or null if never. */
     @param:Json(name = "last_polled_at") val lastPolledAt: String? = null,
+    /**
+     * When this fiction was first tracked by the server. ISO-8601, or null on an older server.
+     *
+     * The backend has sent this since before the app existed — `_fiction_payload` serialises it
+     * beside [lastPolledAt] — and the client simply never decoded it, which is why the shelf could
+     * not be ordered by anything until #164.
+     */
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    /**
+     * When the fiction row was last written. ISO-8601, or null on an older server.
+     *
+     * **Not "when a new chapter arrived".** The column is an `onupdate` on the fiction row and the
+     * poller writes [lastPolledAt] to that same row, so a poll that found nothing still moves this.
+     * It is the best "recently active" signal the payload carries and it is worth sorting by, but
+     * anything labelling it *new chapters* would be lying: that would need `max(chapters.created_at)`
+     * per fiction, which is a backend change and not one this client can make.
+     */
+    @param:Json(name = "updated_at") val updatedAt: String? = null,
 ) {
     /**
      * This fiction is switched off: the poller skips it and nothing new will be converted.
