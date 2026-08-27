@@ -4,6 +4,23 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+### Added
+
+- **The shelf can be put in an order.** "All fictions" offered a text filter and nothing else, so
+  finding the book that gained a chapter yesterday meant remembering its name. It now sorts by
+  recently updated, recently added, title, author or rating. The dates turned out to have been on
+  the wire the whole time — the backend has serialised `created_at` and `updated_at` on every
+  fiction since before this app existed, and the client had simply never decoded them, which is why
+  no order but the server's own was ever possible. **Recently updated** is deliberately not called
+  *new chapters*: it follows the fiction row, and the poller touches that row whether or not a check
+  found anything, so it means *recently active*. The sheet says so under the option rather than
+  leaving it to be discovered. Nulls sort last everywhere — an older server that never sent a date
+  is saying "we were not told", which is not "a long time ago", and letting it read as the latter
+  would bury the book that actually just arrived. The control is the browse header's own action
+  rather than another full-width button, and its label is the order currently in force, so the grid
+  never has to be read to work out how it is arranged.
+  ([#164](https://github.com/jonarihen/TTSRoad-App/issues/164))
+
 ### Changed
 
 - **The section rule now runs through the whole app instead of just the home screen.** The accent

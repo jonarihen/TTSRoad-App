@@ -125,6 +125,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -164,6 +165,7 @@ import dk.perspektiva.ttsroad.data.EpubPickerMimeTypes
 import dk.perspektiva.ttsroad.data.FictionAddResult
 import dk.perspektiva.ttsroad.data.FictionEditResult
 import dk.perspektiva.ttsroad.data.FictionMetadataDraft
+import dk.perspektiva.ttsroad.data.FictionSort
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.data.HighlightGranularity
@@ -240,6 +242,7 @@ import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
 import dk.perspektiva.ttsroad.data.fictionNarrationPatch
 import dk.perspektiva.ttsroad.data.initiallyExpandedVoiceLocale
+import dk.perspektiva.ttsroad.data.sortedForBrowsing
 import dk.perspektiva.ttsroad.data.voiceChangeConsequence
 import dk.perspektiva.ttsroad.data.voiceGroups
 import dk.perspektiva.ttsroad.data.voiceRateProblem
@@ -5616,6 +5619,11 @@ private fun FictionsScreen(
     var searchError by remember { mutableStateOf<String?>(null) }
     // Saveable so the browse position and filter survive a trip into a fiction and back.
     var query by rememberSaveable { mutableStateOf("") }
+    // Saveable for the same reason, and for rotation. Not yet a stored preference: a sort order
+    // arguably is one, but it would want its own DataStore for a single enum, and none of the three
+    // existing stores is about browsing. Worth doing if it turns out to be missed across launches.
+    var sort by rememberSaveable { mutableStateOf(FictionSort.Default) }
+    var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
     // Hoisted so the browse position survives the round trip into a fiction, alongside the
     // SaveableStateProvider keyed per back-stack entry.
     val gridState = rememberLazyGridState()
@@ -5635,9 +5643,11 @@ private fun FictionsScreen(
         )
 
         else -> {
-            val filtered = remember(fictions, query) {
+            // Filter first, then order. The other way round would sort rows that are about to be
+            // thrown away, which on a large shelf is the whole catalogue sorted to show twelve.
+            val filtered = remember(fictions, query, sort) {
                 val q = query.trim().lowercase()
-                if (q.isBlank()) {
+                val matches = if (q.isBlank()) {
                     fictions
                 } else {
                     fictions.filter { fiction ->
@@ -5646,6 +5656,7 @@ private fun FictionsScreen(
                             fiction.tags.any { it.lowercase().contains(q) }
                     }
                 }
+                matches.sortedForBrowsing(sort)
             }
             RefreshablePane(
                 padding = padding,
@@ -5747,6 +5758,12 @@ private fun FictionsScreen(
                                 filtered.size == fictions.size -> "${fictions.size} fictions"
                                 else -> "${filtered.size} of ${fictions.size}"
                             },
+                            // The order lives in the header's own action rather than in another
+                            // full-width button (#159): the header already states what the list
+                            // holds, and how it is arranged is the same sentence. The label is the
+                            // current order, so the grid never has to be read to find out.
+                            actionLabel = sort.label,
+                            onAction = { sortSheetOpen = true },
                         )
                     }
                     if (filtered.isEmpty()) {
@@ -5762,8 +5779,87 @@ private fun FictionsScreen(
                     }
                 }
             }
+
+            if (sortSheetOpen) {
+                FictionSortSheet(
+                    selected = sort,
+                    onSelect = {
+                        sort = it
+                        sortSheetOpen = false
+                    },
+                    onDismiss = { sortSheetOpen = false },
+                )
+            }
         }
     }
+}
+
+/**
+ * Pick the browse order (#164).
+ *
+ * A sheet rather than a row of chips, because the labels are sentences — "Recently updated" does
+ * not shorten to something a chip can hold without becoming a riddle — and because the choice is
+ * made rarely and then lived with. The current order is already on the header that opens this, so
+ * arriving here is a deliberate act rather than a thing to be scanned past.
+ *
+ * The consequence line under each option is the part worth keeping. "Recently updated" is the
+ * order most people want and the one most likely to be misread: it follows the fiction row, which
+ * the poller touches whether or not it found anything, so it means *recently active* rather than
+ * *has new chapters*. Saying that once, here, is cheaper than a support question later.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FictionSortSheet(
+    selected: FictionSort,
+    onSelect: (FictionSort) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        MetaText(
+            text = "// Sort by",
+            color = AarisColor.Accent,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+        )
+        FictionSort.entries.forEach { option ->
+            val isSelected = option == selected
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(option) }
+                    .semantics { this.selected = isSelected }
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = option.label,
+                        style = MaterialTheme.typography.titleMedium,
+                        // Colour alone would carry this, which is why the row also reports
+                        // `selected` to TalkBack above.
+                        color = if (isSelected) AarisColor.Accent else AarisColor.Ink,
+                    )
+                    fictionSortNote(option)?.let {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(text = it, color = AarisColor.Dim)
+                    }
+                }
+                if (isSelected) {
+                    MetaText(text = "In use", color = AarisColor.Accent)
+                }
+            }
+            HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+/** The half of an order that its two-word label cannot carry. Null where the label is the whole. */
+private fun fictionSortNote(sort: FictionSort): String? = when (sort) {
+    FictionSort.RecentlyUpdated -> "Last change to the book, including a poll that found nothing"
+    FictionSort.RecentlyAdded -> "When the server started tracking it"
+    FictionSort.Author -> "Books with no author last"
+    FictionSort.Rating -> "Unrated last"
+    FictionSort.Title -> null
 }
 
 /**
