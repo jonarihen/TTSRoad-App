@@ -6,6 +6,8 @@ import dk.perspektiva.ttsroad.data.FictionSummary
 sealed interface AppScreen {
     data object Library : AppScreen
     data object Fictions : AppScreen
+    /** Stable hub for playback-adjacent content: queue, marks, reports, stats and history. */
+    data object Listening : AppScreen
     data class Fiction(val fiction: FictionSummary) : AppScreen
 
     /**
@@ -38,12 +40,12 @@ sealed interface AppScreen {
     /** The account's other mobile sign-ins, reached from Settings. */
     data object Devices : AppScreen
 
-    /** Every bookmark on the account, newest first. Reached from Settings and from the player. */
+    /** Every bookmark on the account, newest first. Reached from Listening and from the player. */
     data object Bookmarks : AppScreen
 
     /**
      * The mispronunciations captured from the player and the car, newest first. Reached from
-     * Settings.
+     * Listening.
      *
      * Exists because the capture action creates open work for somebody: a press that files a report
      * and offers no way to see or unfile it is a press nobody makes twice. Read-only apart from
@@ -52,7 +54,7 @@ sealed interface AppScreen {
     data object PronunciationReports : AppScreen
 
     /**
-     * The cross-library Up Next queue. Reached from the player and from Settings.
+     * The cross-library Up Next queue. Reached from the player and from Listening.
      *
      * The queue has been writable since 0.11.0 and had nowhere to be looked at: a chapter could be
      * added from the long-press sheet to a list that could not be seen, corrected or emptied
@@ -61,7 +63,7 @@ sealed interface AppScreen {
     data object Queue : AppScreen
 
     /**
-     * Listening statistics, reached from Settings.
+     * Listening statistics, reached from Listening.
      *
      * Its own destination rather than a Settings card because it is the one screen here that is
      * read rather than operated, and because it holds two independent sources — what this device
@@ -70,7 +72,7 @@ sealed interface AppScreen {
     data object Stats : AppScreen
 
     /**
-     * The server's own pipeline log, reached from Settings. Admin-only and read-only (#124).
+     * The server's own pipeline log, reached from Listening. Admin-only and read-only (#124).
      *
      * Its own destination rather than a Settings card for the same reason [Stats] is one: it is
      * read rather than operated, it pages, and it carries filters of its own. A card holding fifty
@@ -84,6 +86,7 @@ val AppScreen.saveKey: String
     get() = when (this) {
         AppScreen.Library -> "Library"
         AppScreen.Fictions -> "Fictions"
+        AppScreen.Listening -> "Listening"
         is AppScreen.Fiction -> "Fiction:${fiction.id}"
         // Keyed by fiction and not by its contents, so saving an edit does not throw away the form
         // state of the screen that is still open behind the save.
@@ -103,6 +106,48 @@ val AppScreen.saveKey: String
 
 /** The stack every session starts from. */
 val rootBackStack: List<AppScreen> = listOf(AppScreen.Library)
+
+/** The four stable destinations in the persistent bottom navigation (#161). */
+enum class AppRoot(val screen: AppScreen, val label: String) {
+    Home(AppScreen.Library, "HOME"),
+    Browse(AppScreen.Fictions, "BROWSE"),
+    Listening(AppScreen.Listening, "LISTENING"),
+    Settings(AppScreen.Settings, "SETTINGS"),
+}
+
+/** The stable root each destination belongs to, including drill-down and capability-gated screens. */
+val AppScreen.appRoot: AppRoot
+    get() = when (this) {
+        AppScreen.Library -> AppRoot.Home
+        AppScreen.Fictions, is AppScreen.Fiction, is AppScreen.FictionEdit -> AppRoot.Browse
+        AppScreen.Listening,
+        AppScreen.Player,
+        is AppScreen.Reader,
+        AppScreen.Bookmarks,
+        AppScreen.PronunciationReports,
+        AppScreen.Queue,
+        AppScreen.Stats,
+        AppScreen.Logs,
+        -> AppRoot.Listening
+
+        AppScreen.Settings, AppScreen.Devices -> AppRoot.Settings
+    }
+
+/** Which tab owns the destination currently on screen. */
+val List<AppScreen>.activeRoot: AppRoot
+    get() = lastOrNull()?.appRoot ?: AppRoot.Home
+
+/**
+ * Select a stable root without putting the previous tab behind BACK.
+ *
+ * Selecting the active tab also returns to its root, which is the conventional escape from a
+ * drill-down. Saved Compose state is keyed by destination rather than stack position, so the root's
+ * scroll/search state survives leaving it and coming back.
+ */
+fun List<AppScreen>.switchToRoot(root: AppRoot): List<AppScreen> {
+    val target = listOf(root.screen)
+    return if (this == target) this else target
+}
 
 /**
  * Push [screen] onto the stack. Re-navigating to a destination that is already open pops back to

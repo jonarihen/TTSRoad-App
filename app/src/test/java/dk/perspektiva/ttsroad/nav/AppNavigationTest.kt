@@ -11,15 +11,15 @@ class AppNavigationTest {
     private fun fiction(id: Int) = FictionSummary(id = id, title = "Fiction $id")
 
     @Test
-    fun `back from a fiction returns to the fictions list, not the library`() {
+    fun `back from a fiction returns to the browse root`() {
         val stack = rootBackStack
-            .navigateTo(AppScreen.Fictions)
+            .switchToRoot(AppRoot.Browse)
             .navigateTo(AppScreen.Fiction(fiction(1)))
 
         val afterBack = stack.popScreen()
 
-        assertEquals(listOf(AppScreen.Library, AppScreen.Fictions), afterBack)
-        assertEquals(listOf(AppScreen.Library), afterBack.popScreen())
+        assertEquals(listOf(AppScreen.Fictions), afterBack)
+        assertEquals(listOf(AppScreen.Fictions), afterBack.popScreen())
     }
 
     @Test
@@ -30,17 +30,15 @@ class AppNavigationTest {
     }
 
     @Test
-    fun `player and settings opened from a nested screen pop back to it`() {
+    fun `a player opened from a nested screen pops back to it`() {
         val fictionScreen = AppScreen.Fiction(fiction(7))
         val stack = rootBackStack
-            .navigateTo(AppScreen.Fictions)
+            .switchToRoot(AppRoot.Browse)
             .navigateTo(fictionScreen)
             .navigateTo(AppScreen.Player)
-            .navigateTo(AppScreen.Settings)
 
         val afterBack = stack.popScreen()
-        assertEquals(AppScreen.Player, afterBack.last())
-        assertEquals(fictionScreen, afterBack.popScreen().last())
+        assertEquals(fictionScreen, afterBack.last())
     }
 
     @Test
@@ -83,20 +81,72 @@ class AppNavigationTest {
     @Test
     fun `save keys are stable and distinguish fictions`() {
         assertEquals("Fictions", AppScreen.Fictions.saveKey)
+        assertEquals("Listening", AppScreen.Listening.saveKey)
         assertEquals("Fiction:1", AppScreen.Fiction(fiction(1)).saveKey)
         assertEquals("Fiction:2", AppScreen.Fiction(fiction(2)).saveKey)
         assertEquals("Devices", AppScreen.Devices.saveKey)
         assertEquals("Stats", AppScreen.Stats.saveKey)
     }
 
-    /** Devices hangs off Settings, so backing out of it lands back on Settings, not the library. */
+    /** Devices hangs off Settings, so backing out of it lands on that root, not Home. */
     @Test
     fun `back from devices returns to settings`() {
         val stack = rootBackStack
-            .navigateTo(AppScreen.Settings)
+            .switchToRoot(AppRoot.Settings)
             .navigateTo(AppScreen.Devices)
 
-        assertEquals(listOf(AppScreen.Library, AppScreen.Settings), stack.popScreen())
+        assertEquals(listOf(AppScreen.Settings), stack.popScreen())
+    }
+
+    @Test
+    fun `switching roots does not put the previous tab behind back`() {
+        val browseStack = rootBackStack
+            .switchToRoot(AppRoot.Browse)
+            .navigateTo(AppScreen.Fiction(fiction(1)))
+
+        val listening = browseStack.switchToRoot(AppRoot.Listening)
+
+        assertEquals(listOf(AppScreen.Listening), listening)
+        assertEquals(listening, listening.popScreen())
+        assertEquals(AppRoot.Listening, listening.activeRoot)
+    }
+
+    @Test
+    fun `selecting the active tab returns its drill-down to the root`() {
+        val stack = rootBackStack
+            .switchToRoot(AppRoot.Browse)
+            .navigateTo(AppScreen.Fiction(fiction(1)))
+
+        assertEquals(listOf(AppScreen.Fictions), stack.switchToRoot(AppRoot.Browse))
+    }
+
+    @Test
+    fun `a fiction consistently belongs to browse however it was opened`() {
+        val fromHome = rootBackStack.navigateTo(AppScreen.Fiction(fiction(1)))
+        val fromBrowse = rootBackStack
+            .switchToRoot(AppRoot.Browse)
+            .navigateTo(AppScreen.Fiction(fiction(1)))
+
+        assertEquals(AppRoot.Browse, fromHome.activeRoot)
+        assertEquals(AppRoot.Browse, fromBrowse.activeRoot)
+    }
+
+    @Test
+    fun `content and account drill-downs identify their stable roots`() {
+        assertEquals(AppRoot.Listening, listOf(AppScreen.Player).activeRoot)
+        assertEquals(AppRoot.Listening, listOf(AppScreen.Bookmarks).activeRoot)
+        assertEquals(AppRoot.Listening, listOf(AppScreen.Queue).activeRoot)
+        assertEquals(AppRoot.Listening, listOf(reader(1)).activeRoot)
+        assertEquals(AppRoot.Settings, listOf(AppScreen.Devices).activeRoot)
+    }
+
+    @Test
+    fun `the four roots are stable and unique`() {
+        assertEquals(
+            listOf(AppScreen.Library, AppScreen.Fictions, AppScreen.Listening, AppScreen.Settings),
+            AppRoot.entries.map { it.screen },
+        )
+        assertEquals(4, AppRoot.entries.map { it.label }.toSet().size)
     }
 
     private fun reader(chapterId: Int) = AppScreen.Reader(

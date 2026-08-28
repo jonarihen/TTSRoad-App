@@ -6,6 +6,19 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **The app has a map now.** HOME, BROWSE, LISTENING and SETTINGS are four stable bottom
+  destinations instead of thirteen screens reached by unrelated links in unrelated corners. The
+  mini player sits above that map, and the top bar is now always just BACK and the current title —
+  no conditional PLAYER action replacing itself with SETTINGS. LISTENING is the home for Up Next,
+  bookmarks, listening stats, pronunciation reports, player history and the admin server log; all
+  five content links have left Settings, while Device sessions stays with account security. Each
+  drill-down declares its root, so a fiction consistently highlights BROWSE, playback content
+  highlights LISTENING and device management highlights SETTINGS regardless of where it was opened.
+  Selecting a tab replaces the previous root instead of putting it behind BACK, while per-screen
+  saved state still restores scroll and search. The mini-player/navigation stack is layout-tested
+  at `w320dp-h360dp`, where the compact player already has the least height to spend.
+  ([#161](https://github.com/jonarihen/TTSRoad-App/issues/161))
+
 - **The shelf now reads the progress answer the server already sends.** Each fiction in the
   library response carries one caller-scoped aggregate — chapters ready, played and left, plus
   total and remaining listening time — computed in one grouped query. The app discarded it and
@@ -16,7 +29,6 @@ Notable changes to the TTSRoad Android client.
   absolute time and **Least finished** for the remaining share of a book. An older server's missing
   key remains null, renders no invented `0 left`, and sorts after known answers.
   ([#163](https://github.com/jonarihen/TTSRoad-App/issues/163))
-
 - **The shelf can be put in an order.** "All fictions" offered a text filter and nothing else, so
   finding the book that gained a chapter yesterday meant remembering its name. It now sorts by
   recently updated, recently added, title, author or rating. The dates turned out to have been on
