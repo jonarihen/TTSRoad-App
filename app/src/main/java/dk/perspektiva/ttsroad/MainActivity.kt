@@ -3113,6 +3113,52 @@ private suspend fun jumpToSnapshot(
     }
 }
 
+/**
+ * The bands Settings is read in, in the order they appear, and the kicker each one wears (#162).
+ *
+ * Named here rather than spelled out at eleven call sites for one reason: the [SectionHeader] rule
+ * about which kicker a section may carry is a property of the *screen*, not of any one header, and
+ * this is the only place where the whole sequence is visible at once. An ordinal belongs to a band
+ * that is always drawn; a band a capability or an admin flag can take away carries a mnemonic, so
+ * that the numbers a reader learns -- 03 is playback -- mean the same thing on a server that
+ * publishes podcast feeds and on one that does not. `SettingsSectionsTest` holds this to it.
+ *
+ * @property kicker the ordinal or mnemonic drawn after the section rule's `§`.
+ * @property title the band's name.
+ * @property alwaysPresent whether the band is drawn on every visit. It is a claim about the
+ *   condition at the call site rather than something enforced from here, so a section that grows a
+ *   gate has to give up its ordinal in this list at the same time.
+ */
+internal enum class SettingsSection(
+    val kicker: String,
+    val title: String,
+    val alwaysPresent: Boolean,
+) {
+    Session("01", "Session", alwaysPresent = true),
+    AccountSecurity("SEC", "Account security", alwaysPresent = false),
+    Server("02", "Server", alwaysPresent = true),
+    Notifications("NTF", "Notifications", alwaysPresent = false),
+    Playback("03", "Playback", alwaysPresent = true),
+    Offline("04", "Offline", alwaysPresent = true),
+    ServerStorage("DISK", "Server storage", alwaysPresent = false),
+    PodcastFeeds("RSS", "Podcast feeds", alwaysPresent = false),
+    ListeningState("BAK", "Listening state", alwaysPresent = false),
+    AudiobookExports("M4B", "Audiobook exports", alwaysPresent = false),
+    App("05", "App", alwaysPresent = true),
+}
+
+/**
+ * One of Settings' bands, headed by the app's section rule.
+ *
+ * Internal rather than private because two of the bands are drawn from their own files --
+ * account security and server storage moved out of here long ago, and a header that only
+ * [SettingsScreen] could draw is most of why those two ended up with a caption instead.
+ */
+@Composable
+internal fun SettingsSectionHeader(section: SettingsSection) {
+    SectionHeader(kicker = section.kicker, title = section.title)
+}
+
 @Composable
 private fun SettingsScreen(
     padding: PaddingValues,
@@ -3256,7 +3302,7 @@ private fun SettingsScreen(
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        MetaText(text = "// Session", color = AarisColor.Accent)
+        SettingsSectionHeader(SettingsSection.Session)
         AarisCard {
             Column(
                 modifier = Modifier
@@ -3335,7 +3381,7 @@ private fun SettingsScreen(
             AccountSecuritySettings(repository = repository)
         }
 
-        MetaText(text = "// Server", color = AarisColor.Accent)
+        SettingsSectionHeader(SettingsSection.Server)
         AarisCard {
             Column(
                 modifier = Modifier
@@ -3410,7 +3456,7 @@ private fun SettingsScreen(
         }
 
         if (!notificationsOn) {
-            MetaText(text = "// Notifications", color = AarisColor.Accent)
+            SettingsSectionHeader(SettingsSection.Notifications)
             AarisCard {
                 Column(
                     modifier = Modifier
@@ -3435,7 +3481,11 @@ private fun SettingsScreen(
             }
         }
 
-        MetaText(text = "// Playback", color = AarisColor.Accent)
+        // One band, not two. Skip silence and volume boost were their own card under their own
+        // caption, which read as a second subject; they are the same one -- how a chapter sounds
+        // once it is playing -- and splitting them meant the reader had to know which of two
+        // look-alike cards a preference had been filed under (#162).
+        SettingsSectionHeader(SettingsSection.Playback)
         AarisCard {
             Column(
                 modifier = Modifier
@@ -3502,17 +3552,9 @@ private fun SettingsScreen(
                         },
                     )
                 }
-            }
-        }
 
-        MetaText(text = "// Audio", color = AarisColor.Accent)
-        AarisCard {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -3553,7 +3595,7 @@ private fun SettingsScreen(
             }
         }
 
-        MetaText(text = "// Offline", color = AarisColor.Accent)
+        SettingsSectionHeader(SettingsSection.Offline)
         AarisCard {
             Column(
                 modifier = Modifier
@@ -3671,7 +3713,7 @@ private fun SettingsScreen(
         // from a laptop (#115). Share rather than copy, because handing the URL straight to a
         // podcast app is the actual goal.
         if (capabilities.feedUrls) {
-            MetaText(text = "// Podcast feeds", color = AarisColor.Accent)
+            SettingsSectionHeader(SettingsSection.PodcastFeeds)
             AarisCard {
                 Column(
                     modifier = Modifier
@@ -3717,7 +3759,7 @@ private fun SettingsScreen(
         // "Audio can always be made again. Where you are in a four-hundred-chapter serial cannot."
         // The phone writes most of that state and could not save a copy of it (#116).
         if (capabilities.listeningStateBackup) {
-            MetaText(text = "// Listening state", color = AarisColor.Accent)
+            SettingsSectionHeader(SettingsSection.ListeningState)
             AarisCard {
                 Column(
                     modifier = Modifier
@@ -3767,7 +3809,7 @@ private fun SettingsScreen(
         // chapter with a position per chapter, and one multi-gigabyte file carrying a single
         // position is a downgrade, not a feature. What they are for is another audiobook player.
         if (canListExports) {
-            MetaText(text = "// Audiobook exports", color = AarisColor.Accent)
+            SettingsSectionHeader(SettingsSection.AudiobookExports)
             AarisCard {
                 Column(
                     modifier = Modifier
@@ -3826,7 +3868,7 @@ private fun SettingsScreen(
             }
         }
 
-        MetaText(text = "// App", color = AarisColor.Accent)
+        SettingsSectionHeader(SettingsSection.App)
         AarisCard {
             Column(
                 modifier = Modifier
