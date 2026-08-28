@@ -210,6 +210,25 @@ class LibraryCacheDeltaTest {
     }
 
     @Test
+    fun `editing fiction metadata does not erase its library-only progress`() {
+        val cache = cache()
+        enqueueLibrary(
+            serverTime = "t1",
+            fictions = """{"id":7,"title":"Before","progress":{"chapters_ready":4,"chapters_unplayed":3,"duration_seconds":2400.0,"remaining_seconds":1800.0,"remaining_label":"30m"}}""",
+        )
+        cache.refreshLibraryAndSettle()
+        nextRequest()
+
+        // This is the shape PATCH /fictions/{id} returns: a fiction payload, not a library row, so
+        // it has no per-user progress object of its own.
+        cache.applyFiction(FictionSummary(id = 7, title = "After"))
+
+        val fiction = cache.library.value.value?.fictions?.single()
+        assertEquals("After", fiction?.title)
+        assertEquals(1800.0, fiction?.progress?.remainingSeconds ?: -1.0, 0.001)
+    }
+
+    @Test
     fun `a server without the flag is never probed and keeps refetching in full`() {
         val cache = cache(deltaSync = false)
         enqueueLibrary(serverTime = "t1")

@@ -191,6 +191,7 @@ import dk.perspektiva.ttsroad.data.formatExpiresIn
 import dk.perspektiva.ttsroad.data.formatServerTimestamp
 import dk.perspektiva.ttsroad.data.FeedsResponse
 import dk.perspektiva.ttsroad.data.LibraryFeed
+import dk.perspektiva.ttsroad.data.LibraryProgress
 import dk.perspektiva.ttsroad.data.LibraryScopeAll
 import dk.perspektiva.ttsroad.data.listeningStateFileName
 import dk.perspektiva.ttsroad.data.listeningStateImportSummary
@@ -279,6 +280,7 @@ import dk.perspektiva.ttsroad.player.lastHeardSnapshot
 import dk.perspektiva.ttsroad.player.listeningSpanAtSpeed
 import dk.perspektiva.ttsroad.player.remainingMs
 import dk.perspektiva.ttsroad.player.remainingMsAtSpeed
+import dk.perspektiva.ttsroad.player.toFictionListeningSummary
 import dk.perspektiva.ttsroad.player.BookmarkMarker
 import dk.perspektiva.ttsroad.player.bookmarkMarkers
 import dk.perspektiva.ttsroad.player.markerAt
@@ -1126,6 +1128,14 @@ private fun FictionScreen(
             ?: libraryState.value?.followingIds?.contains(fiction.id)
             ?: fiction.following
     }
+    // Unlike the chapter endpoint, the library request carries the server's one-query progress
+    // aggregate. Prefer the freshest loaded row, then the navigation snapshot, and only compute
+    // from chapters when talking to an older server that sent no aggregate at all (#163).
+    val libraryProgress = remember(libraryState, browseState, fiction.id, fiction.progress) {
+        browseState.value?.fictions?.firstOrNull { it.id == fiction.id }?.progress
+            ?: libraryState.value?.fictions?.firstOrNull { it.id == fiction.id }?.progress
+            ?: fiction.progress
+    }
     var didAutoScroll by remember(fiction.id) { mutableStateOf(false) }
     // Held here so an in-place row update cannot scroll a 500-row list back to the top.
     val listState = rememberLazyListState()
@@ -1334,8 +1344,9 @@ private fun FictionScreen(
                             downloadSummary = remember(chapters, downloadState) {
                                 fictionDownloadSummary(chapters, downloadState)
                             },
-                            listeningSummary = remember(chapters) {
-                                fictionListeningSummary(chapters)
+                            listeningSummary = remember(chapters, libraryProgress) {
+                                libraryProgress?.toFictionListeningSummary()
+                                    ?: fictionListeningSummary(chapters)
                             },
                             playbackSpeed = playerState.speed,
                             isMaintaining = isMaintaining,
@@ -5945,6 +5956,8 @@ private fun fictionSortNote(sort: FictionSort): String? = when (sort) {
     FictionSort.RecentlyUpdated -> "Last change to the book, including a poll that found nothing"
     FictionSort.RecentlyAdded -> "When the server started tracking it"
     FictionSort.Author -> "Books with no author last"
+    FictionSort.MostLeft -> "Absolute listening time remaining; unavailable totals last"
+    FictionSort.LeastFinished -> "Smallest share heard, regardless of the book's length"
     FictionSort.Rating -> "Unrated last"
     FictionSort.Title -> null
 }
@@ -6304,9 +6317,20 @@ private fun FictionGridCard(fiction: FictionSummary, onClick: () -> Unit) {
                     ).joinToString("  ·  "),
                     color = AarisColor.Dim,
                 )
+                fiction.progress?.let { progress ->
+                    MetaText(text = libraryProgressMeta(progress), color = AarisColor.Muted)
+                }
             }
         }
     }
+}
+
+/** The server's shelf answer, compact enough for a 158 dp grid card. */
+internal fun libraryProgressMeta(progress: LibraryProgress): String {
+    val remaining = progress.remainingLabel
+        ?.takeIf(String::isNotBlank)
+        ?: formatListeningSpan(progress.remainingSeconds)
+    return "$remaining remaining  ·  ${progress.chaptersUnplayed} left"
 }
 
 /**
@@ -6470,7 +6494,8 @@ internal fun FictionDetailHeader(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (listeningSummary.hasRemaining) {
                     Text(
-                        text = "${formatListeningSpan(listeningSummary.remainingSeconds)} remaining",
+                        text = "${listeningSummary.remainingLabel
+                            ?: formatListeningSpan(listeningSummary.remainingSeconds)} remaining",
                         style = MaterialTheme.typography.titleMedium,
                     )
                 }

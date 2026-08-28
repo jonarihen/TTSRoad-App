@@ -251,7 +251,19 @@ class LibraryCache(private val repository: TtsRoadRepository) {
 
     /** Untouched rows come back by identity, so Compose skips redrawing them. */
     private fun List<FictionSummary>.replacing(fiction: FictionSummary): List<FictionSummary> =
-        map { row -> if (row.id == fiction.id) fiction.copy(following = row.following) else row }
+        map { row ->
+            if (row.id == fiction.id) {
+                // PATCH responses carry the fiction payload but not the library-only per-user
+                // aggregate. Preserve the loaded answer just as we preserve this list's shelf
+                // membership, or editing a title would make its progress disappear until refresh.
+                fiction.copy(
+                    following = row.following,
+                    progress = fiction.progress ?: row.progress,
+                )
+            } else {
+                row
+            }
+        }
 
     fun ensureChapters(fictionId: Int) {
         if (chapterState(fictionId).value.hasContent || chapterJobs[fictionId]?.isActive == true) return

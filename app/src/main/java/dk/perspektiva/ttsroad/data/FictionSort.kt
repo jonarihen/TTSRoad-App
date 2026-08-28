@@ -42,6 +42,12 @@ enum class FictionSort(val label: String) {
     /** Author name, with the unattributed sorted last rather than under an empty heading. */
     Author("Author A–Z"),
 
+    /** Greatest absolute listening time still unheard first. Missing aggregates sort last. */
+    MostLeft("Most left to hear"),
+
+    /** Greatest unheard share first: an untouched short book precedes a mostly-heard long one. */
+    LeastFinished("Least finished"),
+
     /** Highest rated first. Unrated books sort last, for the same reason nulls do everywhere here. */
     Rating("Rating"),
     ;
@@ -72,6 +78,8 @@ fun List<FictionSummary>.sortedForBrowsing(sort: FictionSort): List<FictionSumma
             ascendingNullsLast { it.author?.takeIf(String::isNotBlank) },
         )
 
+        FictionSort.MostLeft -> sortedWith(descendingNullsLast { it.progress?.remainingSeconds })
+        FictionSort.LeastFinished -> sortedWith(descendingNullsLast { it.progress?.remainingFraction })
         FictionSort.Rating -> sortedWith(descendingNullsLast { it.rating })
     }
 

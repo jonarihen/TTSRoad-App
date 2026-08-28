@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.player
 
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.LibraryProgress
 import kotlin.math.roundToLong
 
 /**
@@ -10,8 +11,9 @@ import kotlin.math.roundToLong
  * the one asked before starting a 400-chapter serial, which is a different question with a
  * different answer.
  *
- * Every field is a sum over the chapter list the screen has already loaded; nothing here needs a
- * request.
+ * On a current server the library aggregate supplies this directly. The chapter-list calculation
+ * below remains the compatibility path for an older server; because the detail screen has already
+ * loaded those rows, that fallback adds no request.
  */
 data class FictionListeningSummary(
     /** Chapters with audio. Chapters still being generated are not something to listen to yet. */
@@ -24,6 +26,19 @@ data class FictionListeningSummary(
      * duration, where a "0m remaining" would be a confident lie rather than a total.
      */
     val hasRemaining: Boolean = false,
+    /** Server-formatted whole-fiction duration, including its round-up rule when available. */
+    val remainingLabel: String? = null,
+)
+
+/** Use the one-query server aggregate as the fiction header's answer when the library supplied it. */
+fun LibraryProgress.toFictionListeningSummary(): FictionListeningSummary = FictionListeningSummary(
+    playable = chaptersReady,
+    played = chaptersPlayed,
+    unplayed = chaptersUnplayed,
+    remainingSeconds = remainingSeconds,
+    // A zero remainder on a fiction with a known duration means finished, not unknown.
+    hasRemaining = durationSeconds > 0.0,
+    remainingLabel = remainingLabel?.takeIf(String::isNotBlank),
 )
 
 /**

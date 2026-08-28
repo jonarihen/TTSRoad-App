@@ -6,6 +6,17 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- **The shelf now reads the progress answer the server already sends.** Each fiction in the
+  library response carries one caller-scoped aggregate — chapters ready, played and left, plus
+  total and remaining listening time — computed in one grouped query. The app discarded it and
+  could only recover the same answer after opening every book and downloading its complete chapter
+  list. Grid cards now state time and chapters left directly from that aggregate; the detail screen
+  prefers the same answer when it is available, including the server's rounding, so the phone and
+  web shelf do not maintain separate arithmetic. The browse order gains **Most left to hear** for
+  absolute time and **Least finished** for the remaining share of a book. An older server's missing
+  key remains null, renders no invented `0 left`, and sorts after known answers.
+  ([#163](https://github.com/jonarihen/TTSRoad-App/issues/163))
+
 - **The shelf can be put in an order.** "All fictions" offered a text filter and nothing else, so
   finding the book that gained a chapter yesterday meant remembering its name. It now sorts by
   recently updated, recently added, title, author or rating. The dates turned out to have been on
