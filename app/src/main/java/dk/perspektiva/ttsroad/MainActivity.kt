@@ -1360,7 +1360,7 @@ private fun FictionScreen(
                             // rows one by one.
                             onMore = if (
                                 capabilities.fictionMaintenance ||
-                                feedUrl != null ||
+                                !feedUrl.isNullOrBlank() ||
                                 (capabilities.fictionManagement && isAdmin)
                             ) {
                                 { showMaintenance = true }
@@ -6711,7 +6711,7 @@ internal fun FictionMaintenanceSheet(
     isDeleting: Boolean = false,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
-        val hasReaderActions = onPoll != null || (feedUrl != null && onShareFeed != null)
+        val hasReaderActions = onPoll != null || (!feedUrl.isNullOrBlank() && onShareFeed != null)
         if (hasReaderActions) {
             MetaText(
                 text = "// This book",

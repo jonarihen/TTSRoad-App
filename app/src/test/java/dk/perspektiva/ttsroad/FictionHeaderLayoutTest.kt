@@ -190,4 +190,22 @@ class FictionHeaderLayoutTest {
             compose.onNodeWithText(adminOnly).assertDoesNotExist()
         }
     }
+
+    @Test
+    fun `a blank feed url does not create an empty reader band`() {
+        compose.setContent {
+            TtsRoadTheme {
+                FictionMaintenanceSheet(
+                    fiction = fiction,
+                    isBusy = false,
+                    onDismiss = {},
+                    feedUrl = "   ",
+                    onShareFeed = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("// This book").assertDoesNotExist()
+        compose.onNodeWithText("Share podcast feed").assertDoesNotExist()
+    }
 }
