@@ -262,12 +262,15 @@ import dk.perspektiva.ttsroad.media.pronunciationReportOutcomeFor
 import dk.perspektiva.ttsroad.media.pronunciationWordAt
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.nav.AppScreen
+import dk.perspektiva.ttsroad.nav.AppRoot
+import dk.perspektiva.ttsroad.nav.activeRoot
 import dk.perspektiva.ttsroad.nav.navigateTo
 import dk.perspektiva.ttsroad.nav.popScreen
 import dk.perspektiva.ttsroad.nav.readerFollowTarget
 import dk.perspektiva.ttsroad.nav.replaceTop
 import dk.perspektiva.ttsroad.nav.rootBackStack
 import dk.perspektiva.ttsroad.nav.saveKey
+import dk.perspektiva.ttsroad.nav.switchToRoot
 import dk.perspektiva.ttsroad.nav.withFiction
 import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
@@ -437,8 +440,10 @@ private fun TtsRoadApp(
             MainScaffold(
                 session = session,
                 screen = backStack.last(),
+                selectedRoot = backStack.activeRoot,
                 canGoBack = backStack.size > 1,
                 onScreenChange = { backStack = backStack.navigateTo(it) },
+                onRootChange = { backStack = backStack.switchToRoot(it) },
                 onReplaceScreen = { backStack = backStack.replaceTop(it) },
                 // A fiction rides *in* the stack, so an edit has to be written back into every entry
                 // holding it — otherwise the screen under the editor, and the top bar that reads its
@@ -654,13 +659,108 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     }
 }
 
+/** Stable chrome: BACK when nested, then the title; primary destinations live below the content. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun AppTopBar(title: String, canGoBack: Boolean, onBack: () -> Unit) {
+    Column {
+        TopAppBar(
+            title = {
+                Text(
+                    text = title.uppercase(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+            },
+            navigationIcon = {
+                if (canGoBack) {
+                    TextButton(onClick = onBack) { Text("BACK") }
+                }
+            },
+            actions = {},
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = AarisColor.Bg,
+                titleContentColor = AarisColor.Ink,
+                navigationIconContentColor = AarisColor.Accent,
+                actionIconContentColor = AarisColor.Muted,
+            ),
+        )
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+    }
+}
+
+/** AARIS-shaped bottom navigation: four equal, square-edged, 56 dp tab targets. */
+@Composable
+internal fun PrimaryNavigationBar(selected: AppRoot, onSelect: (AppRoot) -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AarisColor.BgRaise)
+            .navigationBarsPadding(),
+    ) {
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .selectableGroup(),
+        ) {
+            AppRoot.entries.forEach { root ->
+                val isSelected = root == selected
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 56.dp)
+                        .selectable(
+                            selected = isSelected,
+                            role = Role.Tab,
+                            onClick = { onSelect(root) },
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
+                            .background(if (isSelected) AarisColor.Accent else Color.Transparent),
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = root.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isSelected) AarisColor.Accent else AarisColor.Muted,
+                        maxLines = 1,
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+/** The mini player belongs above navigation, so the two never compete for the system-bar inset. */
+@Composable
+internal fun AppBottomBar(
+    selected: AppRoot,
+    onSelect: (AppRoot) -> Unit,
+    miniPlayer: (@Composable () -> Unit)? = null,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        miniPlayer?.invoke()
+        PrimaryNavigationBar(selected = selected, onSelect = onSelect)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MainScaffold(
     session: SessionState,
     screen: AppScreen,
+    selectedRoot: AppRoot,
     canGoBack: Boolean,
     onScreenChange: (AppScreen) -> Unit,
+    onRootChange: (AppRoot) -> Unit,
     onReplaceScreen: (AppScreen) -> Unit,
     /** Rewrite the stack around an edited fiction, without navigating anywhere. */
     onFictionUpdated: (FictionSummary) -> Unit,
@@ -689,15 +789,12 @@ private fun MainScaffold(
     val skipIntervalMs by remember(preferences) {
         preferences.prefs.map { it.skipIntervalMs }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = DefaultSkipIntervalMs)
-    val historyStore = remember { ServiceLocator.playbackHistory(context) }
-    val hasHistory by remember(historyStore) {
-        historyStore.snapshots.map { it.isNotEmpty() }.distinctUntilChanged()
-    }.collectAsStateWithLifecycle(initialValue = false)
     val title = when (screen) {
         is AppScreen.Fiction -> screen.fiction.title
         is AppScreen.FictionEdit -> "Edit details"
         AppScreen.Library -> session.serverName
         AppScreen.Fictions -> "All fictions"
+        AppScreen.Listening -> "Listening"
         AppScreen.Player -> "Now playing"
         is AppScreen.Reader -> screen.title
         AppScreen.Settings -> "Settings"
@@ -712,56 +809,25 @@ private fun MainScaffold(
     Scaffold(
         containerColor = AarisColor.Bg,
         topBar = {
-            Column {
-                TopAppBar(
-                    title = {
-                        Text(
-                            text = title.uppercase(),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleLarge,
-                        )
-                    },
-                    navigationIcon = {
-                        if (canGoBack) {
-                            TextButton(onClick = popBackStack) {
-                                Text("BACK")
-                            }
-                        }
-                    },
-                    actions = {
-                        // With media loaded the mini player bar is the way in; this action only
-                        // covers reaching "jump back" history when nothing is playing.
-                        if (!playerState.hasMedia && hasHistory && screen != AppScreen.Player) {
-                            TextButton(onClick = { onScreenChange(AppScreen.Player) }) {
-                                Text("PLAYER")
-                            }
-                        }
-                        if (screen != AppScreen.Settings) {
-                            TextButton(onClick = { onScreenChange(AppScreen.Settings) }) {
-                                Text("SETTINGS")
-                            }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = AarisColor.Bg,
-                        titleContentColor = AarisColor.Ink,
-                        navigationIconContentColor = AarisColor.Accent,
-                        actionIconContentColor = AarisColor.Muted,
-                    ),
-                )
-                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-            }
+            AppTopBar(title = title, canGoBack = canGoBack, onBack = popBackStack)
         },
         bottomBar = {
-            if (playerState.hasMedia && screen != AppScreen.Player) {
-                MiniPlayerBar(
-                    state = playerState,
-                    playbackController = playbackController,
-                    skipIntervalMs = skipIntervalMs,
-                    onExpand = { onScreenChange(AppScreen.Player) },
-                )
-            }
+            AppBottomBar(
+                selected = selectedRoot,
+                onSelect = onRootChange,
+                miniPlayer = if (playerState.hasMedia && screen != AppScreen.Player) {
+                    {
+                        MiniPlayerBar(
+                            state = playerState,
+                            playbackController = playbackController,
+                            skipIntervalMs = skipIntervalMs,
+                            onExpand = { onScreenChange(AppScreen.Player) },
+                        )
+                    }
+                } else {
+                    null
+                },
+            )
         },
     ) { padding ->
         stateHolder.SaveableStateProvider(screen.saveKey) {
@@ -771,7 +837,7 @@ private fun MainScaffold(
                     playbackController = playbackController,
                     onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                     onOpenPlayer = { onScreenChange(AppScreen.Player) },
-                    onBrowseFictions = { onScreenChange(AppScreen.Fictions) },
+                    onBrowseFictions = { onRootChange(AppRoot.Browse) },
                 )
 
                 AppScreen.Fictions -> FictionsScreen(
@@ -782,6 +848,21 @@ private fun MainScaffold(
                     isAdmin = session.isAdmin,
                     onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                     onOpenReader = { onScreenChange(it) },
+                )
+
+                AppScreen.Listening -> ListeningScreen(
+                    padding = padding,
+                    session = session,
+                    repository = repository,
+                    playerState = playerState,
+                    onOpenPlayer = { onScreenChange(AppScreen.Player) },
+                    onOpenBookmarks = { onScreenChange(AppScreen.Bookmarks) },
+                    onOpenPronunciationReports = {
+                        onScreenChange(AppScreen.PronunciationReports)
+                    },
+                    onOpenQueue = { onScreenChange(AppScreen.Queue) },
+                    onOpenStats = { onScreenChange(AppScreen.Stats) },
+                    onOpenLogs = { onScreenChange(AppScreen.Logs) },
                 )
 
                 is AppScreen.Fiction -> FictionScreen(
@@ -833,13 +914,6 @@ private fun MainScaffold(
                     session = session,
                     repository = repository,
                     onOpenDevices = { onScreenChange(AppScreen.Devices) },
-                    onOpenBookmarks = { onScreenChange(AppScreen.Bookmarks) },
-                    onOpenPronunciationReports = {
-                        onScreenChange(AppScreen.PronunciationReports)
-                    },
-                    onOpenQueue = { onScreenChange(AppScreen.Queue) },
-                    onOpenStats = { onScreenChange(AppScreen.Stats) },
-                    onOpenLogs = { onScreenChange(AppScreen.Logs) },
                 )
 
                 AppScreen.Devices -> DevicesScreen(
@@ -3215,17 +3289,146 @@ internal fun SettingsSectionHeader(section: SettingsSection) {
     SectionHeader(kicker = section.kicker, title = section.title)
 }
 
+/**
+ * The content destinations that used to masquerade as settings (#161).
+ *
+ * Capability checks stay at the hub, matching the screens and writes they lead to. Listening stats
+ * is always present because its device-local half works without server support; the player entry is
+ * visible but disabled when there is neither loaded media nor history, so the map stays stable.
+ */
+@Composable
+private fun ListeningScreen(
+    padding: PaddingValues,
+    session: SessionState,
+    repository: TtsRoadRepository,
+    playerState: PlayerUiState,
+    onOpenPlayer: () -> Unit,
+    onOpenBookmarks: () -> Unit,
+    onOpenPronunciationReports: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onOpenStats: () -> Unit,
+    onOpenLogs: () -> Unit,
+) {
+    val context = LocalContext.current
+    val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    val historyStore = remember { ServiceLocator.playbackHistory(context) }
+    val hasHistory by remember(historyStore) {
+        historyStore.snapshots.map { it.isNotEmpty() }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = false)
+
+    ListeningScreenBody(
+        padding = padding,
+        hasMedia = playerState.hasMedia,
+        hasHistory = hasHistory,
+        canOpenQueue = capabilities.queue,
+        canOpenBookmarks = capabilities.bookmarks,
+        canOpenPronunciationReports = capabilities.pronunciationReports,
+        canOpenLogs = canReadServerLogs(capabilities, session.isAdmin),
+        onOpenPlayer = onOpenPlayer,
+        onOpenBookmarks = onOpenBookmarks,
+        onOpenPronunciationReports = onOpenPronunciationReports,
+        onOpenQueue = onOpenQueue,
+        onOpenStats = onOpenStats,
+        onOpenLogs = onOpenLogs,
+    )
+}
+
+/** Data-and-lambdas body so the new root and its capability gates are JVM-renderable. */
+@Composable
+internal fun ListeningScreenBody(
+    padding: PaddingValues = PaddingValues(),
+    hasMedia: Boolean,
+    hasHistory: Boolean,
+    canOpenQueue: Boolean,
+    canOpenBookmarks: Boolean,
+    canOpenPronunciationReports: Boolean,
+    canOpenLogs: Boolean,
+    onOpenPlayer: () -> Unit = {},
+    onOpenBookmarks: () -> Unit = {},
+    onOpenPronunciationReports: () -> Unit = {},
+    onOpenQueue: () -> Unit = {},
+    onOpenStats: () -> Unit = {},
+    onOpenLogs: () -> Unit = {},
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        SectionHeader(kicker = "NOW", title = "Listening")
+        AarisCard {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                val canOpenPlayer = hasMedia || hasHistory
+                AarisActionRow(
+                    title = when {
+                        hasMedia -> "Now playing"
+                        hasHistory -> "Player and jump back"
+                        else -> "Player"
+                    },
+                    subtitle = when {
+                        hasMedia -> "The chapter loaded on this device"
+                        hasHistory -> "Return to a recent listening position"
+                        else -> "Start a chapter from Home or Browse first"
+                    },
+                    enabled = canOpenPlayer,
+                    onClick = onOpenPlayer,
+                )
+                if (canOpenQueue) {
+                    AarisActionRow(
+                        title = "Up next",
+                        subtitle = "Chapters lined up across books, shared with the web and car",
+                        enabled = true,
+                        onClick = onOpenQueue,
+                    )
+                }
+                if (canOpenBookmarks) {
+                    AarisActionRow(
+                        title = "Bookmarks",
+                        subtitle = "Saved moments from every fiction",
+                        enabled = true,
+                        onClick = onOpenBookmarks,
+                    )
+                }
+                AarisActionRow(
+                    title = "Listening stats",
+                    subtitle = "Today on this device and all time on the account",
+                    enabled = true,
+                    onClick = onOpenStats,
+                )
+                if (canOpenPronunciationReports) {
+                    AarisActionRow(
+                        title = "Pronunciation reports",
+                        subtitle = "Words flagged as said wrong, and where they were heard",
+                        enabled = true,
+                        onClick = onOpenPronunciationReports,
+                    )
+                }
+            }
+        }
+
+        if (canOpenLogs) {
+            SectionHeader(kicker = "LOG", title = "Server activity")
+            AarisCard {
+                AarisActionRow(
+                    title = "Server log",
+                    subtitle = "Pipeline failures, polls and imports, filtered by level or book",
+                    enabled = true,
+                    onClick = onOpenLogs,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun SettingsScreen(
     padding: PaddingValues,
     session: SessionState,
     repository: TtsRoadRepository,
     onOpenDevices: () -> Unit,
-    onOpenBookmarks: () -> Unit,
-    onOpenPronunciationReports: () -> Unit,
-    onOpenQueue: () -> Unit,
-    onOpenStats: () -> Unit,
-    onOpenLogs: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -3379,57 +3582,6 @@ private fun SettingsScreen(
                 OutlinedButton(onClick = onOpenDevices, shape = RectangleShape) {
                     Text("DEVICE SESSIONS")
                 }
-                // Hidden on a server without bookmarks, rather than opening a screen that 404s.
-                if (capabilities.bookmarks) {
-                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                    MetaText(
-                        text = "Marks you made in the player. The same ones the browser shows.",
-                        color = AarisColor.Dim,
-                    )
-                    OutlinedButton(onClick = onOpenBookmarks, shape = RectangleShape) {
-                        Text("BOOKMARKS")
-                    }
-                }
-                // The same flag that decides whether the player and the car offer the action at
-                // all, so the capture and the place it lands appear and disappear together (#125).
-                if (capabilities.pronunciationReports) {
-                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                    MetaText(
-                        text = "Words you flagged as said wrong, and where you heard them. " +
-                            "Fixing one is a rule, and rules are made in the browser.",
-                        color = AarisColor.Dim,
-                    )
-                    OutlinedButton(
-                        onClick = onOpenPronunciationReports,
-                        shape = RectangleShape,
-                    ) {
-                        Text("PRONUNCIATION REPORTS")
-                    }
-                }
-                // Same gate the add-to-queue actions already use, so the screen and the actions
-                // that feed it appear and disappear together (#108).
-                if (capabilities.queue) {
-                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                    MetaText(
-                        text = "Chapters lined up across books, and what to do when they run out. " +
-                            "The same queue the browser and Android Auto see.",
-                        color = AarisColor.Dim,
-                    )
-                    OutlinedButton(onClick = onOpenQueue, shape = RectangleShape) {
-                        Text("UP NEXT")
-                    }
-                }
-                // Not gated on the capability: the local half of that screen is computed on the
-                // phone and works against any server, so the button always leads somewhere (#117).
-                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                MetaText(
-                    text = "How long you have been listening — today on this phone, and all " +
-                        "time on the account.",
-                    color = AarisColor.Dim,
-                )
-                OutlinedButton(onClick = onOpenStats, shape = RectangleShape) {
-                    Text("LISTENING STATS")
-                }
             }
         }
 
@@ -3491,21 +3643,6 @@ private fun SettingsScreen(
                                 },
                             )
                         }
-                    }
-                }
-                // The pipeline's own log (#124). Two gates, like every other admin surface: the
-                // capability says the server publishes it, `is_admin` says this account may read
-                // it. "Why did that chapter fail" is a question you have with the app open, and
-                // the answer used to be a laptop away.
-                if (canReadServerLogs(capabilities, session.isAdmin)) {
-                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                    MetaText(
-                        text = "Everything the conversion pipeline has reported — failures, " +
-                            "polls, imports. Read-only, filtered by level or by book.",
-                        color = AarisColor.Dim,
-                    )
-                    OutlinedButton(onClick = onOpenLogs, shape = RectangleShape) {
-                        Text("SERVER LOG")
                     }
                 }
             }
@@ -5042,8 +5179,7 @@ private fun MiniPlayerBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(AarisColor.BgRaise)
-            .navigationBarsPadding(),
+            .background(AarisColor.BgRaise),
     ) {
         HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
         ThinProgress(fraction = fraction, modifier = Modifier.fillMaxWidth(), height = 2.dp)
@@ -5572,7 +5708,7 @@ private fun downloadAction(state: ChapterDownloadState): String = when (state) {
 /**
  * The marks made in this book, on the screen for this book (#121).
  *
- * Settings → Bookmarks answers "every mark on the account, newest first". Once you have marks
+ * Listening → Bookmarks answers "every mark on the account, newest first". Once you have marks
  * across several books that is the wrong question — "the marks in *this* one" is the one you have,
  * and the API has always been able to answer it.
  *
