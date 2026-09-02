@@ -1196,6 +1196,27 @@ data class PlaybackSyncResponse(
  */
 data class AddFictionRequest(
     @param:Json(name = "fiction_url") val fictionUrl: String,
+    /**
+     * The narrator for everything this fiction converts from here on. Null leaves it to
+     * `settings.DEFAULT_VOICE`, which is what every add from this app used to get.
+     */
+    val voice: String? = null,
+    /** Synthesis rate as edge-tts spells it, e.g. `+10%`. Null takes the server's default. */
+    val rate: String? = null,
+    /** Whether the poller checks this fiction for new chapters. The server defaults to true. */
+    val enabled: Boolean? = null,
+    /**
+     * How much of the backlog to convert on the way in — and the field whose absence was a bug.
+     *
+     * The server reads a **missing or zero** value as *every chapter*: `add_fiction` branches on
+     * `if body.sync_limit:` and otherwise calls `poll_and_process_fiction(..., True)`. This app
+     * sent only `fiction_url`, so adding a 400-chapter serial from a phone queued four hundred
+     * chapters of TTS — while the web form, which posts the same body, defaults to the last 25.
+     * Null still means all; it is now something the user chooses rather than something they get.
+     */
+    @param:Json(name = "sync_limit") val syncLimit: Int? = null,
+    /** Which end of the backlog [syncLimit] counts from: `last` or `first`. */
+    @param:Json(name = "sync_direction") val syncDirection: String? = null,
 )
 
 /** What `POST` answers: the newly tracked row under `fiction`. */

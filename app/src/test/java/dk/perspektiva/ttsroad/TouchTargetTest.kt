@@ -196,9 +196,23 @@ class TouchTargetTest {
         for (description in listOf("Previous chapter", "Back 30s", "Pause", "Forward 30s", "Next chapter")) {
             compose.onNodeWithContentDescription(description).assertIsAtLeastATouchTarget()
         }
-        // Tertiary actions are TextButtons, which Material stops at 40 dp. Width is not asserted:
-        // a label sets it well past 48 dp, and forcing a minimum would only pad short labels.
-        for (label in listOf("SPEED 1×", "SLEEP", "READ", "BOOKMARK", "SAID WRONG", "JUMP BACK")) {
+        // The head and scrubber groups are icons with no written label, so they get the full test
+        // rather than the height-only one below: a 32 dp glyph is what is *drawn*, and the node
+        // that takes the tap has to stay 48 dp around it (#104).
+        for (description in listOf(
+            "Read along",
+            "Chapters, 1 of 4",
+            "Up next",
+            "Jump back to where you were",
+            "Bookmark this moment",
+            "Report a mispronunciation",
+        )) {
+            compose.onNodeWithContentDescription(description).assertIsAtLeastATouchTarget()
+        }
+        // The three settings at the foot are TextButtons, which Material stops at 40 dp. Width is
+        // not asserted: a label sets it well past 48 dp, and forcing a minimum would only pad
+        // short labels.
+        for (label in listOf("SPEED 1×", "SLEEP", "SKIP SILENCE")) {
             compose.onNodeWithText(label).assertHeightIsAtLeast(MinimumTarget)
         }
     }

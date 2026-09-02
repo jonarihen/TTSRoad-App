@@ -50,6 +50,25 @@ enum class FictionSort(val label: String) {
 
     /** Highest rated first. Unrated books sort last, for the same reason nulls do everywhere here. */
     Rating("Rating"),
+
+    /**
+     * Longest book first, by the number of chapters the server has tracked.
+     *
+     * Counts every chapter, converted or not, because that is what "how long is this" asks. The
+     * order the web console calls "Most chapters", and the reason it is not derived from
+     * [FictionSummary.doneChapters] is that a book halfway through its first conversion is still a
+     * long book.
+     */
+    MostChapters("Most chapters"),
+
+    /**
+     * Furthest through conversion first — the share of chapters that have audio.
+     *
+     * About the *pipeline*, not about listening: [LeastFinished] is how much of a book is left to
+     * hear, this is how much of it the server has finished narrating. A book with no chapters at
+     * all reads as 0% and sorts to the bottom, which is where a book with nothing to play belongs.
+     */
+    PercentConverted("% converted"),
     ;
 
     companion object {
@@ -81,6 +100,8 @@ fun List<FictionSummary>.sortedForBrowsing(sort: FictionSort): List<FictionSumma
         FictionSort.MostLeft -> sortedWith(descendingNullsLast { it.progress?.remainingSeconds })
         FictionSort.LeastFinished -> sortedWith(descendingNullsLast { it.progress?.remainingFraction })
         FictionSort.Rating -> sortedWith(descendingNullsLast { it.rating })
+        FictionSort.MostChapters -> sortedWith(descendingNullsLast { it.totalChapters })
+        FictionSort.PercentConverted -> sortedWith(descendingNullsLast { it.readyFraction })
     }
 
 /** Biggest first, with anything the server did not tell us about at the end. */

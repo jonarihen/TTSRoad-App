@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.core
 
 import android.content.Context
 import dk.perspektiva.ttsroad.data.AccountPreferenceSync
+import dk.perspektiva.ttsroad.data.BrowsePreferences
 import dk.perspektiva.ttsroad.data.ChapterListPreferences
 import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
@@ -64,6 +65,9 @@ object ServiceLocator {
 
     @Volatile
     private var chapterListPreferences: ChapterListPreferences? = null
+
+    @Volatile
+    private var browsePreferences: BrowsePreferences? = null
 
     @Volatile
     private var offlineDownloads: OfflineDownloads? = null
@@ -162,6 +166,13 @@ object ServiceLocator {
                 ?: ChapterListPreferences(context.applicationContext).also {
                     chapterListPreferences = it
                 }
+        }
+
+    /** How the browse grid was last ordered and filtered. Device-local — see [BrowsePreferences]. */
+    fun browsePreferences(context: Context): BrowsePreferences =
+        browsePreferences ?: synchronized(this) {
+            browsePreferences
+                ?: BrowsePreferences(context.applicationContext).also { browsePreferences = it }
         }
 
     fun accountPreferenceSync(context: Context): AccountPreferenceSync =

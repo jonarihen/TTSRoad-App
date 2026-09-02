@@ -13,6 +13,8 @@ class FictionSortTest {
         createdAt: String? = null,
         updatedAt: String? = null,
         progress: LibraryProgress? = null,
+        totalChapters: Int = 0,
+        doneChapters: Int = 0,
     ) = FictionSummary(
         id = id,
         title = title,
@@ -21,6 +23,8 @@ class FictionSortTest {
         createdAt = createdAt,
         updatedAt = updatedAt,
         progress = progress,
+        totalChapters = totalChapters,
+        doneChapters = doneChapters,
     )
 
     @Test
@@ -175,6 +179,50 @@ class FictionSortTest {
         rows.sortedForBrowsing(FictionSort.Title)
 
         assertEquals(listOf(1, 2), rows.map { it.id })
+    }
+
+    @Test
+    fun `most chapters counts the whole book, not the converted part`() {
+        // The web console's "Most chapters". A book two chapters into a 400-chapter conversion is
+        // still a 400-chapter book, so this must not be derived from done_chapters — that is what
+        // PercentConverted is for.
+        val rows = listOf(
+            fiction(id = 1, totalChapters = 12, doneChapters = 12),
+            fiction(id = 2, totalChapters = 400, doneChapters = 2),
+            fiction(id = 3, totalChapters = 90, doneChapters = 90),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.MostChapters)
+
+        assertEquals(listOf(2, 3, 1), sorted.map { it.id })
+    }
+
+    @Test
+    fun `percent converted is a share, so a short finished book beats a long unfinished one`() {
+        // The distinction the label has to earn against MostChapters: 12 of 12 is ahead of 200 of
+        // 400 even though the second book has more converted chapters in absolute terms.
+        val rows = listOf(
+            fiction(id = 1, totalChapters = 400, doneChapters = 200),
+            fiction(id = 2, totalChapters = 12, doneChapters = 12),
+            fiction(id = 3, totalChapters = 50, doneChapters = 5),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.PercentConverted)
+
+        assertEquals(listOf(2, 1, 3), sorted.map { it.id })
+    }
+
+    @Test
+    fun `a fiction with no chapters at all sorts to the bottom of both production orders`() {
+        // readyFraction guards its own division, so this is about placement rather than a crash: a
+        // book with nothing in it must not read as 100% converted and lead the grid.
+        val rows = listOf(
+            fiction(id = 1, totalChapters = 0, doneChapters = 0),
+            fiction(id = 2, totalChapters = 10, doneChapters = 1),
+        )
+
+        assertEquals(listOf(2, 1), rows.sortedForBrowsing(FictionSort.PercentConverted).map { it.id })
+        assertEquals(listOf(2, 1), rows.sortedForBrowsing(FictionSort.MostChapters).map { it.id })
     }
 
     @Test

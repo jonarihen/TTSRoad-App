@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -48,15 +49,20 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
@@ -64,10 +70,12 @@ import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Forward5
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.Replay30
@@ -81,6 +89,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -166,6 +175,18 @@ import dk.perspektiva.ttsroad.data.FictionAddResult
 import dk.perspektiva.ttsroad.data.FictionEditResult
 import dk.perspektiva.ttsroad.data.FictionMetadataDraft
 import dk.perspektiva.ttsroad.data.FictionSort
+import dk.perspektiva.ttsroad.data.shortVoiceName
+import dk.perspektiva.ttsroad.data.parseSyncLimit
+import dk.perspektiva.ttsroad.data.SyncDirection
+import dk.perspektiva.ttsroad.data.InitialSync
+import dk.perspektiva.ttsroad.data.AddFictionOptions
+import dk.perspektiva.ttsroad.data.retainingKnownTags
+import dk.perspektiva.ttsroad.data.browseView
+import dk.perspektiva.ttsroad.data.browseEmptyMessage
+import dk.perspektiva.ttsroad.data.browseScopeCount
+import dk.perspektiva.ttsroad.data.availableTags
+import dk.perspektiva.ttsroad.data.BrowseSettings
+import dk.perspektiva.ttsroad.data.BrowseScope
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.FictionUpdateRequest
 import dk.perspektiva.ttsroad.data.HighlightGranularity
@@ -2210,6 +2231,61 @@ private fun PlayerActionButton(
 }
 
 /**
+ * A square, bordered icon control for the player's head and its scrubber row.
+ *
+ * Built on the same two-box arrangement as [TransportIconButton] and for the same reason (#104):
+ * the outer box takes the tap and never measures under 48 dp, the inner one is the 32 dp square
+ * that gets drawn. These sit close to the transport controls, where a near miss does something
+ * rather than nothing.
+ *
+ * [badge] is for a value the glyph cannot carry — the chapter position, in practice. It is inside
+ * the same clickable node rather than beside it, so the number is part of the target rather than a
+ * label sitting next to one.
+ *
+ * @param accent draws the glyph in the accent colour, for the actions that mark the moment being
+ *   heard. The content description carries the same meaning, so this is never the only signal.
+ */
+@Composable
+private fun PlayerIconAction(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    badge: String? = null,
+    accent: Boolean = false,
+) {
+    Row(
+        modifier = Modifier
+            .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
+            .clickable(onClick = onClick, role = Role.Button)
+            // On the node that takes the tap, not on the glyph inside it, and it replaces the
+            // children's own text so TalkBack reads one button rather than a button and a number.
+            .semantics(mergeDescendants = true) {
+                this.contentDescription = contentDescription
+            }
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .border(1.dp, if (accent) AarisColor.Accent else AarisColor.Line),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (accent) AarisColor.Accent else AarisColor.Muted,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        badge?.let {
+            MetaText(text = it, color = AarisColor.Muted, maxLines = 1)
+        }
+    }
+}
+
+/**
  * Everything the player *shows*, with none of what it is wired to.
  *
  * Split out of [PlayerScreen] so the layout can be rendered in a test at a stated viewport. The
@@ -2240,6 +2316,14 @@ internal fun PlayerScreenBody(
     canReportPronunciation: Boolean,
     canJumpBack: Boolean,
     /**
+     * Whether synthesised pauses are being shortened.
+     *
+     * On the player rather than only in a sheet because it changes how fast a chapter gets through
+     * itself, which is a thing noticed *while listening* — and because a setting you cannot see the
+     * state of is one people toggle twice to find out.
+     */
+    skipSilence: Boolean = false,
+    /**
      * Marks in the chapter that is playing, for the strip under the scrub bar (#121).
      *
      * Empty is the ordinary case and draws nothing at all — the lane costs no height when there is
@@ -2263,6 +2347,7 @@ internal fun PlayerScreenBody(
     onOpenJumpBack: () -> Unit,
     onOpenChapters: () -> Unit,
     onOpenQueue: () -> Unit,
+    onToggleSkipSilence: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // Track the drag locally and only seek on release, so scrubbing does not spam the player.
@@ -2291,7 +2376,53 @@ internal fun PlayerScreenBody(
             .padding(horizontal = 24.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        MetaText(text = "// Now Playing", color = AarisColor.Accent)
+        // The player's own head, holding everything that *leaves* the player (#159's second rank).
+        //
+        // Up here rather than in the button wall at the bottom, and the split is the one the web
+        // console draws: its `player-window-actions` sit in the player's head while the transport
+        // and its options sit at the foot. What survives the move is the reason for the rank —
+        // READ, CHAPTERS and UP NEXT all open something you have to look at, so they belong at the
+        // far end of the screen from the thumb, while marking the moment does not and does not.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            MetaText(
+                text = "// Now Playing",
+                color = AarisColor.Accent,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+            )
+            // Hidden outright on a server without read-along, rather than offered and then 404ing.
+            if (canRead) {
+                PlayerIconAction(
+                    icon = Icons.Default.Article,
+                    contentDescription = "Read along",
+                    onClick = onRead,
+                )
+            }
+            if (playerState.queue.size > 1) {
+                // The count rides along as a badge because it is the one thing on this screen that
+                // says how far through the book you are, and an icon on its own cannot say it.
+                PlayerIconAction(
+                    icon = Icons.AutoMirrored.Filled.List,
+                    contentDescription = "Chapters, " +
+                        "${playerState.currentIndex + 1} of ${playerState.queue.size}",
+                    badge = "${playerState.currentIndex + 1}/${playerState.queue.size}",
+                    onClick = onOpenChapters,
+                )
+            }
+            // Not the same list as CHAPTERS, and the two have to stay distinguishable: CHAPTERS is
+            // this book, UP NEXT is what was lined up across books.
+            if (canOpenQueue) {
+                PlayerIconAction(
+                    icon = Icons.AutoMirrored.Filled.QueueMusic,
+                    contentDescription = "Up next",
+                    onClick = onOpenQueue,
+                )
+            }
+        }
         playerState.error?.let { message ->
             Spacer(modifier = Modifier.height(12.dp))
             PlaybackErrorBanner(message = message, onRetry = onRetry)
@@ -2353,7 +2484,50 @@ internal fun PlayerScreenBody(
                 textAlign = TextAlign.Center,
             )
         }
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+        // Rank one: acts on the moment being heard, so it sits on the moment — against the
+        // scrubber and within reach of the thumb that is already on the transport row, which is
+        // where the web console puts the same two (`player-progress-actions`, above its seek bar).
+        //
+        // The split against the header group is "changes or marks what is playing right now"
+        // versus "takes me somewhere else", not importance. It is the one that survives the way
+        // the player is actually used — at the wheel, on headphones, phone locked — where this
+        // group is pressed without looking and the other is never pressed without.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (canJumpBack) {
+                PlayerIconAction(
+                    icon = Icons.Default.History,
+                    contentDescription = "Jump back to where you were",
+                    onClick = onOpenJumpBack,
+                )
+            }
+            // Hidden outright on a server without bookmarks, rather than offered and then failing.
+            // Stays in rank one deliberately: #125's whole point is that marking a moment is a
+            // press made without looking, so demoting it would undo the feature.
+            if (canBookmark) {
+                PlayerIconAction(
+                    icon = Icons.Default.BookmarkAdd,
+                    contentDescription = "Bookmark this moment",
+                    accent = true,
+                    onClick = onBookmark,
+                )
+            }
+            // Beside the bookmark because it is the same gesture — mark this moment, keep
+            // listening — and hidden on the same terms, since the server gates the write route as
+            // well as the read one (#125).
+            if (canReportPronunciation) {
+                PlayerIconAction(
+                    icon = Icons.Default.RecordVoiceOver,
+                    contentDescription = "Report a mispronunciation",
+                    accent = true,
+                    onClick = onReportPronunciation,
+                )
+            }
+        }
         Slider(
             value = dragMs ?: playerState.positionMs.coerceAtMost(playerState.durationMs).toFloat(),
             onValueChange = { dragMs = it },
@@ -2448,87 +2622,43 @@ internal fun PlayerScreenBody(
             ) { onNextChapter() }
         }
         Spacer(modifier = Modifier.height(8.dp))
-        // Tertiary: playback speed and the chapter list. FlowRow, not Row: on a narrow phone the
-        // two groups don't fit side by side, and a Row squeezed "CHAPTERS 53/246" down to a column
-        // one character wide. Wrapping happens between buttons; never inside a label.
+        // What is left at the foot of the player is three *settings* — how fast, for how long, and
+        // whether the pauses are cut — which is the same job the web console's `player-toolbar`
+        // does under its transport row. Everything that used to share this space either opens
+        // something (now the head) or marks the moment (now the scrubber), and eight equally loud
+        // labels down here made all three kinds cost the same glance.
+        //
+        // FlowRow, not Row: on a narrow phone at a large display size the three do not fit side by
+        // side, and a Row squeezed "SPEED 1.5×" down to a column one character wide. Wrapping
+        // happens between buttons; never inside a label.
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // Rank one: acts on the moment being heard. Accent, and first (#159).
-            //
-            // The split between these two groups is "changes or marks what is playing right now"
-            // against "takes me somewhere else", not importance. It is the one that survives the
-            // way the player is actually used — at the wheel, on headphones, phone locked — where
-            // the first group is pressed without looking and the second is never pressed without.
-            // Eight equally loud buttons made both kinds cost the same glance.
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
-                // cycle-only button.
-                PlayerActionButton(label = "SPEED ${formatSpeed(playerState.speed)}", onClick = onOpenSpeed)
-                PlayerActionButton(
-                    label = if (sleepTimerState.isArmed) {
-                        "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
-                    } else {
-                        "SLEEP"
-                    },
-                    onClick = onOpenSleepTimer,
-                    enabled = playerState.hasMedia || sleepTimerState.isArmed,
-                    color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
-                )
-                // Hidden outright on a server without bookmarks, rather than offered and then
-                // failing. Stays in rank one deliberately: #125's whole point is that marking a
-                // moment is a press made without looking, so demoting it would undo the feature.
-                if (canBookmark) {
-                    PlayerActionButton(label = "BOOKMARK", onClick = onBookmark)
-                }
-                // Beside BOOKMARK because it is the same gesture — mark this moment, keep
-                // listening — and hidden on the same terms, since the server gates the write route
-                // as well as the read one (#125).
-                if (canReportPronunciation) {
-                    PlayerActionButton(label = "SAID WRONG", onClick = onReportPronunciation)
-                }
-            }
-            // Rank two: leaves the player. Muted, so the eye reaches the group above first.
-            //
-            // Every one of these opens another screen or a sheet, which means it is already a
-            // control you are looking at the phone to use. Material's TextButton takes its content
-            // colour from the scheme's primary, so before this they were all accent — the same
-            // orange as pause.
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                // Hidden entirely on a server without read-along, rather than shown and then 404ing.
-                if (canRead) {
-                    PlayerActionButton(
-                        label = "READ",
-                        onClick = onRead,
-                        color = AarisColor.Muted,
-                    )
-                }
-                if (canJumpBack) {
-                    PlayerActionButton(
-                        label = "JUMP BACK",
-                        onClick = onOpenJumpBack,
-                        color = AarisColor.Muted,
-                    )
-                }
-                if (playerState.queue.size > 1) {
-                    PlayerActionButton(
-                        label = "CHAPTERS ${playerState.currentIndex + 1}/${playerState.queue.size}",
-                        onClick = onOpenChapters,
-                        color = AarisColor.Muted,
-                    )
-                }
-                // Not the same list as CHAPTERS, and the labels have to earn the difference:
-                // CHAPTERS is this book, UP NEXT is what was lined up across books.
-                if (canOpenQueue) {
-                    PlayerActionButton(
-                        label = "UP NEXT",
-                        onClick = onOpenQueue,
-                        color = AarisColor.Muted,
-                    )
-                }
-            }
+            // Tap to pick directly; getting from 2.0x back to 1.5x used to be five taps of a
+            // cycle-only button.
+            PlayerActionButton(
+                label = "SPEED ${formatSpeed(playerState.speed)}",
+                onClick = onOpenSpeed,
+            )
+            PlayerActionButton(
+                label = if (sleepTimerState.isArmed) {
+                    "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
+                } else {
+                    "SLEEP"
+                },
+                onClick = onOpenSleepTimer,
+                enabled = playerState.hasMedia || sleepTimerState.isArmed,
+                color = if (sleepTimerState.isArmed) AarisColor.Accent else Color.Unspecified,
+            )
+            // Toggles in place rather than opening a sheet: it is a two-state setting, and the
+            // label carries the state so nothing has to be opened to read it either.
+            PlayerActionButton(
+                label = if (skipSilence) "SKIP SILENCE ON" else "SKIP SILENCE",
+                onClick = onToggleSkipSilence,
+                color = if (skipSilence) AarisColor.Accent else Color.Unspecified,
+            )
         }
     }
 }
@@ -2713,6 +2843,8 @@ private fun PlayerScreen(
         onOpenJumpBack = { showJumpBack = true },
         onOpenChapters = { showChapters = true },
         onOpenQueue = onOpenQueue,
+        skipSilence = skipSilence,
+        onToggleSkipSilence = { scope.launch { preferences.setSkipSilence(!skipSilence) } },
         modifier = Modifier.padding(padding),
     )
 
@@ -2807,33 +2939,11 @@ private fun PlayerScreen(
                     HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 }
             }
-            // Skip silence belongs next to speed, not only in Settings: it changes how fast a
-            // chapter gets through itself, so this is where someone comes looking when playback
-            // feels quicker than the web player's.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Skip silence",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AarisColor.Ink,
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    MetaText(
-                        text = "Shortens synthesised pauses. Off matches the web player.",
-                        color = AarisColor.Dim,
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Switch(
-                    checked = skipSilence,
-                    onCheckedChange = { scope.launch { preferences.setSkipSilence(it) } },
-                )
-            }
+            // Skip silence used to be a switch here as well as in Settings, because it changes how
+            // fast a chapter gets through itself and this was the nearest place to speed. It is now
+            // a button on the player's own toolbar, which is nearer still and shows its state
+            // without being opened — so it is not repeated here. Two controls for one setting is
+            // the kind of clutter this pass exists to remove.
             MetaText(
                 text = "// Kept across restarts and reboots",
                 color = AarisColor.Dim,
@@ -5851,13 +5961,18 @@ private fun FictionsScreen(
     var serverResults by remember { mutableStateOf<SearchResponse?>(null) }
     var isSearching by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf<String?>(null) }
-    // Saveable so the browse position and filter survive a trip into a fiction and back.
+    // Saveable so the browse position and filter survive a trip into a fiction and back. The text
+    // stays session state, unlike the three settings below it: a search is a question being asked
+    // now, and restoring last week's would open browse onto a near-empty grid with no visible cause.
     var query by rememberSaveable { mutableStateOf("") }
-    // Saveable for the same reason, and for rotation. Not yet a stored preference: a sort order
-    // arguably is one, but it would want its own DataStore for a single enum, and none of the three
-    // existing stores is about browsing. Worth doing if it turns out to be missed across launches.
-    var sort by rememberSaveable { mutableStateOf(FictionSort.Default) }
+    // Order, tags and scope are *stored* rather than remembered, which is what the web console has
+    // always done with the same three (localStorage, `ttsroadInitLibraryControls`). See
+    // BrowsePreferences for why rememberSaveable was not enough.
+    val browsePrefs = remember { ServiceLocator.browsePreferences(context) }
+    val settings by browsePrefs.settings
+        .collectAsStateWithLifecycle(initialValue = BrowseSettings())
     var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var tagSheetOpen by rememberSaveable { mutableStateOf(false) }
     // Hoisted so the browse position survives the round trip into a fiction, alongside the
     // SaveableStateProvider keyed per back-stack entry.
     val gridState = rememberLazyGridState()
@@ -5877,20 +5992,23 @@ private fun FictionsScreen(
         )
 
         else -> {
-            // Filter first, then order. The other way round would sort rows that are about to be
-            // thrown away, which on a large shelf is the whole catalogue sorted to show twelve.
-            val filtered = remember(fictions, query, sort) {
-                val q = query.trim().lowercase()
-                val matches = if (q.isBlank()) {
-                    fictions
-                } else {
-                    fictions.filter { fiction ->
-                        fiction.title.lowercase().contains(q) ||
-                            fiction.author?.lowercase()?.contains(q) == true ||
-                            fiction.tags.any { it.lowercase().contains(q) }
-                    }
-                }
-                matches.sortedForBrowsing(sort)
+            val tagChoices = remember(fictions) { fictions.availableTags() }
+            // A stored tag that nothing on the shelf carries any more would narrow the grid to
+            // nothing with no box on screen to un-tick; see `retainingKnownTags`.
+            val activeTags = remember(settings.tags, tagChoices) {
+                settings.tags.retainingKnownTags(tagChoices)
+            }
+            // Scope only means something where the server has per-user libraries. Without them the
+            // list *is* the shelf, both tabs would hold it, and the tabs are not drawn — so pinning
+            // the scope to ALL here keeps a value stored on a previous server from hiding rows.
+            val browseScope = if (browseAll) settings.scope else BrowseScope.All
+            val filtered = remember(fictions, query, activeTags, browseScope, settings.sort) {
+                fictions.browseView(
+                    scope = browseScope,
+                    tags = activeTags,
+                    query = query,
+                    sort = settings.sort,
+                )
             }
             RefreshablePane(
                 padding = padding,
@@ -5922,9 +6040,39 @@ private fun FictionsScreen(
                                 canAddByUrl = capabilities.fictionManagement,
                                 canUploadEpub = capabilities.epubUpload,
                                 maxEpubBytes = capabilities.effectiveMaxEpubBytes,
-                                onAdd = { url -> repository.addFiction(url) },
+                                canPickVoice = canPickVoice(capabilities, isAdmin),
+                                loadVoices = { repository.voices() },
+                                onAdd = { url, options ->
+                                    repository.addFiction(url, options)
+                                },
                                 onUploadEpub = { book -> repository.uploadEpub(book) },
                                 onAdded = refresh,
+                            )
+                        }
+                    }
+                    // Following is a shelf, not a permission: on a server with per-user libraries
+                    // every account can see every fiction, and this tab pair is the only place on
+                    // the phone where "mine" and "everything" are visible as a choice rather than
+                    // inferred from which screen you happened to open (the web has had it as
+                    // `?scope=` on the library page all along).
+                    if (browseAll) {
+                        fullWidthItem(key = "scope") {
+                            BrowseScopeTabs(
+                                selected = browseScope,
+                                counts = remember(fictions) {
+                                    BrowseScope.entries.associateWith(fictions::browseScopeCount)
+                                },
+                                onSelect = { chosen ->
+                                    if (chosen != browseScope) {
+                                        scope.launch {
+                                            browsePrefs.setScope(chosen)
+                                            // The offset that was saved points into the other
+                                            // list; keeping it would land the user halfway down a
+                                            // grid they have just changed the contents of.
+                                            gridState.scrollToItem(0)
+                                        }
+                                    }
+                                },
                             )
                         }
                     }
@@ -5996,19 +6144,42 @@ private fun FictionsScreen(
                             // full-width button (#159): the header already states what the list
                             // holds, and how it is arranged is the same sentence. The label is the
                             // current order, so the grid never has to be read to find out.
-                            actionLabel = sort.label,
+                            actionLabel = settings.sort.label,
                             onAction = { sortSheetOpen = true },
                         )
                     }
+                    // Tags are the one filter the phone did not have and the web always did, and
+                    // they are a row of their own rather than a third control crammed into the
+                    // header: the header states what the list holds and how it is ordered, and
+                    // "which of these am I looking at" is a different sentence.
+                    if (tagChoices.isNotEmpty()) {
+                        fullWidthItem(key = "tags") {
+                            TagFilterBar(
+                                active = activeTags,
+                                onOpen = { tagSheetOpen = true },
+                                onClear = { scope.launch { browsePrefs.setTags(emptySet()) } },
+                            )
+                        }
+                    }
                     if (filtered.isEmpty()) {
                         fullWidthItem(key = "empty") {
-                            EmptyCard(
-                                if (query.isBlank()) "No fictions found" else "No matches for \"$query\"",
-                            )
+                            EmptyCard(browseEmptyMessage(query, activeTags, browseScope))
                         }
                     } else {
                         items(filtered, key = { it.id }) { fiction ->
-                            FictionGridCard(fiction = fiction, onClick = { onOpenFiction(fiction) })
+                            FictionGridCard(
+                                fiction = fiction,
+                                onClick = { onOpenFiction(fiction) },
+                                // Tapping a chip replaces the selection rather than adding to it:
+                                // the gesture reads as "show me this kind", and ANDing it onto
+                                // whatever was already ticked would usually answer with nothing.
+                                onTagClick = { tag ->
+                                    scope.launch {
+                                        browsePrefs.setTags(setOf(tag))
+                                        gridState.scrollToItem(0)
+                                    }
+                                },
+                            )
                         }
                     }
                 }
@@ -6016,12 +6187,24 @@ private fun FictionsScreen(
 
             if (sortSheetOpen) {
                 FictionSortSheet(
-                    selected = sort,
-                    onSelect = {
-                        sort = it
+                    selected = settings.sort,
+                    onSelect = { chosen ->
+                        scope.launch { browsePrefs.setSort(chosen) }
                         sortSheetOpen = false
                     },
                     onDismiss = { sortSheetOpen = false },
+                )
+            }
+            if (tagSheetOpen) {
+                TagFilterSheet(
+                    tags = tagChoices,
+                    selected = activeTags,
+                    onToggle = { tag ->
+                        val next = if (tag in activeTags) activeTags - tag else activeTags + tag
+                        scope.launch { browsePrefs.setTags(next) }
+                    },
+                    onClear = { scope.launch { browsePrefs.setTags(emptySet()) } },
+                    onDismiss = { tagSheetOpen = false },
                 )
             }
         }
@@ -6087,6 +6270,197 @@ private fun FictionSortSheet(
     }
 }
 
+/**
+ * FOLLOWING / ALL, the shelf-versus-server split the web console has had as `?scope=` all along.
+ *
+ * Tabs rather than a switch or a filter chip because the two lists are peers — neither is a
+ * narrowed version of the other in the user's head, even though one is a subset — and because a
+ * tab bar is the one control that can carry both counts without a legend. The counts are over the
+ * unfiltered list, so they say what the tab *switches to* rather than what is currently drawn; see
+ * [browseScopeCount].
+ *
+ * Drawn like [PrimaryNavigationBar]: accent rule above the active label, mono uppercase, 48 dp of
+ * height. Selection is reported to TalkBack through `Role.Tab` and `selected`, because the accent
+ * is colour alone.
+ */
+@Composable
+internal fun BrowseScopeTabs(
+    selected: BrowseScope,
+    counts: Map<BrowseScope, Int>,
+    onSelect: (BrowseScope) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectableGroup(),
+    ) {
+        BrowseScope.entries.forEach { option ->
+            val isSelected = option == selected
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = MinTouchTargetSize)
+                    .selectable(
+                        selected = isSelected,
+                        role = Role.Tab,
+                        onClick = { onSelect(option) },
+                    ),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .background(if (isSelected) AarisColor.Accent else AarisColor.Line),
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                MetaText(
+                    text = counts[option]?.let { "${option.label}  $it" } ?: option.label,
+                    color = if (isSelected) AarisColor.Accent else AarisColor.Muted,
+                    maxLines = 1,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/**
+ * The row that opens the tag filter and says whether one is on.
+ *
+ * The count on the button is the whole reason this is not just an entry in the sort sheet. A
+ * filter that is hiding rows has to be visible *while* it hides them — the web puts the same
+ * number in a badge on its `<details>` summary — or the next person to open browse sees a short
+ * grid and concludes the server lost their books.
+ *
+ * CLEAR appears only when something is selected, and is a separate control rather than a
+ * "deselect all" buried in the sheet: undoing a filter should not cost the two taps of opening the
+ * thing that caused it.
+ */
+@Composable
+internal fun TagFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        TextButton(
+            onClick = onOpen,
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        ) {
+            Text(
+                text = if (active.isEmpty()) "TAGS" else "TAGS ${active.size}",
+                color = if (active.isEmpty()) AarisColor.Muted else AarisColor.Accent,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        if (active.isNotEmpty()) {
+            // The selection itself, not just its size: with two tags on, which two is the question
+            // the number cannot answer, and scrolling is cheaper than reopening the sheet to look.
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                active.sorted().forEach { tag ->
+                    AarisTag(text = tag, color = AarisColor.Accent)
+                }
+            }
+            TextButton(
+                onClick = onClear,
+                modifier = Modifier.heightIn(min = MinTouchTargetSize),
+            ) {
+                Text(text = "CLEAR", color = AarisColor.Muted, maxLines = 1, softWrap = false)
+            }
+        } else {
+            Spacer(modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * Pick the tags the grid is narrowed to (multi-select, ANDed).
+ *
+ * A sheet for the same reason the sort is one: the list is as long as the server's vocabulary —
+ * a Royal Road shelf runs to dozens of genres — and a row of chips that wraps to six lines above
+ * the grid is worse than a control that opens.
+ *
+ * Every row is a checkbox rather than a toggle chip because AND-ing is the behaviour, and a
+ * checkbox is the one control everybody already reads as "all of the ticked ones".
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun TagFilterSheet(
+    tags: List<String>,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(
+                text = "// Filter by tag",
+                color = AarisColor.Accent,
+                modifier = Modifier.weight(1f),
+            )
+            if (selected.isNotEmpty()) {
+                TextButton(
+                    onClick = onClear,
+                    modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                ) {
+                    Text(text = "CLEAR", color = AarisColor.Muted)
+                }
+            }
+        }
+        MetaText(
+            text = "// A book has to carry every tag you tick",
+            color = AarisColor.Muted,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+        )
+        LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+            items(tags, key = { it }) { tag ->
+                val isChecked = tag in selected
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = MinTouchTargetSize)
+                        // One toggleable node for the whole row, so TalkBack announces the tag and
+                        // its state together and the target is the row rather than the 20 dp box.
+                        .toggleable(
+                            value = isChecked,
+                            role = Role.Checkbox,
+                            onValueChange = { onToggle(tag) },
+                        )
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = isChecked, onCheckedChange = null)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = tag.uppercase(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isChecked) AarisColor.Accent else AarisColor.Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
 /** The half of an order that its two-word label cannot carry. Null where the label is the whole. */
 private fun fictionSortNote(sort: FictionSort): String? = when (sort) {
     FictionSort.RecentlyUpdated -> "Last change to the book, including a poll that found nothing"
@@ -6095,6 +6469,8 @@ private fun fictionSortNote(sort: FictionSort): String? = when (sort) {
     FictionSort.MostLeft -> "Absolute listening time remaining; unavailable totals last"
     FictionSort.LeastFinished -> "Smallest share heard, regardless of the book's length"
     FictionSort.Rating -> "Unrated last"
+    FictionSort.MostChapters -> "Every chapter counted, converted or not"
+    FictionSort.PercentConverted -> "How far the server has got narrating it, not how far you have"
     FictionSort.Title -> null
 }
 
@@ -6121,7 +6497,15 @@ internal fun AddFictionSection(
     canUploadEpub: Boolean = false,
     /** This server's advertised ceiling, so an oversized book is refused before it is uploaded. */
     maxEpubBytes: Long = DefaultMaxEpubBytes,
-    onAdd: suspend (String) -> FictionAddResult = { FictionAddResult.Unsupported },
+    /**
+     * Whether this server publishes the voice catalogue *and* this account may apply a choice.
+     * Both halves, per `canPickVoice` — a picker whose save is a 403 is worse than no picker.
+     */
+    canPickVoice: Boolean = false,
+    /** Fetched once, when the sheet is first opened: several hundred rows nobody has asked for yet. */
+    loadVoices: suspend () -> List<MobileVoice>? = { null },
+    onAdd: suspend (String, AddFictionOptions) -> FictionAddResult =
+        { _, _ -> FictionAddResult.Unsupported },
     onUploadEpub: suspend (PickedEpub.Ready) -> FictionAddResult = { FictionAddResult.Unsupported },
     onAdded: () -> Unit = {},
 ) {
@@ -6132,6 +6516,19 @@ internal fun AddFictionSection(
     var isUploading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var isError by remember { mutableStateOf(false) }
+    var showAddSheet by rememberSaveable { mutableStateOf(false) }
+    // Not saveable: it holds a nullable voice name and two enums, and re-deriving the default after
+    // process death is better than restoring a half-filled form whose URL field is also empty.
+    var options by remember { mutableStateOf(AddFictionOptions()) }
+    var voices by remember { mutableStateOf<List<MobileVoice>?>(null) }
+
+    // Only once the sheet is open, and only on a server that has the catalogue: this is a few
+    // hundred rows fetched to fill a control most adds never touch.
+    LaunchedEffect(showAddSheet, canPickVoice) {
+        if (showAddSheet && canPickVoice && voices == null) {
+            voices = runCatching { loadVoices() }.getOrNull()
+        }
+    }
 
     /** What to say about a result, and whether the list behind this needs to be refetched. */
     fun adopt(result: FictionAddResult, clearsUrl: Boolean) {
@@ -6204,50 +6601,33 @@ internal fun AddFictionSection(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         val isBusy = isAdding || isUploading
-        if (canAddByUrl) {
-            OutlinedTextField(
-                value = url,
-                onValueChange = {
-                    url = it
-                    message = null
-                },
-                label = { Text("ADD A FICTION BY URL OR ID") },
-                placeholder = { Text("Royal Road URL or ID") },
-                singleLine = true,
-                enabled = !isBusy,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Button(
-                onClick = {
-                    scope.launch {
-                        isAdding = true
-                        message = null
-                        val result = runCatching { onAdd(url) }.getOrElse { failure ->
-                            FictionAddResult.Refused(
-                                failure.message ?: "Could not add this fiction.",
-                            )
-                        }
-                        adopt(result, clearsUrl = true)
-                        isAdding = false
-                    }
-                },
-                enabled = !isBusy && url.isNotBlank(),
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (isAdding) "ADDING" else "ADD FICTION")
+        // Two buttons rather than the form itself. The form now carries the sync window, the
+        // narrator, the rate and the poll switch, which is more than belongs permanently expanded
+        // above the search field of a screen whose job is browsing — and adding a fiction is a rare,
+        // deliberate act, unlike the search box it used to sit on top of.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (canAddByUrl) {
+                Button(
+                    onClick = { showAddSheet = true },
+                    enabled = !isBusy,
+                    shape = RectangleShape,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (isAdding) "ADDING" else "ADD FICTION")
+                }
+            }
+            if (canUploadEpub) {
+                OutlinedButton(
+                    onClick = { pickEpub.launch(EpubPickerMimeTypes) },
+                    enabled = !isBusy,
+                    shape = RectangleShape,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (isUploading) "UPLOADING" else "UPLOAD AN EPUB")
+                }
             }
         }
         if (canUploadEpub) {
-            OutlinedButton(
-                onClick = { pickEpub.launch(EpubPickerMimeTypes) },
-                enabled = !isBusy,
-                shape = RectangleShape,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (isUploading) "UPLOADING" else "UPLOAD AN EPUB")
-            }
             MetaText(
                 text = "A book already on this phone. Chapters are detected automatically, and " +
                     "narration starts on the server. Up to ${megabyteLabel(maxEpubBytes)}.",
@@ -6256,6 +6636,249 @@ internal fun AddFictionSection(
         }
         message?.let {
             MetaText(text = it, color = if (isError) AarisColor.Danger else AarisColor.Muted)
+        }
+    }
+
+    if (showAddSheet) {
+        AddFictionSheet(
+            url = url,
+            onUrl = {
+                url = it
+                message = null
+            },
+            options = options,
+            onOptions = { options = it },
+            canPickVoice = canPickVoice,
+            voices = voices,
+            isAdding = isAdding,
+            message = message.takeIf { isError },
+            onSubmit = {
+                scope.launch {
+                    isAdding = true
+                    message = null
+                    val result = runCatching { onAdd(url, options) }.getOrElse { failure ->
+                        FictionAddResult.Refused(failure.message ?: "Could not add this fiction.")
+                    }
+                    adopt(result, clearsUrl = true)
+                    isAdding = false
+                    // Stays open on a refusal so the URL can be corrected against the server's own
+                    // explanation, which is the whole reason that message is shown verbatim.
+                    if (result is FictionAddResult.Added) showAddSheet = false
+                }
+            },
+            onDismiss = { showAddSheet = false },
+        )
+    }
+}
+
+/**
+ * The add-a-fiction form: URL, how much of the backlog to convert, and the conversion settings.
+ *
+ * The sync window is the reason this stopped being one text field. `POST /api/mobile/fictions`
+ * accepts `sync_limit` and `sync_direction`, the app sent neither, and the server reads their
+ * absence as *every chapter* — so adding a long serial from a phone queued its whole backlog for
+ * narration while the web form, posting the same body, defaulted to the newest 25. The control is
+ * first in the form under the URL for that reason: it is the choice with a cost attached.
+ *
+ * Voice and rate are here because the web form has always had them and because they cannot be
+ * changed retroactively — what converts next uses them, and everything already narrated keeps the
+ * voice it was made with, so "set it later" is not the same offer. Both are omitted from the
+ * request when left alone, letting `settings.DEFAULT_VOICE` and `DEFAULT_RATE` apply rather than
+ * having this app invent a default that disagrees with the server's.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddFictionSheet(
+    url: String,
+    onUrl: (String) -> Unit,
+    options: AddFictionOptions,
+    onOptions: (AddFictionOptions) -> Unit,
+    canPickVoice: Boolean,
+    voices: List<MobileVoice>?,
+    isAdding: Boolean,
+    /** The server's own refusal, kept in front of the URL that caused it. Null when nothing failed. */
+    message: String?,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // The chapter count is text while it is being edited: a field that snaps back to the last valid
+    // number on every keystroke cannot be cleared to type a new one.
+    var limitText by rememberSaveable(options.sync.limit) {
+        mutableStateOf(options.sync.limit?.toString() ?: "25")
+    }
+    var showVoices by rememberSaveable { mutableStateOf(false) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        if (showVoices && voices != null) {
+            VoicePickerContent(
+                voices = voices,
+                current = options.voice,
+                onSelect = { chosen ->
+                    onOptions(options.copy(voice = chosen))
+                    showVoices = false
+                },
+            )
+            return@ModalBottomSheet
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            MetaText(text = "// Add a fiction", color = AarisColor.Accent)
+            OutlinedTextField(
+                value = url,
+                onValueChange = onUrl,
+                label = { Text("FICTION URL OR ID") },
+                placeholder = { Text("https://www.royalroad.com/fiction/12345/…") },
+                singleLine = true,
+                enabled = !isAdding,
+                isError = message != null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            MetaText(
+                text = "A bare Royal Road id works too. The server decides which sites it can read.",
+                color = AarisColor.Dim,
+            )
+
+            HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+            MetaText(text = "// Convert to start with", color = AarisColor.Accent)
+            // Three choices rather than a checkbox and a number, because "all" is not a quantity
+            // and hiding it inside an empty field is how it became the silent default in the first
+            // place. Chips state the whole answer: NEWEST 25, OLDEST 25, or EVERY CHAPTER.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SyncDirection.entries.forEach { direction ->
+                    val isSelected = !options.sync.isEverything && options.sync.direction == direction
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = {
+                            onOptions(
+                                options.copy(
+                                    sync = InitialSync(
+                                        limit = parseSyncLimit(limitText, InitialSync.Default.limit!!),
+                                        direction = direction,
+                                    ),
+                                ),
+                            )
+                        },
+                        label = { Text(direction.label) },
+                        shape = RectangleShape,
+                    )
+                }
+                FilterChip(
+                    selected = options.sync.isEverything,
+                    onClick = { onOptions(options.copy(sync = InitialSync(limit = null))) },
+                    label = { Text("EVERYTHING") },
+                    shape = RectangleShape,
+                )
+            }
+            if (!options.sync.isEverything) {
+                OutlinedTextField(
+                    value = limitText,
+                    onValueChange = { typed ->
+                        // Digits only, so the field cannot hold something the server would reject.
+                        val digits = typed.filter(Char::isDigit).take(4)
+                        limitText = digits
+                        onOptions(
+                            options.copy(
+                                sync = options.sync.copy(
+                                    limit = parseSyncLimit(digits, options.sync.limit ?: 25),
+                                ),
+                            ),
+                        )
+                    },
+                    label = { Text("HOW MANY CHAPTERS") },
+                    singleLine = true,
+                    enabled = !isAdding,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            MetaText(
+                text = options.sync.summary +
+                    if (options.sync.isEverything) " — this can be hours of narration" else "",
+                color = if (options.sync.isEverything) AarisColor.Warning else AarisColor.Muted,
+            )
+
+            HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+            MetaText(text = "// Conversion", color = AarisColor.Accent)
+            if (canPickVoice) {
+                OutlinedButton(
+                    onClick = { showVoices = true },
+                    enabled = !isAdding && voices != null,
+                    shape = RectangleShape,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = when {
+                            voices == null -> "LOADING VOICES"
+                            options.voice == null -> "VOICE · SERVER DEFAULT"
+                            else -> "VOICE · ${shortVoiceName(options.voice!!, null)}"
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = options.rate.orEmpty(),
+                onValueChange = { onOptions(options.copy(rate = it)) },
+                label = { Text("SPEECH RATE") },
+                placeholder = { Text("+0%") },
+                singleLine = true,
+                enabled = !isAdding,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            options.rateProblem.let { problem ->
+                MetaText(
+                    text = problem
+                        ?: "Left blank, the server's own default applies. +10% is faster, -5% slower.",
+                    color = if (problem == null) AarisColor.Dim else AarisColor.Danger,
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = MinTouchTargetSize)
+                    .toggleable(
+                        value = options.enabled,
+                        role = Role.Switch,
+                        enabled = !isAdding,
+                        onValueChange = { onOptions(options.copy(enabled = it)) },
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = "Check for new chapters", style = MaterialTheme.typography.titleMedium)
+                    MetaText(
+                        text = "Off tracks the book without polling the source for more.",
+                        color = AarisColor.Dim,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(checked = options.enabled, onCheckedChange = null, enabled = !isAdding)
+            }
+
+            // The server's refusal, verbatim: "Fiction already tracked" and "that is not a URL I
+            // can read" are different instructions to the person holding the phone.
+            message?.let { MetaText(text = it, color = AarisColor.Danger) }
+            Button(
+                onClick = onSubmit,
+                // A rate the server cannot read is caught here rather than at conversion time,
+                // which is where it used to surface — hours later, as a chapter that never narrates.
+                enabled = !isAdding && url.isNotBlank() && options.rateProblem == null,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isAdding) "ADDING" else "ADD FICTION")
+            }
         }
     }
 }
@@ -6414,7 +7037,15 @@ internal fun LazyGridScope.searchHitGroup(
 
 /** Cover-forward grid card: art bleeds to the card edge, TTS-ready progress sits on the art. */
 @Composable
-private fun FictionGridCard(fiction: FictionSummary, onClick: () -> Unit) {
+private fun FictionGridCard(
+    fiction: FictionSummary,
+    onClick: () -> Unit,
+    /**
+     * Narrow the grid to a tag. Null where there is no filter to drive — the chips then simply are
+     * not drawn, rather than being drawn as buttons that do nothing.
+     */
+    onTagClick: ((String) -> Unit)? = null,
+) {
     AarisCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Column {
             Box(
@@ -6455,6 +7086,28 @@ private fun FictionGridCard(fiction: FictionSummary, onClick: () -> Unit) {
                 )
                 fiction.progress?.let { progress ->
                     MetaText(text = libraryProgressMeta(progress), color = AarisColor.Muted)
+                }
+                // Three, like the web card. Tags are the one piece of metadata a cover does not
+                // already carry, and they are what makes a wall of unfamiliar art navigable — but
+                // a card that lists all fourteen of a Royal Road fiction's genres is a card whose
+                // title has been pushed off the grid.
+                if (onTagClick != null && fiction.tags.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        fiction.tags.take(3).forEach { tag ->
+                            val normalised = tag.trim().lowercase()
+                            AarisTag(
+                                text = tag,
+                                modifier = Modifier
+                                    .clickable(
+                                        role = Role.Button,
+                                        onClickLabel = "Show everything tagged $tag",
+                                    ) { onTagClick(normalised) },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -7501,6 +8154,24 @@ private fun VoicePickerSheet(
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        VoicePickerContent(voices = voices, current = current, onSelect = onSelect)
+    }
+}
+
+/**
+ * The picker itself, with no sheet around it.
+ *
+ * Split out so the add-fiction form can offer the same control without a second [ModalBottomSheet]
+ * inside the one it already lives in — nested sheets fight over the scrim and the back gesture, and
+ * the catalogue is the same several hundred rows either way.
+ */
+@Composable
+private fun VoicePickerContent(
+    voices: List<MobileVoice>,
+    current: String?,
+    onSelect: (String) -> Unit,
+) {
     var query by rememberSaveable { mutableStateOf("") }
     val groups = remember(voices, current, query) {
         voiceGroups(voices = voices, current = current, query = query)
@@ -7514,82 +8185,80 @@ private fun VoicePickerSheet(
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            MetaText(text = "// Choose voice", color = AarisColor.Accent)
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                label = { Text("SEARCH NAME OR LOCALE") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        MetaText(text = "// Choose voice", color = AarisColor.Accent)
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text("SEARCH NAME OR LOCALE") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (groups.isEmpty()) {
+            MetaText(
+                text = "No voice matches that search.",
+                color = AarisColor.Dim,
+                modifier = Modifier.padding(vertical = 20.dp),
             )
-            if (groups.isEmpty()) {
-                MetaText(
-                    text = "No voice matches that search.",
-                    color = AarisColor.Dim,
-                    modifier = Modifier.padding(vertical = 20.dp),
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 560.dp)
-                        .selectableGroup(),
-                    contentPadding = PaddingValues(bottom = 24.dp),
-                ) {
-                    groups.forEach { group ->
-                        val isExpanded = query.isNotBlank() || expandedLocale == group.locale
-                        item(key = "voice-locale-${group.locale}") {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .sizeIn(minHeight = 48.dp)
-                                    .clickable(enabled = query.isBlank()) {
-                                        expandedLocale = group.locale.takeUnless {
-                                            it == expandedLocale
-                                        }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .selectableGroup(),
+                contentPadding = PaddingValues(bottom = 24.dp),
+            ) {
+                groups.forEach { group ->
+                    val isExpanded = query.isNotBlank() || expandedLocale == group.locale
+                    item(key = "voice-locale-${group.locale}") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .sizeIn(minHeight = 48.dp)
+                                .clickable(enabled = query.isBlank()) {
+                                    expandedLocale = group.locale.takeUnless {
+                                        it == expandedLocale
                                     }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(text = group.label, style = MaterialTheme.typography.titleMedium)
-                                    MetaText(
-                                        text = "${group.locale}  ·  ${group.voices.size} voices",
-                                        color = AarisColor.Dim,
-                                    )
                                 }
-                                if (query.isBlank()) {
-                                    Icon(
-                                        imageVector = if (isExpanded) {
-                                            Icons.Default.KeyboardArrowUp
-                                        } else {
-                                            Icons.Default.KeyboardArrowDown
-                                        },
-                                        contentDescription = if (isExpanded) "Collapse" else "Expand",
-                                        tint = AarisColor.Muted,
-                                    )
-                                }
-                            }
-                            HorizontalDivider(color = AarisColor.Line)
-                        }
-                        if (isExpanded) {
-                            itemsIndexed(
-                                items = group.voices,
-                                key = { _, choice -> "voice-${choice.name}" },
-                            ) { _, choice ->
-                                VoiceChoiceRow(
-                                    choice = choice,
-                                    selected = choice.name == current,
-                                    onSelect = { onSelect(choice.name) },
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(text = group.label, style = MaterialTheme.typography.titleMedium)
+                                MetaText(
+                                    text = "${group.locale}  ·  ${group.voices.size} voices",
+                                    color = AarisColor.Dim,
                                 )
                             }
+                            if (query.isBlank()) {
+                                Icon(
+                                    imageVector = if (isExpanded) {
+                                        Icons.Default.KeyboardArrowUp
+                                    } else {
+                                        Icons.Default.KeyboardArrowDown
+                                    },
+                                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                                    tint = AarisColor.Muted,
+                                )
+                            }
+                        }
+                        HorizontalDivider(color = AarisColor.Line)
+                    }
+                    if (isExpanded) {
+                        itemsIndexed(
+                            items = group.voices,
+                            key = { _, choice -> "voice-${choice.name}" },
+                        ) { _, choice ->
+                            VoiceChoiceRow(
+                                choice = choice,
+                                selected = choice.name == current,
+                                onSelect = { onSelect(choice.name) },
+                            )
                         }
                     }
                 }
