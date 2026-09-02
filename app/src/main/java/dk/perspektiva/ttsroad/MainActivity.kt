@@ -728,6 +728,15 @@ internal fun PrimaryNavigationBar(selected: AppRoot, onSelect: (AppRoot) -> Unit
         ) {
             AppRoot.entries.forEach { root ->
                 val isSelected = root == selected
+                // The label is centred with padding rather than between two weighted spacers,
+                // and that is the whole bug fix. A Column with a weighted child expands to its
+                // *maximum* height constraint, and Scaffold measures `bottomBar` with the entire
+                // screen available — so this bar rendered 360 dp tall on a 360 dp screen, and the
+                // body's bottom inset became the height of the window. Every destination was laid
+                // out off-screen, which reads as "the tabs do nothing".
+                //
+                // Padding keeps the 56 dp target, keeps the accent rule pinned to the top edge,
+                // and still grows at a large display size instead of clipping the label.
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -738,7 +747,6 @@ internal fun PrimaryNavigationBar(selected: AppRoot, onSelect: (AppRoot) -> Unit
                             onClick = { onSelect(root) },
                         ),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
                 ) {
                     Box(
                         modifier = Modifier
@@ -746,14 +754,13 @@ internal fun PrimaryNavigationBar(selected: AppRoot, onSelect: (AppRoot) -> Unit
                             .height(2.dp)
                             .background(if (isSelected) AarisColor.Accent else Color.Transparent),
                     )
-                    Spacer(modifier = Modifier.weight(1f))
                     Text(
                         text = root.label,
+                        modifier = Modifier.padding(vertical = 18.dp),
                         style = MaterialTheme.typography.labelMedium,
                         color = if (isSelected) AarisColor.Accent else AarisColor.Muted,
                         maxLines = 1,
                     )
-                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -6296,6 +6303,9 @@ internal fun BrowseScopeTabs(
     ) {
         BrowseScope.entries.forEach { option ->
             val isSelected = option == selected
+            // No weighted spacers here either, and for a worse reason than the navigation bar's:
+            // these tabs are an item of a LazyVerticalGrid, where the height constraint is
+            // unbounded. See PrimaryNavigationBar for what that pattern does.
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -6306,7 +6316,6 @@ internal fun BrowseScopeTabs(
                         onClick = { onSelect(option) },
                     ),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
             ) {
                 Box(
                     modifier = Modifier
@@ -6314,13 +6323,12 @@ internal fun BrowseScopeTabs(
                         .height(2.dp)
                         .background(if (isSelected) AarisColor.Accent else AarisColor.Line),
                 )
-                Spacer(modifier = Modifier.weight(1f))
                 MetaText(
                     text = counts[option]?.let { "${option.label}  $it" } ?: option.label,
                     color = if (isSelected) AarisColor.Accent else AarisColor.Muted,
                     maxLines = 1,
+                    modifier = Modifier.padding(vertical = 16.dp),
                 )
-                Spacer(modifier = Modifier.weight(1f))
             }
         }
     }

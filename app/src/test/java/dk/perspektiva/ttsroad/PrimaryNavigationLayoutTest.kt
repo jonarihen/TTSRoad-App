@@ -5,11 +5,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.nav.AppRoot
@@ -134,5 +136,47 @@ class PrimaryNavigationLayoutTest {
         )) {
             compose.onNodeWithText(destination).assertExists()
         }
+    }
+
+    /**
+     * The bar has to be a bar.
+     *
+     * It shipped in 0.14.0 measuring the full height of the window. Each tab was a `Column` with
+     * `Spacer(Modifier.weight(1f))` above and below its label and only a `heightIn(min = 56.dp)`
+     * to bound it — and a Column with a weighted child takes its *maximum* height constraint,
+     * which in a Scaffold's `bottomBar` slot is the whole screen. The body's bottom inset then
+     * became the height of the window and every destination was laid out off-screen, so the app
+     * was four giant labels that appeared to do nothing when tapped.
+     *
+     * Every other test in this file passed throughout: they assert that labels are displayed and
+     * that clicks arrive, and all of that is just as true of a bar that is 360 dp tall. Nothing
+     * measured it, so nothing caught it.
+     */
+    @Test
+    fun `the navigation bar is a bar, not the whole screen`() {
+        compose.setContent {
+            TtsRoadTheme {
+                AppBottomBar(selected = AppRoot.Home, onSelect = {}, miniPlayer = null)
+            }
+        }
+
+        // The window is 360 dp tall in this class's qualifiers, and at mdpi that is 360 px.
+        val barPx = compose.onRoot().fetchSemanticsNode().size.height
+        assertTrue("navigation bar is ${barPx}px tall on a 360px screen", barPx < 180)
+    }
+
+    /**
+     * The other half of the same claim: a bar that collapses is as broken as one that fills the
+     * screen, and a bound with no floor would be satisfied by zero.
+     */
+    @Test
+    fun `the navigation bar still clears a 48 dp touch target`() {
+        compose.setContent {
+            TtsRoadTheme {
+                AppBottomBar(selected = AppRoot.Home, onSelect = {}, miniPlayer = null)
+            }
+        }
+
+        compose.onNodeWithText("HOME").assertHeightIsAtLeast(48.dp)
     }
 }
