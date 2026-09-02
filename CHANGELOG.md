@@ -44,7 +44,82 @@ Notable changes to the TTSRoad Android client.
   never has to be read to work out how it is arranged.
   ([#164](https://github.com/jonarihen/TTSRoad-App/issues/164))
 
+- **Browse filters by tag, the way the web console always has.** A tag was searchable as text and
+  nothing else, so narrowing the shelf to progression fantasy meant typing a word and hoping no
+  title contained it. There is now a tag sheet — multi-select, alphabetical, drawn from whatever
+  the server's own vocabulary happens to be — and the tags on a grid card became buttons that
+  filter to themselves. Ticking two tags means **both**, matching `ttsroadApplyLibrary` in the web
+  client, because a filter that widens the list as you add to it is one nobody uses twice. An
+  active filter states itself above the grid with its count and the tags themselves, and offers
+  CLEAR beside them: a filter that hides rows without saying it is on is indistinguishable from a
+  server that has lost the shelf. A stored tag that nothing carries any more is dropped rather than
+  emptying the grid with no box left on screen to un-tick.
+
+- **Browse has FOLLOWING and ALL tabs.** Which half of the server you were looking at was inferred
+  from which screen you had opened — HOME was the shelf, BROWSE was everything — and there was no
+  way to narrow browse to your own books or to see how the two counts compared. The tabs carry
+  those counts, taken over the unfiltered list so each one says what it *switches to* rather than
+  what is currently drawn. Deliberately opening on **ALL**, unlike the web console's library page:
+  HOME is already this app's shelf, so opening browse on the shelf as well would hide the only list
+  a new book can be found in. Drawn only where the server has per-user libraries, since without
+  them both tabs would hold the same list.
+
+- **Two more browse orders: Most chapters and % converted.** The web dropdown had both and the
+  phone had neither. They are about the book and the pipeline rather than about listening, which is
+  what keeps them distinct from *Most left to hear* and *Least finished*: a book two chapters into
+  a 400-chapter conversion is still the longest book on the shelf, and 12 of 12 is further through
+  than 200 of 400.
+
+- **The browse order, tag filter and scope survive a restart.** All three were `rememberSaveable`,
+  which covers rotation and a trip into a fiction — and nothing else, so an order picked on Monday
+  was gone by Tuesday because Android had reaped the process overnight. They are now in their own
+  DataStore, which is where the web console has kept the same three in `localStorage` all along.
+  The search text deliberately stays session state: a search is a question being asked now, and
+  restoring last week's would open browse onto a near-empty grid with no visible cause.
+
+- **An empty browse grid names the filter that emptied it.** "No fictions found" was the only
+  message, and it is a lie with a tag ticked or on an empty FOLLOWING tab — it reads as the server
+  having lost the shelf rather than as something the reader can undo in one tap.
+
+### Fixed
+
+- **Adding a fiction from the phone converted the entire backlog.** `POST /api/mobile/fictions`
+  accepts `sync_limit` and `sync_direction`; the app sent neither. The backend reads their absence
+  as *every chapter* — `add_fiction` branches on `if body.sync_limit:` and otherwise calls
+  `poll_and_process_fiction(fiction.id, True)` — so tracking a 400-chapter serial from a phone
+  queued four hundred chapters of TTS, while the web form, posting the same body, has always
+  defaulted to the newest 25. The add form now opens on that same default and offers **NEWEST**,
+  **OLDEST** or **EVERYTHING**, with the whole-backlog choice saying what it costs before it is
+  made.
+
 ### Changed
+
+- **Add a fiction is a form now, not one text field.** It also carries the narrator, the speech
+  rate and the auto-poll switch — everything the endpoint accepts and the web form has always
+  offered. Voice and rate matter at the moment of adding rather than later, because nothing already
+  narrated is re-converted when they change. Both are omitted from the request when left alone, so
+  `settings.DEFAULT_VOICE` and `DEFAULT_RATE` apply instead of a default this app invented; the
+  rate is normalised and validated first, because the server stores whatever string it is handed,
+  which means a typo does not fail on save — it fails hours later as a chapter that will not
+  narrate. The form moved into a sheet behind an **ADD FICTION** button: it no longer belongs
+  permanently expanded above the search field of a screen whose job is browsing.
+
+- **The player's foot holds three settings instead of eight buttons.** Under the transport row sat
+  SPEED, SLEEP, BOOKMARK, SAID WRONG, READ, JUMP BACK, CHAPTERS n/m and UP NEXT — one wrapping wall
+  of uppercase labels in which changing the speed, marking a mispronunciation and opening another
+  screen all cost the same glance. They are now split by what they do, along the line the web
+  console's player already draws. Everything that **leaves the player** — read-along, the chapter
+  list, Up Next — is an icon in the player's own head, deliberately out of the thumb's reach, with
+  the chapter position riding along as a badge so the one thing the old label said that a glyph
+  cannot is not lost. Everything that **marks the moment being heard** — bookmark, said-wrong, jump
+  back — is an icon against the scrubber, next to the transport controls the thumb is already on.
+  What is left with a written label is the three settings: SPEED, SLEEP and SKIP SILENCE. This
+  keeps #159's rank and inverts how it is spent, because the bottom of a phone is the prize:
+  marking now sits *below* navigating rather than above it.
+
+- **Skip silence moved onto the player and out of the speed sheet.** It is a button that states
+  its own setting rather than a switch behind a sheet, so the answer to "why is this quicker than
+  the web player" is on screen. It stays in Settings; it is no longer in two places on the player.
 
 - **The fiction screen leads with one button instead of ten.** For an admin the header stacked
   RESUME, FOLLOW, DOWNLOAD, RETRY, CHECK FOR NEW CHAPTERS, SHARE PODCAST FEED, REGENERATE FEED LINK,

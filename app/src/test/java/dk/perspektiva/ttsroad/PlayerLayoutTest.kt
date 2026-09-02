@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -45,42 +46,112 @@ class PlayerLayoutTest {
         "Next chapter",
     )
 
+    /** The icon actions, which carry no visible label — the head group and the scrubber group. */
+    private val iconActions = listOf(
+        "Read along",
+        "Chapters, 2 of 12",
+        "Up next",
+        "Jump back to where you were",
+        "Bookmark this moment",
+        "Report a mispronunciation",
+    )
+
     @Test
     @Config(sdk = [34], qualifiers = "w640dp-h360dp")
     fun `every player action is reachable in landscape`() {
         renderPlayer()
 
-        for (description in transportControls) {
+        for (description in transportControls + iconActions) {
             compose.onNodeWithContentDescription(description).performScrollTo().assertIsDisplayed()
         }
-        for (label in listOf("SPEED 1×", "SLEEP", "READ", "BOOKMARK", "SAID WRONG", "JUMP BACK")) {
+        // What is left with a written label is the three settings, and they say their own state.
+        for (label in listOf("SPEED 1×", "SLEEP", "SKIP SILENCE")) {
             compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
         }
-        compose.onNodeWithText("CHAPTERS 2/12").performScrollTo().assertIsDisplayed()
     }
 
     @Test
     @Config(sdk = [34], qualifiers = "w411dp-h891dp")
-    fun `marking the moment outranks leaving the player`() {
-        // #159's split, asserted by position because colour is not in the semantics tree.
-        //
-        // The rule is "changes or marks what is playing right now" above "takes me somewhere
-        // else", and it is not cosmetic: BOOKMARK and SAID WRONG are pressed at the wheel without
-        // looking (#125), while READ, CHAPTERS and UP NEXT all open something you have to look at.
-        // Before this they were one undifferentiated group of eight.
+    fun `the chapter position survives the move to an icon`() {
+        // The count was the one thing "CHAPTERS 53/246" said that a list glyph cannot, so it rides
+        // along as a badge. Losing it would make the player the only screen that cannot say how far
+        // through the book you are.
         renderPlayer()
 
-        val markTop = listOf("BOOKMARK", "SAID WRONG")
-            .map { compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.top }
-            .max()
-        val leaveTop = listOf("READ", "JUMP BACK", "UP NEXT")
-            .map { compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot.top }
+        compose.onNodeWithText("2/12").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp")
+    fun `marking the moment sits nearer the thumb than leaving the player does`() {
+        // #159's split, kept but re-expressed for the layout that replaced the eight-button wall.
+        //
+        // The rule is still "changes or marks what is playing right now" against "takes me
+        // somewhere else". What changed is how rank is spent: the marking group moved *down* onto
+        // the scrubber, beside the transport row where the thumb already is, and the navigation
+        // group moved up into the player's head, deliberately out of reach. Bottom is the prize on
+        // a phone, so this asserts the opposite ordering to the one #159 left behind — and it is
+        // the same rule, not a reversal of it.
+        renderPlayer()
+
+        val markTop = listOf("Bookmark this moment", "Report a mispronunciation")
+            .map { compose.onNodeWithContentDescription(it).fetchSemanticsNode().boundsInRoot.top }
             .min()
+        val leaveTop = listOf("Read along", "Chapters, 2 of 12", "Up next")
+            .map { compose.onNodeWithContentDescription(it).fetchSemanticsNode().boundsInRoot.top }
+            .max()
 
         assertTrue(
-            "marking actions ($markTop) must sit above navigation actions ($leaveTop)",
-            markTop < leaveTop,
+            "marking actions ($markTop) must sit below navigation actions ($leaveTop)",
+            markTop > leaveTop,
         )
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp")
+    fun `the marking group stays within reach of the transport row`() {
+        // The other half of the claim above, and the one that would quietly rot: "below the head"
+        // is satisfied by anything, including a control pushed under the toolbar at the very foot.
+        // What the split is actually buying is adjacency to the controls the thumb is already on.
+        renderPlayer()
+
+        val bookmarkBottom = compose.onNodeWithContentDescription("Bookmark this moment")
+            .fetchSemanticsNode().boundsInRoot.bottom
+        val pauseTop = compose.onNodeWithContentDescription("Pause")
+            .fetchSemanticsNode().boundsInRoot.top
+        val screenHeight = compose.onRoot().fetchSemanticsNode().boundsInRoot.height
+
+        assertTrue(
+            "the bookmark ($bookmarkBottom) must sit above the transport row ($pauseTop)",
+            bookmarkBottom <= pauseTop,
+        )
+        assertTrue(
+            "the bookmark ($bookmarkBottom) must be in the lower half of an 891 dp window",
+            bookmarkBottom > screenHeight / 2,
+        )
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp")
+    fun `the foot of the player holds three settings and nothing else`() {
+        // The clutter this pass removed, asserted as an absence so it cannot creep back one label
+        // at a time. These six were text buttons in the same FlowRow as SPEED and SLEEP.
+        renderPlayer()
+
+        for (gone in listOf("READ", "BOOKMARK", "SAID WRONG", "JUMP BACK", "UP NEXT")) {
+            compose.onNodeWithText(gone).assertDoesNotExist()
+        }
+        compose.onNodeWithText("CHAPTERS 2/12").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp")
+    fun `skip silence says which way it is set`() {
+        // It moved out of the speed sheet, where it was a switch, onto a button that has to carry
+        // its own state — a toggle you cannot read is one people press twice to find out.
+        renderPlayer(skipSilence = true)
+
+        compose.onNodeWithText("SKIP SILENCE ON").assertIsDisplayed()
     }
 
     @Test
@@ -131,7 +202,10 @@ class PlayerLayoutTest {
         compose.onNodeWithContentDescription("Pause").performScrollTo().assertIsDisplayed()
     }
 
-    private fun renderPlayer(onTogglePlayPause: () -> Unit = {}) {
+    private fun renderPlayer(
+        onTogglePlayPause: () -> Unit = {},
+        skipSilence: Boolean = false,
+    ) {
         compose.setContent {
             TtsRoadTheme {
                 PlayerScreenBody(
@@ -155,6 +229,7 @@ class PlayerLayoutTest {
                     canReportPronunciation = true,
                     canJumpBack = true,
                     canOpenQueue = true,
+                    skipSilence = skipSilence,
                     onRetry = {},
                     onSeek = {},
                     onPreviousChapter = {},

@@ -100,8 +100,14 @@ class FictionManagementRepositoryTest {
         val request = server.takeRequest()
         assertEquals("/api/mobile/fictions", request.path)
         assertEquals("POST", request.method)
+        // The sync window is the half that used to be missing. Without `sync_limit` the server
+        // branches to `poll_and_process_fiction(..., True)` and converts the *entire* backlog, so
+        // an add from this app quietly queued every chapter a serial had. `voice` and `rate` stay
+        // absent while untouched, which is what lets the server's own defaults apply — and what
+        // keeps this body readable by a server too old to know the newer fields.
         assertEquals(
-            """{"fiction_url":"https://www.royalroad.com/fiction/12345"}""",
+            """{"fiction_url":"https://www.royalroad.com/fiction/12345",""" +
+                """"enabled":true,"sync_limit":25,"sync_direction":"last"}""",
             request.body.readUtf8(),
         )
         assertTrue(result is FictionAddResult.Added)
@@ -119,7 +125,8 @@ class FictionManagementRepositoryTest {
 
         server.takeRequest()
         assertEquals(
-            """{"fiction_url":"https://www.royalroad.com/fiction/12345"}""",
+            """{"fiction_url":"https://www.royalroad.com/fiction/12345",""" +
+                """"enabled":true,"sync_limit":25,"sync_direction":"last"}""",
             server.takeRequest().body.readUtf8(),
         )
     }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -57,9 +58,9 @@ class PronunciationReportsLayoutTest {
     fun `a server without the capability offers no capture action`() {
         renderPlayer(canReportPronunciation = false)
 
-        compose.onNodeWithText("SAID WRONG").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Report a mispronunciation").assertDoesNotExist()
         // The neighbouring action is untouched: the two capabilities are gated separately.
-        compose.onNodeWithText("BOOKMARK").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Bookmark this moment").assertIsDisplayed()
     }
 
     @Test
@@ -69,8 +70,8 @@ class PronunciationReportsLayoutTest {
 
         // Portrait keeps the player's non-scrolling layout, so the action has to be on screen
         // as drawn rather than merely reachable.
-        compose.onNodeWithText("SAID WRONG").assertIsDisplayed()
-        compose.onNodeWithText("SAID WRONG").performClick()
+        compose.onNodeWithContentDescription("Report a mispronunciation").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Report a mispronunciation").performClick()
 
         assertEquals(1, pressed)
     }

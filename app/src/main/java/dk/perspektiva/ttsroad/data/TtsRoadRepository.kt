@@ -397,15 +397,22 @@ class TtsRoadRepository(
      *
      * Adding is admin-only server-side. The UI hides the control for a non-admin account, so a
      * [FictionAddResult.Refused] here means the session lost admin since it signed in.
+     *
+     * [options] carries everything the endpoint accepts besides the URL, and passing it is not
+     * cosmetic: with no `sync_limit` the server converts the *entire* backlog, so every fiction
+     * this app added used to queue every chapter it had. See [AddFictionOptions].
      */
-    suspend fun addFiction(url: String): FictionAddResult {
+    suspend fun addFiction(
+        url: String,
+        options: AddFictionOptions = AddFictionOptions(),
+    ): FictionAddResult {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) return FictionAddResult.Refused("Paste a fiction URL first.")
         if (!_currentCapabilities.value.fictionManagement) {
             return FictionAddResult.Unsupported
         }
         return try {
-            val added = withAuthorizedApi { it.addFiction(AddFictionRequest(fictionUrl = trimmed)) }
+            val added = withAuthorizedApi { it.addFiction(options.toRequest(trimmed)) }
             FictionAddResult.Added(added.fiction)
         } catch (e: HttpException) {
             if (e.code() == 401) throw e
