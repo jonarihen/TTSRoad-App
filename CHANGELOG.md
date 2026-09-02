@@ -2,6 +2,27 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.14.1 — 2026-09-02
+
+### Fixed
+
+- **The app was four giant labels that did nothing.** 0.14.0's primary navigation bar rendered at
+  the full height of the window. Each tab was a `Column` holding its label between two
+  `Spacer(Modifier.weight(1f))`, bounded only by `heightIn(min = 56.dp)` — and a Column with a
+  weighted child takes its *maximum* height constraint, which in a `Scaffold`'s `bottomBar` slot is
+  the entire screen. The body's bottom inset then became the height of the window, so every
+  destination was laid out off-screen: HOME, BROWSE, LISTENING and SETTINGS filled the display and
+  tapping them appeared to do nothing, because the screen they switched to was never visible.
+
+  The labels are now centred with padding instead, which keeps the 56 dp target and the accent rule
+  at the top edge and still grows at a large display size. The browse screen's new FOLLOWING/ALL
+  tabs carried the same pattern, copied from the navigation bar, and are fixed with it — worse
+  there, since a lazy grid item has no height bound at all.
+
+  Every navigation test passed throughout: they assert that labels are displayed and that clicks
+  arrive, which is equally true of a bar that is 360 dp tall. Nothing measured it. Both controls now
+  have a test that does.
+
 ## 0.14.0 — 2026-09-02
 
 ### Added

@@ -8,11 +8,13 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.data.BrowseScope
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -68,6 +70,29 @@ class BrowseControlsLayoutTest {
         }
 
         compose.onNodeWithText("FOLLOWING  1").assertHeightIsAtLeast(MinimumTarget)
+    }
+
+    /**
+     * The scope tabs are an item of a LazyVerticalGrid, where the height constraint is unbounded —
+     * so the weighted-spacer pattern these were first written with is worse here than it was in
+     * the navigation bar that inspired it. Measured rather than merely displayed, because
+     * "displayed" is true of a control that has swallowed the whole grid.
+     */
+    @Test
+    fun `the scope tabs are a strip, not the whole screen`() {
+        compose.setContent {
+            TtsRoadTheme {
+                BrowseScopeTabs(
+                    selected = BrowseScope.All,
+                    counts = mapOf(BrowseScope.Following to 12, BrowseScope.All to 240),
+                    onSelect = {},
+                )
+            }
+        }
+
+        // 800 dp tall window in this class's qualifiers; a tab strip is nowhere near half of it.
+        val stripPx = compose.onRoot().fetchSemanticsNode().size.height
+        assertTrue("scope tabs are ${stripPx}px tall on an 800px screen", stripPx < 200)
     }
 
     @Test
