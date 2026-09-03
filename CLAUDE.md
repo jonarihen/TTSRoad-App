@@ -204,6 +204,30 @@ file checksum is enforced in `app/build.gradle.kts` and recorded in `debug.keyst
 Never generate or substitute another key. Restore a lost local file from the protected offline
 backup and confirm it with `sha256sum --check debug.keystore.sha256` before building.
 
+**New-chapter notices** (`data/ChapterNotifications.kt`, `NewChaptersState.kt`,
+`NewChapterNotifier.kt`, capability `notifications`). A notice is raised when a chapter is **pulled**
+and stays open until it is **listenable** — the promise and the keeping of it are one row.
+
+Three rules are load-bearing:
+
+- **`dismissible` and `playable` are read off the wire**, never derived from `state`. The server
+  answers 409 to a dismissal of a converting chapter, and a client that worked the rule out for
+  itself would be a fourth opinion about something the server enforces. An unknown state parses as
+  `Pulled`, never `Ready` — guessing the latter offers Play for audio that may not exist.
+- **The notification fires only on pulled → ready**, and `newlyReady` returns nothing on the first
+  look of a session. A chapter that was already ready when the app started is not news; announcing
+  it would re-announce the backlog on every cold start. Several at once collapse into one line.
+- **The poller is hoisted to `MainScaffold`**, not the screen: the badge and the notification are
+  driven by a poll that has to run whether or not the list was ever opened. It is gated on the
+  session as well as the capability, because discovery is unauthenticated and a capable server
+  reports `notifications: true` while the login form is still on screen.
+
+Its own notification channel (`ttsroad_new_chapters`), so "a chapter is ready" can be silenced
+without silencing the media session. **No FCM yet**: everything posted is a rendering of state the
+app already polled, so it works on a deployment with no push credential — which is every deployment
+today. When push lands it should hand its payload to `NewChapterNotifier.notifyReady` rather than
+build a second path. Server contract: TTSRoad#203.
+
 ## Conventions
 
 - DTOs are Moshi data classes in `data/MobileModels.kt` using reflection

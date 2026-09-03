@@ -203,6 +203,16 @@ data class ServerCapabilities(
     val storage: Boolean = false,
 
     /**
+     * New-chapter notices for followed serials, over `/api/mobile/notifications` (#175).
+     *
+     * Gated on the dismiss route as well as the list one server-side, because the contract a client
+     * depends on is not "there is a list" but "the server will refuse to clear a chapter that
+     * cannot be played yet". Says nothing about push: a deployment with no FCM credential still
+     * serves this and the app polls it.
+     */
+    val notifications: Boolean = false,
+
+    /**
      * Every flag the server advertised, exactly as sent, including ones this build has never heard
      * of.
      *
@@ -269,6 +279,7 @@ data class ServerCapabilities(
                 voicePreview = flags.flag("voice_preview"),
                 logs = flags.flag("logs"),
                 storage = flags.flag("storage"),
+                notifications = flags.flag("notifications"),
                 // Only entries that are actually booleans. A server sending something else for a
                 // key is saying something this build cannot read, and listing it as "off" would be
                 // a guess presented as fact.

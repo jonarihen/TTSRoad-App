@@ -812,6 +812,15 @@ private fun MainScaffold(
         onReplaceScreen(next)
     }
     BackHandler(enabled = canGoBack, onBack = popBackStack)
+    val scaffoldScope = rememberCoroutineScope()
+    val scaffoldCapabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    // Hoisted to the scaffold rather than to the screen: the badge and the system notification are
+    // driven by a poll that has to run whether or not the list has ever been opened (#175).
+    val newChapters = rememberNewChapters(
+        repository = repository,
+        isLoggedIn = session.isLoggedIn,
+        available = scaffoldCapabilities.notifications,
+    )
     val playerState by playbackController.state.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val skipIntervalMs by remember(preferences) {
@@ -832,6 +841,7 @@ private fun MainScaffold(
         AppScreen.Queue -> "Up next"
         AppScreen.Stats -> "Listening stats"
         AppScreen.Logs -> "Server log"
+        AppScreen.NewChapters -> "New chapters"
     }
 
     Scaffold(
@@ -891,6 +901,8 @@ private fun MainScaffold(
                     onOpenQueue = { onScreenChange(AppScreen.Queue) },
                     onOpenStats = { onScreenChange(AppScreen.Stats) },
                     onOpenLogs = { onScreenChange(AppScreen.Logs) },
+                    onOpenNewChapters = { onScreenChange(AppScreen.NewChapters) },
+                    unreadNewChapters = newChapters.unread,
                 )
 
                 is AppScreen.Fiction -> FictionScreen(
@@ -978,6 +990,39 @@ private fun MainScaffold(
                     padding = padding,
                     session = session,
                     repository = repository,
+                )
+
+                AppScreen.NewChapters -> NewChaptersScreen(
+                    padding = padding,
+                    state = newChapters,
+                    repository = repository,
+                    onPlay = { entry ->
+                        scaffoldScope.launch {
+                            runCatching {
+                                val resp = repository.chapters(entry.fiction.id, playableOnly = false)
+                                // Guarded rather than assumed: the list can be a minute old, and a
+                                // chapter excluded since would otherwise start whatever sorts first.
+                                if (resp.chapters.any { it.id == entry.chapter.id }) {
+                                    playbackController.playQueue(
+                                        chapters = resp.chapters,
+                                        startChapterId = entry.chapter.id,
+                                        fiction = resp.fiction,
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    onOpenFiction = { entry ->
+                        scaffoldScope.launch {
+                            runCatching {
+                                // Fetched rather than synthesised from the notice: the payload
+                                // carries enough to draw a row, deliberately not enough to be the
+                                // FictionSummary every screen downstream expects.
+                                val resp = repository.chapters(entry.fiction.id, playableOnly = false)
+                                onScreenChange(AppScreen.Fiction(resp.fiction))
+                            }
+                        }
+                    },
                 )
             }
         }
@@ -3425,6 +3470,8 @@ private fun ListeningScreen(
     onOpenQueue: () -> Unit,
     onOpenStats: () -> Unit,
     onOpenLogs: () -> Unit,
+    onOpenNewChapters: () -> Unit,
+    unreadNewChapters: Int,
 ) {
     val context = LocalContext.current
     val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
@@ -3441,12 +3488,15 @@ private fun ListeningScreen(
         canOpenBookmarks = capabilities.bookmarks,
         canOpenPronunciationReports = capabilities.pronunciationReports,
         canOpenLogs = canReadServerLogs(capabilities, session.isAdmin),
+        canOpenNewChapters = capabilities.notifications,
+        unreadNewChapters = unreadNewChapters,
         onOpenPlayer = onOpenPlayer,
         onOpenBookmarks = onOpenBookmarks,
         onOpenPronunciationReports = onOpenPronunciationReports,
         onOpenQueue = onOpenQueue,
         onOpenStats = onOpenStats,
         onOpenLogs = onOpenLogs,
+        onOpenNewChapters = onOpenNewChapters,
     )
 }
 
@@ -3460,12 +3510,16 @@ internal fun ListeningScreenBody(
     canOpenBookmarks: Boolean,
     canOpenPronunciationReports: Boolean,
     canOpenLogs: Boolean,
+    canOpenNewChapters: Boolean = false,
+    /** Everything unresolved, converting chapters included. Zero draws no count at all. */
+    unreadNewChapters: Int = 0,
     onOpenPlayer: () -> Unit = {},
     onOpenBookmarks: () -> Unit = {},
     onOpenPronunciationReports: () -> Unit = {},
     onOpenQueue: () -> Unit = {},
     onOpenStats: () -> Unit = {},
     onOpenLogs: () -> Unit = {},
+    onOpenNewChapters: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -3521,6 +3575,21 @@ internal fun ListeningScreenBody(
                         subtitle = "Words flagged as said wrong, and where they were heard",
                         enabled = true,
                         onClick = onOpenPronunciationReports,
+                    )
+                }
+                if (canOpenNewChapters) {
+                    AarisActionRow(
+                        // The count is in the title rather than a badge: this is a list of rows,
+                        // and one of them wearing a badge the others cannot is a shape the screen
+                        // does not otherwise have.
+                        title = if (unreadNewChapters > 0) {
+                            "New chapters ($unreadNewChapters)"
+                        } else {
+                            "New chapters"
+                        },
+                        subtitle = "Chapters pulled on serials you follow, until they can be played",
+                        enabled = true,
+                        onClick = onOpenNewChapters,
                     )
                 }
             }
