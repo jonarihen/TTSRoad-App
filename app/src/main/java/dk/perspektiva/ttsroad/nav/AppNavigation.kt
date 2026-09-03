@@ -79,6 +79,15 @@ sealed interface AppScreen {
      * log lines inside a page that already scrolls is not a card.
      */
     data object Logs : AppScreen
+
+    /**
+     * New chapters on the serials you follow, reached from Listening (#175).
+     *
+     * Under Listening rather than Browse: the question it answers is "what can I play now", not
+     * "what exists on the server". A notice is only ever about a chapter of a serial already on the
+     * shelf.
+     */
+    data object NewChapters : AppScreen
 }
 
 /** Stable key for per-entry saved UI state (scroll offsets, search text). */
@@ -102,6 +111,7 @@ val AppScreen.saveKey: String
         AppScreen.Queue -> "Queue"
         AppScreen.Stats -> "Stats"
         AppScreen.Logs -> "Logs"
+        AppScreen.NewChapters -> "NewChapters"
     }
 
 /** The stack every session starts from. */
@@ -128,6 +138,7 @@ val AppScreen.appRoot: AppRoot
         AppScreen.Queue,
         AppScreen.Stats,
         AppScreen.Logs,
+        AppScreen.NewChapters,
         -> AppRoot.Listening
 
         AppScreen.Settings, AppScreen.Devices -> AppRoot.Settings

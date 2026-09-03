@@ -335,6 +335,29 @@ interface TtsRoadApi {
      * [limit] is capped at 200 server-side; asking for more is answered with 200 rather than an
      * error, but the caller clamps anyway so the request says what it means.
      */
+    /**
+     * New chapters on the serials this account follows.
+     *
+     * Dismissed rows are deliberately not requested: the surface is "what is still coming", and a
+     * list that carried everything ever cleared would need paging to say the same thing.
+     */
+    @GET("api/mobile/notifications")
+    suspend fun chapterNotifications(): ChapterNotificationsResponse
+
+    /**
+     * Clears one notice.
+     *
+     * Answers **409** while the chapter is still converting. That is the contract rather than an
+     * edge case — the notice is the only record that the chapter is coming — so the server refuses
+     * regardless of what the client drew.
+     */
+    @POST("api/mobile/notifications/{notification_id}/dismiss")
+    suspend fun dismissChapterNotification(@Path("notification_id") notificationId: Int)
+
+    /** Clears everything that plays, and deliberately nothing that does not. */
+    @POST("api/mobile/notifications/dismiss-read")
+    suspend fun dismissReadChapterNotifications()
+
     @GET("api/mobile/logs")
     suspend fun serverLogs(
         @Query("limit") limit: Int,

@@ -110,6 +110,7 @@ class PrimaryNavigationLayoutTest {
         compose.onNodeWithText("Bookmarks").assertDoesNotExist()
         compose.onNodeWithText("Pronunciation reports").assertDoesNotExist()
         compose.onNodeWithText("Server log").assertDoesNotExist()
+        compose.onNodeWithText("New chapters").assertDoesNotExist()
     }
 
     @Test
@@ -136,6 +137,49 @@ class PrimaryNavigationLayoutTest {
         )) {
             compose.onNodeWithText(destination).assertExists()
         }
+    }
+
+    @Test
+    fun `new chapters appears only where the server can report them, and carries its count`() {
+        compose.setContent {
+            TtsRoadTheme {
+                ListeningScreenBody(
+                    hasMedia = false,
+                    hasHistory = false,
+                    canOpenQueue = false,
+                    canOpenBookmarks = false,
+                    canOpenPronunciationReports = false,
+                    canOpenLogs = false,
+                    canOpenNewChapters = true,
+                    unreadNewChapters = 3,
+                )
+            }
+        }
+
+        // Counted including chapters still converting: the whole point is that a chapter you were
+        // told about stays counted until it can actually be played.
+        compose.onNodeWithText("New chapters (3)").assertExists()
+    }
+
+    @Test
+    fun `new chapters wears no count when there is nothing waiting`() {
+        compose.setContent {
+            TtsRoadTheme {
+                ListeningScreenBody(
+                    hasMedia = false,
+                    hasHistory = false,
+                    canOpenQueue = false,
+                    canOpenBookmarks = false,
+                    canOpenPronunciationReports = false,
+                    canOpenLogs = false,
+                    canOpenNewChapters = true,
+                    unreadNewChapters = 0,
+                )
+            }
+        }
+
+        compose.onNodeWithText("New chapters").assertExists()
+        compose.onNodeWithText("New chapters (0)").assertDoesNotExist()
     }
 
     /**

@@ -1491,6 +1491,60 @@ data class ServerLogEntry(
 )
 
 /**
+ * `GET /api/mobile/notifications` — new chapters on the serials this account follows (#175).
+ *
+ * A notice is raised the moment a chapter is **pulled** and stays open until that chapter is
+ * **listenable**. That is the whole contract: a new chapter that cannot be played is a promise, and
+ * the server refuses (409) to let a client clear the notice before the audio exists, because it is
+ * the only record that the promise was made.
+ *
+ * [unread] counts everything not dismissed — converting chapters included — which is what a badge
+ * shows. It is counted over the whole list rather than the page, so it cannot quietly under-report.
+ */
+data class ChapterNotificationsResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val notifications: List<ChapterNotificationEntry> = emptyList(),
+    val unread: Int = 0,
+    val ready: Int = 0,
+)
+
+/**
+ * One notice.
+ *
+ * [dismissible] and [playable] are **read off the wire, never derived from [state]**. They are the
+ * one question every client asks — may I offer Dismiss, may I offer Play — and all three clients
+ * have to answer it identically; a client that worked the rule out for itself would be a fourth
+ * opinion about something the server enforces.
+ */
+data class ChapterNotificationEntry(
+    val id: Int = 0,
+    /** `pulled`, `stalled`, `ready` or `dismissed`. See [chapterNotificationState]. */
+    val state: String = "pulled",
+    val dismissible: Boolean = false,
+    val playable: Boolean = false,
+    @param:Json(name = "created_at") val createdAt: String? = null,
+    @param:Json(name = "ready_at") val readyAt: String? = null,
+    val fiction: ChapterNotificationFiction = ChapterNotificationFiction(),
+    val chapter: ChapterNotificationChapter = ChapterNotificationChapter(),
+)
+
+data class ChapterNotificationFiction(
+    val id: Int = 0,
+    val title: String = "Untitled",
+    val slug: String? = null,
+    @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
+)
+
+data class ChapterNotificationChapter(
+    val id: Int = 0,
+    val title: String = "Untitled",
+    @param:Json(name = "chapter_number") val chapterNumber: Int? = null,
+    val status: String? = null,
+    /** Conversion percentage while narrating; null once done, so a stalled row cannot read as busy. */
+    @param:Json(name = "tts_progress") val ttsProgress: Int? = null,
+)
+
+/**
  * `GET /api/mobile/storage` — how much disk the install is using, per fiction (#124).
  *
  * Every `…_bytes` has a matching `…_label`, and **the label is what gets rendered**. They are

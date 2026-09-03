@@ -1046,6 +1046,47 @@ class TtsRoadRepository(
      * id is a monotonic primary key, so a page boundary holds still while the pipeline keeps writing
      * rows above it. Paging on a second-resolution timestamp would not.
      */
+    /**
+     * New-chapter notices, or null on a server that does not advertise them (#175).
+     *
+     * Gated on the capability the way [serverLogs] is: a client that asked anyway would get a 404
+     * it has no better answer for than "hide the surface", which is what the null already says.
+     */
+    suspend fun chapterNotifications(): ChapterNotificationsResponse? {
+        if (!_currentCapabilities.value.notifications) return null
+        return withAuthorizedApi { it.chapterNotifications() }
+    }
+
+    /**
+     * Clears one notice. False when the server refused it.
+     *
+     * The **409** is caught rather than thrown, because it is not a failure — it is the server
+     * enforcing the rule this feature exists for, and it reaches a caller that already knew not to
+     * offer the control. A 404 is the same shape of answer: somebody else's notice, or one already
+     * gone. Both mean "the list you are looking at is out of date", which a refresh says better
+     * than an error would. Everything else still propagates.
+     */
+    suspend fun dismissChapterNotification(notificationId: Int): Boolean {
+        if (!_currentCapabilities.value.notifications) return false
+        return try {
+            withAuthorizedApi { it.dismissChapterNotification(notificationId) }
+            true
+        } catch (e: HttpException) {
+            if (e.code() == 409 || e.code() == 404) false else throw e
+        }
+    }
+
+    /** Clears every notice whose chapter plays, leaving the converting ones. */
+    suspend fun dismissReadChapterNotifications(): Boolean {
+        if (!_currentCapabilities.value.notifications) return false
+        return try {
+            withAuthorizedApi { it.dismissReadChapterNotifications() }
+            true
+        } catch (e: HttpException) {
+            if (e.code() == 404) false else throw e
+        }
+    }
+
     suspend fun serverLogs(
         limit: Int = DefaultLogPageSize,
         level: String? = null,

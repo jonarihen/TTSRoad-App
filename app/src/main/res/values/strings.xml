@@ -3,5 +3,8 @@
     <string name="now_playing_widget_description">What you are listening to, with pause and 30-second skips</string>
     <string name="download_channel_name">Chapter downloads</string>
     <string name="download_channel_description">Progress while chapters are saved for offline listening</string>
+    <!-- Its own channel so "a chapter is ready" can be silenced without silencing playback. -->
+    <string name="new_chapter_channel_name">New chapters</string>
+    <string name="new_chapter_channel_description">When a serial you follow gains a chapter you can listen to</string>
 </resources>
 
