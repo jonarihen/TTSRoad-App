@@ -2,6 +2,36 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.15.0 — 2026-09-04
+
+### Added
+
+- **A followed serial now says when it gains a chapter, and keeps saying so until you can play
+  it.** Following decided only whose shelf a fiction appeared on. It now also raises a notice the
+  moment a chapter is *pulled*, and that notice stays open until the chapter is actually
+  listenable — the promise and the keeping of it are one row rather than two notifications. Being
+  told twice about one chapter is how a channel gets muted, and on a phone the second one also
+  buries whatever else was in the shade.
+
+  A converting chapter offers no Dismiss, because the server refuses one and that notice is the
+  only record that the chapter is on its way. Whether a notice can be dismissed or played is read
+  off the wire rather than worked out from the state name; a client deciding for itself would be a
+  fourth opinion about something the server enforces, and a state it does not recognise is treated
+  as still converting, never as ready — guessing the latter would offer Play for audio that may not
+  exist.
+
+  The system notification fires only on the pulled-to-ready transition, and never on the first look
+  of a session: a chapter that was already ready when the app started is not news, and announcing
+  it would re-announce the whole backlog on every cold start. It posts to its own channel, so "a
+  chapter is ready" can be silenced without silencing the media session.
+
+  The poller runs from the scaffold rather than the screen, because the count and the notification
+  have to work whether or not the list has ever been opened, and it is gated on the session as well
+  as the `notifications` capability — discovery is unauthenticated, so a capable server advertises
+  the feature while the login form is still on screen. Nothing here needs a push credential: every
+  notification is a rendering of state the app already polled.
+  ([#175](https://github.com/jonarihen/TTSRoad-App/issues/175))
+
 ## 0.14.1 — 2026-09-02
 
 ### Fixed
