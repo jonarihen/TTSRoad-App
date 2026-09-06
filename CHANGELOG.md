@@ -26,6 +26,15 @@ Notable changes to the TTSRoad Android client.
   change, a seek, or *Back to current* — there is no layout to measure yet, so it is brought to the
   anchor first and refined to the line once it reports one.
 
+- **Source badges say "Archive of Our Own", not "ao3".** The badge name came from a `when` block in
+  this app, which could only ever name the sources that existed when the build shipped — two of the
+  server's seven. The other four rendered as raw keys: `ao3`, `fanfictionnet`, `webnovel`,
+  `xenforo`. The server now resolves the name from the adapter itself and sends it as
+  `source_label`, so adding a site names it in every client at once, and that is what the badge
+  shows whenever it is there. The local mapping stays as the fallback for an older server, and
+  Royal Road is still hidden — that is a decision about the default source, so it keys off
+  `source_type` rather than off whatever the server calls it. (TTSRoad-App#178)
+
 ### Changed
 
 - **The reader stops driving a frame callback while playback is paused.** The highlight is a pure

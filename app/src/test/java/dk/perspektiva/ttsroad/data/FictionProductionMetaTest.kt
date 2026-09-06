@@ -73,14 +73,63 @@ class FictionProductionMetaTest {
     fun `royal road is not worth labelling but the others are`() {
         assertNull(FictionSummary(id = 1, sourceType = SourceType.RoyalRoad).sourceTypeLabel)
         assertNull(FictionSummary(id = 1, sourceType = "").sourceTypeLabel)
-        assertEquals("EPUB import", FictionSummary(id = 1, sourceType = SourceType.Epub).sourceTypeLabel)
+        // Without a server label these are all this build knows how to name. The EPUB wording
+        // matches the server's, so the badge does not change under a reader on an upgrade.
+        assertEquals("EPUB", FictionSummary(id = 1, sourceType = SourceType.Epub).sourceTypeLabel)
         assertEquals("Patreon", FictionSummary(id = 1, sourceType = SourceType.Patreon).sourceTypeLabel)
+    }
+
+    @Test
+    fun `the server's label is what a reader sees`() {
+        // The point of the field: the backend resolves the name from the adapter, so a site it
+        // gained after this build shipped is still named properly rather than shown as its key.
+        assertEquals(
+            "Archive of Our Own",
+            FictionSummary(id = 1, sourceType = "ao3", sourceLabel = "Archive of Our Own")
+                .sourceTypeLabel,
+        )
+        assertEquals(
+            "XenForo forums",
+            FictionSummary(id = 1, sourceType = "xenforo", sourceLabel = "XenForo forums")
+                .sourceTypeLabel,
+        )
+        // It also wins over a name this build does have, so one server decides the wording.
+        assertEquals(
+            "EPUB",
+            FictionSummary(id = 1, sourceType = SourceType.Epub, sourceLabel = "EPUB")
+                .sourceTypeLabel,
+        )
+    }
+
+    @Test
+    fun `royal road stays hidden however the server labels it`() {
+        // The hide is a product decision about the default source, so it keys off the type. The
+        // server does send a label here — "Royal Road" — and honouring it would put a word on
+        // every row that distinguishes nothing.
+        assertNull(
+            FictionSummary(id = 1, sourceType = SourceType.RoyalRoad, sourceLabel = "Royal Road")
+                .sourceTypeLabel,
+        )
     }
 
     @Test
     fun `an adapter this build has never heard of is shown rather than hidden`() {
         // New sources land server-side on their own schedule; a raw key beats saying nothing.
         assertEquals("wanderinginn", FictionSummary(id = 1, sourceType = "wanderinginn").sourceTypeLabel)
+    }
+
+    @Test
+    fun `a blank label falls back rather than rendering an empty badge`() {
+        // `source_label` is a non-optional string server-side with "" as its default, so an
+        // incompletely built payload arrives as blank rather than absent.
+        assertEquals(
+            "Patreon",
+            FictionSummary(id = 1, sourceType = SourceType.Patreon, sourceLabel = "").sourceTypeLabel,
+        )
+        assertEquals(
+            "webnovel",
+            FictionSummary(id = 1, sourceType = "webnovel", sourceLabel = "   ").sourceTypeLabel,
+        )
     }
 
     @Test

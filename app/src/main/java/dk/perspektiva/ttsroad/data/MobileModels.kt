@@ -244,6 +244,14 @@ data class FictionSummary(
      * account is not entitled to read.
      */
     @param:Json(name = "source_type") val sourceType: String? = null,
+    /**
+     * What to call [sourceType] in front of a reader — "Archive of Our Own", "XenForo forums".
+     *
+     * Resolved from the adapter server-side (TTSRoad#212, #218) precisely so a client badge cannot
+     * drift from the site list. Null on a server too old to send one; never a substitute for
+     * [sourceType], which is what code branches on.
+     */
+    @param:Json(name = "source_label") val sourceLabel: String? = null,
     /** When the server last checked the source for new chapters. ISO-8601, or null if never. */
     @param:Json(name = "last_polled_at") val lastPolledAt: String? = null,
     /**
@@ -278,15 +286,28 @@ data class FictionSummary(
      * How this fiction's chapters are obtained, in words, or null when it is not worth saying.
      *
      * Royal Road is the overwhelming default and returns null: labelling the ordinary case adds a
-     * word to every row and distinguishes nothing. An unknown key is passed through rather than
-     * hidden — a newer server's adapter is still more informative than silence.
+     * word to every row and distinguishes nothing. That decision keys off [sourceType], not off the
+     * label, so it holds whatever the server chooses to call the site.
+     *
+     * Everything else is the server's [sourceLabel] whenever there is one. The backend resolves it
+     * from the adapter itself, so adding a site names it in every client at once — and the local
+     * `when` below could only ever name the sources that existed when this build shipped. It named
+     * two of seven: a book from AO3 read "ao3" here and "Archive of Our Own" on the web.
+     *
+     * The `when` stays as the fallback for a server too old to send a label, and its EPUB wording
+     * matches the server's so the badge does not change under a reader when their server upgrades.
+     * An unknown key is still passed through rather than hidden — a newer server's adapter key is
+     * more informative than silence.
      */
     val sourceTypeLabel: String?
-        get() = when (sourceType) {
-            null, "", SourceType.RoyalRoad -> null
-            SourceType.Epub -> "EPUB import"
-            SourceType.Patreon -> "Patreon"
-            else -> sourceType
+        get() {
+            if (sourceType.isNullOrEmpty() || sourceType == SourceType.RoyalRoad) return null
+            sourceLabel?.takeIf { it.isNotBlank() }?.let { return it }
+            return when (sourceType) {
+                SourceType.Epub -> "EPUB"
+                SourceType.Patreon -> "Patreon"
+                else -> sourceType
+            }
         }
 
     /**
