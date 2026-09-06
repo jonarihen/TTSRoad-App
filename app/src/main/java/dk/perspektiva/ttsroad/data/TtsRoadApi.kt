@@ -215,6 +215,16 @@ interface TtsRoadApi {
     suspend fun unfollowFiction(@Path("fiction_id") fictionId: Int): FollowResponse
 
     /**
+     * Empty the caller's shelf in one call, answering how many follows went.
+     *
+     * Under `/library/` because it names no fiction. Gate it on the `bulk_unfollow` capability
+     * rather than on `follows`: a server can have follow and unfollow without this route, and that
+     * is precisely the server the flag exists to describe.
+     */
+    @DELETE("api/mobile/library/follows")
+    suspend fun unfollowAllFictions(): UnfollowAllResponse
+
+    /**
      * Account preferences. Note the path: these are `/api/me/...`, not `/api/mobile/...` — the same
      * rows the web console reads, which is the point of syncing them. The global auth middleware
      * resolves a bearer token before falling back to the session cookie, so the mobile token

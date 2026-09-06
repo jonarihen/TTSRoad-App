@@ -105,6 +105,21 @@ class CapabilityCatalogTest {
     }
 
     /**
+     * `_CAPABILITY_ROUTE_REQUIREMENTS` in the backend's `app/routers/platform.py`, copied rather
+     * than fetched because a unit test has no server. It will go stale, and that is the intended
+     * failure: a flag added there and not here is exactly what the two tests below catch.
+     */
+    private val advertisedByServer = listOf(
+        "account_security", "audio_content_hash", "audiobook_export", "batch_progress",
+        "bookmarks", "bulk_unfollow", "chapter_maintenance", "delta_sync", "device_management",
+        "epub_upload", "feed_urls", "fiction_maintenance", "fiction_management", "follows",
+        "listening_state_backup", "listening_stats", "live_events", "logs", "notifications",
+        "offline_downloads", "player_preferences", "pronunciation_reports", "queue",
+        "readalong", "search", "signed_audio_urls", "storage", "voice_catalogue",
+        "voice_preview",
+    )
+
+    /**
      * Every flag the backend advertises has a human label.
      *
      * This is the regression the panel exists to prevent, and it had already happened twice:
@@ -119,19 +134,24 @@ class CapabilityCatalogTest {
      */
     @Test
     fun `every capability the server advertises is named in words`() {
-        val advertisedByServer = listOf(
-            "account_security", "audio_content_hash", "audiobook_export", "batch_progress",
-            "bookmarks", "chapter_maintenance", "delta_sync", "device_management", "epub_upload",
-            "feed_urls", "fiction_maintenance", "fiction_management", "follows",
-            "listening_state_backup", "listening_stats", "live_events", "logs",
-            "offline_downloads", "player_preferences", "pronunciation_reports", "queue",
-            "readalong", "search", "signed_audio_urls", "storage", "voice_catalogue",
-            "voice_preview",
-        )
-
         val unnamed = advertisedByServer.filter { CapabilityCatalog.label(it) == it }
 
         assertEquals(emptyList<String>(), unnamed)
+    }
+
+    /**
+     * And every one of them is *ordered*, not just labelled.
+     *
+     * A label alone is not enough: [CapabilityCatalog.rows] sorts by [CapabilityCatalog.Order] and
+     * an unlisted key falls into the unknown tail at the bottom, under its raw name. `notifications`
+     * had been live on the server and parsed by [ServerCapabilities] for a release while sitting in
+     * that tail, because the assertion above only ever asked about labels.
+     */
+    @Test
+    fun `every capability the server advertises has a place in the panel`() {
+        val missing = advertisedByServer.filterNot { it in CapabilityCatalog.Order }
+
+        assertEquals(emptyList<String>(), missing)
     }
 
     /**

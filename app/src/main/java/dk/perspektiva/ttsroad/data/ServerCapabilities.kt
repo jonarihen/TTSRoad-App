@@ -69,6 +69,16 @@ data class ServerCapabilities(
     val follows: Boolean = false,
 
     /**
+     * `DELETE /api/mobile/library/follows` — empty the shelf in one call.
+     *
+     * Its own flag rather than folded into [follows], because a server can have follow and unfollow
+     * without this route. It matters most on a phone: per-user libraries arrived by giving every
+     * existing account a follow of every existing fiction, and every one of those follows raises
+     * new-chapter notices for serials nobody picked.
+     */
+    val bulkUnfollow: Boolean = false,
+
+    /**
      * The shared player/reader preference vocabulary on `/api/me/preferences`.
      *
      * The server gates this on its *schema* route rather than on the preferences endpoint, because
@@ -262,6 +272,7 @@ data class ServerCapabilities(
                 deviceManagement = flags.flag("device_management"),
                 queue = flags.flag("queue"),
                 follows = flags.flag("follows"),
+                bulkUnfollow = flags.flag("bulk_unfollow"),
                 playerPreferences = flags.flag("player_preferences"),
                 fictionManagement = flags.flag("fiction_management"),
                 audiobookExport = flags.flag("audiobook_export"),

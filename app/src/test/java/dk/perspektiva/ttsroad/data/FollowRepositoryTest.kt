@@ -50,16 +50,19 @@ class FollowRepositoryTest {
         server.shutdown()
     }
 
-    private fun capabilities(follows: Boolean) = """
+    private fun capabilities(follows: Boolean, bulkUnfollow: Boolean = false) = """
     {
       "api_version": 1,
       "server": {"name": "TTSRoad", "version": "1.5.0"},
-      "capabilities": {"follows": $follows},
+      "capabilities": {"follows": $follows, "bulk_unfollow": $bulkUnfollow},
       "limits": {}
     }
     """
 
-    private suspend fun repository(follows: Boolean): TtsRoadRepository {
+    private suspend fun repository(
+        follows: Boolean,
+        bulkUnfollow: Boolean = false,
+    ): TtsRoadRepository {
         val store = FakeFollowSessionStore()
         store.saveLogin(
             server.url("/").toString(),
@@ -68,7 +71,7 @@ class FollowRepositoryTest {
         val repository = TtsRoadRepository(store)
         server.enqueue(
             MockResponse()
-                .setBody(capabilities(follows))
+                .setBody(capabilities(follows, bulkUnfollow))
                 .setHeader("Content-Type", "application/json"),
         )
         repository.refreshCurrentCapabilities()
@@ -124,6 +127,58 @@ class FollowRepositoryTest {
         assertEquals(LibraryScopeFollowed, response.scope)
         // Absent `following` defaults to true: on such a server every fiction is on the one list.
         assertTrue(response.fictions.first().following)
+    }
+
+    @Test
+    fun `emptying the shelf deletes the library follows and reports the count`() = runTest {
+        val repository = repository(follows = true, bulkUnfollow = true)
+        server.enqueue(json("""{"status": "ok", "removed": 137, "following_ids": []}"""))
+
+        assertEquals(137, repository.unfollowAllFictions())
+
+        server.takeRequest()
+        val request = server.takeRequest()
+        assertEquals("DELETE", request.method)
+        // Under `/library/` because it names no fiction.
+        assertEquals("/api/mobile/library/follows", request.path)
+    }
+
+    @Test
+    fun `an empty shelf is a zero rather than an error`() = runTest {
+        val repository = repository(follows = true, bulkUnfollow = true)
+        server.enqueue(json("""{"status": "ok", "removed": 0, "following_ids": []}"""))
+
+        assertEquals(0, repository.unfollowAllFictions())
+    }
+
+    @Test
+    fun `a server without the route is not asked`() = runTest {
+        // Gated on `bulk_unfollow`, not on `follows`: this server has follow and unfollow and no
+        // way to empty a shelf, which is the whole reason the flag is separate. Null rather than
+        // zero, so the caller can say "this server cannot" instead of "there was nothing there".
+        val repository = repository(follows = true, bulkUnfollow = false)
+
+        assertNull(repository.unfollowAllFictions())
+
+        // Only the capabilities probe. A request here would be a 404 the user never asked for.
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a failure is raised rather than reported as nothing removed`() = runTest {
+        // The user confirmed a destructive action against a stated number. Answering 0 for a call
+        // that never landed would read as "there was nothing to remove", which is the opposite of
+        // what went wrong.
+        val repository = repository(follows = true, bulkUnfollow = true)
+        server.enqueue(MockResponse().setResponseCode(500))
+
+        var raised = false
+        try {
+            repository.unfollowAllFictions()
+        } catch (e: Exception) {
+            raised = true
+        }
+        assertTrue(raised)
     }
 
     @Test
