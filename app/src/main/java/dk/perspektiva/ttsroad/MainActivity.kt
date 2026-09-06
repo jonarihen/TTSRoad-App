@@ -50,6 +50,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.rememberScrollState
@@ -252,6 +253,7 @@ import dk.perspektiva.ttsroad.data.formatReaderLineHeight
 import dk.perspektiva.ttsroad.data.formatSkipInterval
 import dk.perspektiva.ttsroad.data.readAlongAvailability
 import dk.perspektiva.ttsroad.data.readerAutoScrollOffsetPx
+import dk.perspektiva.ttsroad.data.readerFollowScrollDelta
 import dk.perspektiva.ttsroad.data.shouldKeepReaderScreenOn
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
@@ -324,6 +326,7 @@ import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
 import dk.perspektiva.ttsroad.ui.ReaderPalette
 import dk.perspektiva.ttsroad.ui.readerPalette
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
@@ -8567,10 +8570,22 @@ private fun ReaderScreen(
     // highlight advanced by a clock would drift further out of step for the whole chapter. Only the
     // cue actually changing writes to state, so this is a handful of recompositions a second rather
     // than one per frame.
-    LaunchedEffect(document, isPlayingThisChapter) {
+    //
+    // Paused, there is no position left to re-read, so the loop is dropped rather than left
+    // spinning a frame callback over a number that cannot change; the highlight is placed once from
+    // whatever the player last reported. [pausedPositionMs] is what re-runs that single placement
+    // after a seek made while paused, and is pinned to zero while playing so the controller's
+    // once-a-second tick cannot restart the loop out from under the highlight.
+    val pausedPositionMs = if (playerState.isPlaying) 0L else playerState.positionMs
+    LaunchedEffect(document, isPlayingThisChapter, playerState.isPlaying, pausedPositionMs) {
         val loaded = document
         if (loaded == null || !isPlayingThisChapter || !loaded.hasTimings) {
             highlight = ReadAlongHighlight.None
+            return@LaunchedEffect
+        }
+        if (!playerState.isPlaying) {
+            playbackController.reportedPositionMs()
+                ?.let { highlight = loaded.highlightAtMillis(it) }
             return@LaunchedEffect
         }
         while (true) {
@@ -8589,6 +8604,30 @@ private fun ReaderScreen(
         if (loaded == null || word == null) -1 else loaded.paragraphIndexAt(word.start)
     }
 
+    // The laid-out text of the paragraph being spoken, published upwards by [ReaderParagraph].
+    //
+    // Auto-scroll needs the *line* the highlight is on, and only Compose's text layout knows where
+    // that is: a paragraph is a single lazy-list item however many lines it wraps to, so the list
+    // alone can place the paragraph and nothing finer. Exactly one paragraph is active at a time,
+    // so this is one result rather than a map that would have to be pruned as the reader moves.
+    var activeLayout by remember(screen.chapterId) {
+        mutableStateOf<Pair<Int, TextLayoutResult>?>(null)
+    }
+
+    // Which line inside that paragraph is being spoken, or -1 when it cannot be known yet — nothing
+    // highlighted, or the paragraph has not reported a layout since it became the active one.
+    val activeLine = remember(highlight, activeLayout, activeParagraph, document) {
+        val loaded = document ?: return@remember -1
+        val word = highlight.word ?: return@remember -1
+        val (laidOut, layout) = activeLayout ?: return@remember -1
+        if (laidOut != activeParagraph) return@remember -1
+        val paragraph = loaded.paragraphs.getOrNull(activeParagraph) ?: return@remember -1
+        // The layout indexes the paragraph's own string, so the cue's chapter-wide offset has to be
+        // rebased onto it — and clamped, because a cue can start in the whitespace the span drops.
+        val local = (word.start - paragraph.start).coerceIn(0, paragraph.length)
+        runCatching { layout.getLineForOffset(local) }.getOrDefault(-1)
+    }
+
     // A drag hands control to the user and keeps it. Re-scrolling under a finger is the single most
     // irritating thing an auto-scrolling reader can do, so it offers to catch up instead.
     LaunchedEffect(listState) {
@@ -8600,17 +8639,41 @@ private fun ReaderScreen(
     // The chapter header occupies list index 0, so paragraph N is list item N + 1.
     fun paragraphListIndex(paragraph: Int) = paragraph + 1
 
-    suspend fun scrollToActiveParagraph() {
-        val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-        listState.animateScrollToItem(
-            paragraphListIndex(activeParagraph),
-            readerAutoScrollOffsetPx(viewport),
-        )
+    /**
+     * Put the line being spoken back near the top of the page, if it has drifted out of the band.
+     *
+     * Two cases, because only one of them can be measured. When the active paragraph is on screen
+     * its text layout says which line is being spoken and the lazy list says how far down the
+     * viewport that paragraph starts, so the correction is a scroll by the difference — and that is
+     * what keeps the highlight in view *inside* a paragraph taller than the screen. When it is off
+     * screen there is no layout to ask, because the lazy list has disposed it; the paragraph is
+     * brought to the anchor instead, and it publishes its layout on the way in so the next pass can
+     * refine to the line.
+     */
+    suspend fun scrollToActiveLine() {
+        val layoutInfo = listState.layoutInfo
+        val viewport = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+        val listIndex = paragraphListIndex(activeParagraph)
+        val item = layoutInfo.visibleItemsInfo.firstOrNull { it.index == listIndex }
+        val layout = activeLayout?.takeIf { it.first == activeParagraph }?.second
+        if (item == null || layout == null || activeLine < 0) {
+            listState.animateScrollToItem(listIndex, readerAutoScrollOffsetPx(viewport))
+            return
+        }
+        val paragraphTop = item.offset - layoutInfo.viewportStartOffset
+        val delta = readerFollowScrollDelta(
+            lineTopPx = paragraphTop + layout.getLineTop(activeLine).roundToInt(),
+            lineBottomPx = paragraphTop + layout.getLineBottom(activeLine).roundToInt(),
+            viewportHeightPx = viewport,
+        ) ?: return
+        listState.animateScrollBy(delta.toFloat())
     }
 
-    LaunchedEffect(activeParagraph, followPlayback) {
+    // Keyed on the spoken *line*, not the spoken word: inside a line there is nothing to correct,
+    // and re-deciding once per cue would start an animation over itself three times a second.
+    LaunchedEffect(activeParagraph, activeLine, followPlayback) {
         if (!followPlayback || activeParagraph < 0) return@LaunchedEffect
-        scrollToActiveParagraph()
+        scrollToActiveLine()
     }
 
     val view = LocalView.current
@@ -8668,6 +8731,8 @@ private fun ReaderScreen(
                 prefs = prefs,
                 listState = listState,
                 isPlayingThisChapter = isPlayingThisChapter,
+                activeParagraph = activeParagraph,
+                onActiveLayout = { paragraph, layout -> activeLayout = paragraph to layout },
                 onSeekToOffset = ::seekToOffset,
                 onOpenSettings = { showSettings = true },
             )
@@ -8678,7 +8743,7 @@ private fun ReaderScreen(
             TextButton(
                 onClick = {
                     followPlayback = true
-                    scope.launch { scrollToActiveParagraph() }
+                    scope.launch { scrollToActiveLine() }
                 },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -8714,6 +8779,9 @@ private fun ReaderPage(
     prefs: ReaderPrefs,
     listState: LazyListState,
     isPlayingThisChapter: Boolean,
+    /** Index of the paragraph being spoken, or -1. Only that one reports its text layout. */
+    activeParagraph: Int,
+    onActiveLayout: (paragraph: Int, layout: TextLayoutResult) -> Unit,
     onSeekToOffset: (Int) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -8771,7 +8839,7 @@ private fun ReaderPage(
         itemsIndexed(
             document.paragraphs,
             key = { index, span -> "p-$index-${span.start}" },
-        ) { _, span ->
+        ) { index, span ->
             ReaderParagraph(
                 document = document,
                 span = span,
@@ -8779,6 +8847,8 @@ private fun ReaderPage(
                 palette = palette,
                 granularity = prefs.highlight,
                 style = bodyStyle,
+                isActiveParagraph = index == activeParagraph,
+                onActiveLayout = { onActiveLayout(index, it) },
                 onSeekToOffset = onSeekToOffset,
             )
         }
@@ -8793,6 +8863,8 @@ private fun ReaderParagraph(
     palette: ReaderPalette,
     granularity: HighlightGranularity,
     style: TextStyle,
+    isActiveParagraph: Boolean,
+    onActiveLayout: (TextLayoutResult) -> Unit,
     onSeekToOffset: (Int) -> Unit,
 ) {
     // Rebuilt only when something this paragraph actually draws changes, so the other few hundred
@@ -8814,6 +8886,14 @@ private fun ReaderParagraph(
     }
 
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    // Auto-scroll follows the spoken line, and the line only exists once this paragraph has been
+    // measured. Reported from an effect rather than straight out of `onTextLayout`, because
+    // becoming the active paragraph does not always re-measure it: with the highlight turned off
+    // the drawn text is identical, so the layout that matters is the one already in hand.
+    LaunchedEffect(isActiveParagraph, layout) {
+        val measured = layout
+        if (isActiveParagraph && measured != null) onActiveLayout(measured)
+    }
     Text(
         text = annotated,
         style = style,

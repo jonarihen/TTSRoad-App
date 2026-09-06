@@ -2,6 +2,37 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- **The reader no longer lets the spoken line walk off the bottom of the screen.** Auto-scroll
+  only ever fired when the *paragraph* changed, which is correct exactly as long as every
+  paragraph is shorter than the screen. Web fiction is full of ones that are not, and inside those
+  the highlight simply carried on down past the bottom edge and stayed gone — sometimes for many
+  seconds — until the next paragraph break yanked the page back and dropped it into the middle
+  again. Short paragraphs never showed it, which is why it looked intermittent rather than broken.
+
+  Following is now anchored to the line being spoken rather than the paragraph containing it. The
+  reader takes the paragraph's own text layout, works out which visual line the current word is
+  on, and combines that with where the lazy list has placed the paragraph to get the line's actual
+  position in the viewport. A line that has drifted out of a comfortable band is pulled back to the
+  upper third; one still inside it is left alone, so the page does not twitch under a sentence
+  somebody is halfway through reading. In practice that is a scroll every several lines instead of
+  one jump per paragraph, and the highlight never leaves the top half of the screen.
+
+  The correction is keyed to the line, not the word, so it runs a handful of times per paragraph
+  rather than three times a second. When the active paragraph is off screen entirely — a chapter
+  change, a seek, or *Back to current* — there is no layout to measure yet, so it is brought to the
+  anchor first and refined to the line once it reports one.
+
+### Changed
+
+- **The reader stops driving a frame callback while playback is paused.** The highlight is a pure
+  function of the position the player reports, and a paused player reports the same number every
+  frame. It is now placed once and the loop dropped until playback resumes, with a seek made while
+  paused still moving it.
+
 ## 0.15.0 — 2026-09-04
 
 ### Added
