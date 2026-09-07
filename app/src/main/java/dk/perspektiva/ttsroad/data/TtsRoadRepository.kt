@@ -1245,6 +1245,29 @@ class TtsRoadRepository(
     }
 
     /**
+     * Which seconds of [chapterId] are an advert rather than the book.
+     *
+     * Answers [ChapterSkips.none] rather than throwing on anything short of a signed-out session:
+     * the failure mode of this feature is hearing a Patreon plug, and taking a chapter's playback
+     * down to avoid that would be a far worse trade. A server without the capability is not asked
+     * at all.
+     *
+     * Not cached here. The list is a few hundred bytes, it is asked once per chapter as that
+     * chapter loads, and it changes when an admin writes a rule rather than when the chapter does —
+     * so a cache would mostly be a way of skipping the wrong seconds for a while.
+     */
+    suspend fun chapterSkips(chapterId: Int): ChapterSkips {
+        if (!_currentCapabilities.value.playbackSkips) return ChapterSkips.none(chapterId)
+        return try {
+            ChapterSkips.from(withAuthorizedApi { it.chapterSkips(chapterId) }, chapterId)
+        } catch (e: HttpException) {
+            if (e.code() == 401) throw e else ChapterSkips.none(chapterId)
+        } catch (e: IOException) {
+            ChapterSkips.none(chapterId)
+        }
+    }
+
+    /**
      * The account's stored preference blob, or null when this server cannot hold one.
      *
      * Gated on the discovered `player_preferences` capability rather than on a 404: an older server

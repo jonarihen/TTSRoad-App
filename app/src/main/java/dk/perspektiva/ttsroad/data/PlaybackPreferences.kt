@@ -49,6 +49,14 @@ data class PlaybackPrefs(
      * to leave undecided until a sync lands.
      */
     val autoMarkPlayed: Boolean = DefaultAutoMarkPlayed,
+    /**
+     * Whether to jump over the advert and disclaimer segments the server marks.
+     *
+     * Follows the account, like [autoMarkPlayed]. Kept locally for the same reason: the media
+     * service reads it while deciding whether to seek, which happens with the phone locked and
+     * often with no network, and "wait for a sync" is not an answer available at that moment.
+     */
+    val skipAdSegments: Boolean = DefaultSkipAdSegments,
 )
 
 /**
@@ -159,6 +167,7 @@ class PlaybackPreferences(private val context: Context) {
         val VolumeBoost = stringPreferencesKey("volume_boost")
         val SleepTimerDefaultMinutes = intPreferencesKey("sleep_timer_default_minutes")
         val AutoMarkPlayed = booleanPreferencesKey("auto_mark_played")
+        val SkipAdSegments = booleanPreferencesKey("skip_ad_segments")
     }
 
     val prefs: Flow<PlaybackPrefs> = context.playbackDataStore.data
@@ -177,6 +186,7 @@ class PlaybackPreferences(private val context: Context) {
                     stored[Keys.SleepTimerDefaultMinutes] ?: DefaultSleepTimerMinutes,
                 ),
                 autoMarkPlayed = stored[Keys.AutoMarkPlayed] ?: DefaultAutoMarkPlayed,
+                skipAdSegments = stored[Keys.SkipAdSegments] ?: DefaultSkipAdSegments,
             )
         }
 
@@ -208,5 +218,9 @@ class PlaybackPreferences(private val context: Context) {
 
     suspend fun setAutoMarkPlayed(enabled: Boolean) {
         context.playbackDataStore.edit { it[Keys.AutoMarkPlayed] = enabled }
+    }
+
+    suspend fun setSkipAdSegments(enabled: Boolean) {
+        context.playbackDataStore.edit { it[Keys.SkipAdSegments] = enabled }
     }
 }

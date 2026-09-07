@@ -34,6 +34,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
+import dk.perspektiva.ttsroad.data.ChapterSkips
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
@@ -102,6 +103,14 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     /** The book currently playing, or null. Drives the per-fiction speed; see [effectiveSpeed]. */
     private val currentFictionId = MutableStateFlow<Int?>(null)
+
+    /**
+     * The advert and disclaimer segments of the chapter currently loaded, if any.
+     *
+     * Null until the answer for this chapter has arrived, which is not the same as an empty list:
+     * empty means "asked, nothing to skip". The watcher below only runs while this holds segments.
+     */
+    private val currentSkips = MutableStateFlow<ChapterSkips?>(null)
     private lateinit var pendingProgress: PendingProgressStore
     private lateinit var progressSync: ProgressSync
     private var shakeDetector: ShakeDetector? = null
@@ -224,6 +233,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     currentFictionId.value = mediaItem?.mediaMetadata?.extras
                         ?.getInt("fiction_id")
                         ?.takeIf { it > 0 }
+                    loadSkipsFor(mediaItem)
                     // A chapter title and cover should change as soon as auto-advance does. When a
                     // queue is cleared, publishNowPlaying preserves the last item and marks it
                     // stopped, which is the widget's "last heard" state.
@@ -253,6 +263,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         )
         startProgressTicker()
         startSleepTimer()
+        startAdvertSkipping()
         session = MediaLibrarySession.Builder(this, player, BrowserCallback(this))
             .setSessionActivity(playerActivityIntent())
             .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
@@ -488,6 +499,87 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .map { it.isFading }
                 .distinctUntilChanged()
                 .collect { fading -> if (fading) shakeDetector?.start() else shakeDetector?.stop() }
+        }
+    }
+
+    /**
+     * Jump over the adverts and disclaimers the server marked in this chapter (TTSRoad #playback).
+     *
+     * Shaped like the sleep timer above and for the same reason: it only runs while there is
+     * something for it to do. A chapter with no skips — every chapter on a server where nobody has
+     * written a rule — collects nothing and wakes nothing.
+     *
+     * The wait is computed from the distance to the next advert rather than fixed, because the
+     * alternative is a half-second poll for the length of every chapter: a wake twice a second all
+     * night, for something that fires twice a chapter. [ChapterSkips.MaxWaitMs] caps it, so a seek
+     * or a speed change made from the car re-reads the clock within twenty seconds whatever this
+     * loop last computed.
+     */
+    private fun startAdvertSkipping() {
+        serviceScope.launch {
+            combine(
+                currentSkips,
+                preferences.prefs.map { it.skipAdSegments }.distinctUntilChanged(),
+            ) { skips, enabled -> skips?.takeIf { enabled && !it.isEmpty } }
+                .distinctUntilChanged()
+                .collectLatest { skips ->
+                    if (skips == null) return@collectLatest
+                    while (isActive) {
+                        if (player.isPlaying) applyAdvertSkip(skips)
+                        delay(
+                            skips.waitMs(
+                                positionMs = player.currentPosition.coerceAtLeast(0L),
+                                speed = player.playbackParameters.speed,
+                            ),
+                        )
+                    }
+                }
+        }
+    }
+
+    /**
+     * Seek past the advert playback is inside, if it is inside one.
+     *
+     * The duration is taken from the player rather than from the payload wherever it knows one:
+     * the segments were timed against the file the server holds, and this is the file that is
+     * actually playing.
+     */
+    private fun applyAdvertSkip(skips: ChapterSkips) {
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val playerDuration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }
+        val current = if (playerDuration != null) skips.copy(durationMs = playerDuration) else skips
+        val target = current.targetFor(position) ?: return
+        if (!current.endsChapter(target)) {
+            player.seekTo(target)
+            return
+        }
+        // A trailing plug. Ending the chapter is what a listener wants — the next one starts
+        // instead — and the progress write has to happen before the seek, because afterwards the
+        // "current" item is the next chapter and this one would never be marked finished.
+        serviceScope.launch { saveCurrentProgress(forcePlayed = true) }
+        if (player.hasNextMediaItem()) player.seekToNextMediaItem() else player.seekTo(target)
+    }
+
+    /**
+     * Ask the server which seconds of [mediaItem]'s chapter to skip.
+     *
+     * Cleared first, so the watcher cannot spend even one tick applying the previous chapter's
+     * segments to this one — the numbers would be meaningless and the seek would land in the middle
+     * of somebody's prose.
+     */
+    private fun loadSkipsFor(mediaItem: MediaItem?) {
+        currentSkips.value = null
+        val chapterId = mediaItem?.mediaMetadata?.extras?.getInt("chapter_id")?.takeIf { it > 0 }
+            ?: return
+        serviceScope.launch {
+            val skips = runCatching { repository.chapterSkips(chapterId) }
+                .getOrElse { ChapterSkips.none(chapterId) }
+            // The chapter may have moved on while that was in flight — an auto-advance, or a listener
+            // pressing next twice.
+            val loaded = player.currentMediaItem?.mediaMetadata?.extras
+                ?.getInt("chapter_id")
+                ?.takeIf { it > 0 }
+            if (loaded == chapterId) currentSkips.value = skips
         }
     }
 

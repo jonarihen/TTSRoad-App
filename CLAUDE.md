@@ -160,6 +160,25 @@ straight through. `onPlaybackResumption` starts the newest "continue listening" 
 on pause, and at `STATE_ENDED`. `is_played` is set when past 96% or within the last 20s. The UI
 never posts progress itself.
 
+**Skipping adverts** (`data/ChapterSkips.kt`, capability `playback_skips`). The server says which
+*seconds* of a chapter are a Patreon plug or a fan-work disclaimer rather than the book — it matches
+a rule against the narrated text and times it through the read-along cues, so the MP3 is untouched
+and nothing is re-downloaded. Three things are load-bearing:
+
+- **All the deciding is in `ChapterSkips`**, which is pure and unit-tested; the service only wires
+  it to a player. Where to seek and when to look again is arithmetic that costs a listener prose
+  when it is wrong, and none of it needs an `ExoPlayer` to be checked.
+- **The watcher sleeps until the next advert**, it does not poll. A fixed half-second check would be
+  a wake twice a second all night for something that fires twice a chapter. `MaxWaitMs` caps the
+  sleep so a seek or a speed change made from the car is still noticed.
+- **A skip that reaches the end of the chapter ends the chapter**, and `saveCurrentProgress` runs
+  *before* that seek — afterwards the "current" item is the next chapter, and this one would never
+  be marked finished.
+
+`skip_ad_segments` is an ordinary synced account key (default on). A server without the capability
+is never asked, and any failure answers "nothing to skip": the worst case of this feature is
+hearing an advert, and taking playback down to avoid that would be a far worse trade.
+
 **Jump back** (`player/PlaybackHistoryStore`): the same `saveCurrentProgress` call records a
 wall-clock → chapter+position snapshot, capped at 2000 entries (~8h) and persisted to
 `filesDir/playback_history.json`. The player's jump-back sheet either seeks inside the loaded queue

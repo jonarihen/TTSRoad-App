@@ -108,6 +108,19 @@ interface TtsRoadApi {
         @Header("If-None-Match") ifNoneMatch: String? = null,
     ): Response<ReadAlongResponse>
 
+    /**
+     * Advert and disclaimer segments for one chapter (capability `playback_skips`).
+     *
+     * Asked per chapter as it loads rather than carried on the chapter row: the server computes it
+     * from the narration text and the timing document, and a library listing asks for hundreds of
+     * chapters at once. A chapter with nothing to skip is a `200` with an empty list, which on a
+     * server where nobody has written a rule is every answer this route will ever give.
+     */
+    @GET("api/mobile/chapters/{chapter_id}/skips")
+    suspend fun chapterSkips(
+        @Path("chapter_id") chapterId: Int,
+    ): ChapterSkipsResponse
+
     @POST("api/mobile/playback/progress")
     suspend fun saveProgress(@Body request: PlaybackProgressRequest): PlaybackProgressResponse
 

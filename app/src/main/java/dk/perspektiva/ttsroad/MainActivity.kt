@@ -3935,6 +3935,35 @@ private fun SettingsScreen(
                     )
                 }
 
+                if (capabilities.playbackSkips) {
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            MetaText(text = "Skip adverts and disclaimers")
+                            Spacer(modifier = Modifier.height(2.dp))
+                            MetaText(
+                                text = "Jumps over the stretches the server marks — a Patreon " +
+                                    "plug at the end of a chapter, a \"this is a fan work\" note " +
+                                    "at the start of one. The audio is never altered, so turning " +
+                                    "this off plays the chapter exactly as narrated. " +
+                                    PreferenceScope.account(capabilities.playerPreferences),
+                                color = AarisColor.Dim,
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = prefs.skipAdSegments,
+                            onCheckedChange = {
+                                scope.launch { accountPreferenceSync.setSkipAdSegments(it) }
+                            },
+                        )
+                    }
+                }
+
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
                 Row(

@@ -25,6 +25,7 @@ class AccountPreferenceSync(
         return SyncedPreferences(
             chapterFilter = chapterListPreferences.current(),
             autoMarkPlayed = playback.autoMarkPlayed,
+            skipAdSegments = playback.skipAdSegments,
             sleepTimerDefaultMinutes = playback.sleepTimerDefaultMinutes,
             readerFontScale = reader.fontScale,
             readerLineHeight = reader.lineHeight,
@@ -52,6 +53,9 @@ class AccountPreferenceSync(
         }
         if (reconciled.autoMarkPlayed != local.autoMarkPlayed) {
             playbackPreferences.setAutoMarkPlayed(reconciled.autoMarkPlayed)
+        }
+        if (reconciled.skipAdSegments != local.skipAdSegments) {
+            playbackPreferences.setSkipAdSegments(reconciled.skipAdSegments)
         }
         if (reconciled.sleepTimerDefaultMinutes != local.sleepTimerDefaultMinutes) {
             playbackPreferences.setSleepTimerDefaultMinutes(reconciled.sleepTimerDefaultMinutes)
@@ -83,6 +87,11 @@ class AccountPreferenceSync(
     suspend fun setAutoMarkPlayed(enabled: Boolean) {
         playbackPreferences.setAutoMarkPlayed(enabled)
         repository.updateAccountPreferences(autoMarkPlayedPatch(enabled))
+    }
+
+    suspend fun setSkipAdSegments(enabled: Boolean) {
+        playbackPreferences.setSkipAdSegments(enabled)
+        repository.updateAccountPreferences(skipAdSegmentsPatch(enabled))
     }
 
     suspend fun setSleepTimerDefaultMinutes(minutes: Int) {
