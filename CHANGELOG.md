@@ -2,6 +2,34 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- **Adverts and disclaimers are skipped in audio that was already narrated.** Serials carry things
+  nobody subscribed for — a Patreon plug welded onto the end of every chapter, an "I don't own
+  Marvel, this is a fan work" paragraph welded onto the front of one. The server can now say which
+  *seconds* of a chapter those are (capability `playback_skips`, `GET /api/mobile/chapters/{id}/skips`,
+  TTSRoad server 1.5.0), because it matches the rule against the text the chapter was narrated from
+  and times it through the read-along cues. The MP3 on the phone is still the right file: nothing
+  is re-narrated, and a chapter already downloaded does not have to be fetched again.
+
+  The service asks for the list as each chapter loads and seeks past the segments while playing.
+  A plug that runs to the end of the chapter ends the chapter instead — the next one starts, which
+  is what a listener wants and what the local queue, the car and the sleep timer already know how
+  to handle — and the chapter is marked finished before the seek rather than after, or it would be
+  the *next* chapter that got marked.
+
+  It sleeps until the next advert rather than polling: a fixed half-second check would be a wake
+  twice a second all night for something that fires twice a chapter. A ceiling on that wait is what
+  keeps a seek made from the car or the notification from going unnoticed.
+
+  **Settings → Playback → Skip adverts and disclaimers** turns it off, and follows the account
+  (`skip_ad_segments`, default on) so the browser and the phone agree. Nothing was ever destroyed
+  to make this work, which is exactly why turning it off gives back the chapter as narrated. A
+  server without the capability is never asked, and a chapter with nothing to skip is the ordinary
+  answer rather than an error.
+
 ## 0.15.1 — 2026-09-06
 
 ### Fixed

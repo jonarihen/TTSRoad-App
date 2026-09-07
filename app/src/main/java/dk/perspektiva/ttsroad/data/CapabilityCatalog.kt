@@ -15,6 +15,7 @@ object CapabilityCatalog {
     /** Known flags in the order the panel shows them: what a listener notices first, first. */
     val Order: List<String> = listOf(
         "readalong",
+        "playback_skips",
         "bookmarks",
         "pronunciation_reports",
         "queue",
@@ -45,6 +46,7 @@ object CapabilityCatalog {
 
     private val labels: Map<String, String> = mapOf(
         "readalong" to "Read along",
+        "playback_skips" to "Skip adverts and disclaimers",
         "bookmarks" to "Bookmarks",
         "pronunciation_reports" to "Report a mispronunciation",
         "queue" to "Up Next queue",

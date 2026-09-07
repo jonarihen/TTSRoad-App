@@ -213,6 +213,17 @@ data class ServerCapabilities(
     val notifications: Boolean = false,
 
     /**
+     * The server can say which seconds of a chapter are an advert rather than the book (TTSRoad
+     * `playback_skips`).
+     *
+     * Its own flag because the *client* is what does the skipping: a server can hold the rules and
+     * answer the endpoint while an older app plays the plug straight through, and this is what
+     * stops this build asking a server that would only 404. Says nothing about whether any fiction
+     * has such a rule — that is a per-chapter answer, and an empty list is the ordinary one.
+     */
+    val playbackSkips: Boolean = false,
+
+    /**
      * Every flag the server advertised, exactly as sent, including ones this build has never heard
      * of.
      *
@@ -280,6 +291,7 @@ data class ServerCapabilities(
                 logs = flags.flag("logs"),
                 storage = flags.flag("storage"),
                 notifications = flags.flag("notifications"),
+                playbackSkips = flags.flag("playback_skips"),
                 // Only entries that are actually booleans. A server sending something else for a
                 // key is saying something this build cannot read, and listing it as "off" would be
                 // a guess presented as fact.

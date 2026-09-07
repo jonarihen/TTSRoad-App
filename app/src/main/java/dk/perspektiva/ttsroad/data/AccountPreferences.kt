@@ -63,6 +63,18 @@ object AccountPreferenceKeys {
     const val ReaderHighlight = "reader_highlight"
 
     /**
+     * Whether to jump over the adverts and disclaimers `/api/mobile/chapters/{id}/skips`
+     * describes.
+     *
+     * On the account rather than the device, unlike the four player keys below: it answers "do I
+     * want to hear this book's Patreon plug", which is a fact about the listener and the library
+     * and not about the speakers in the room. Defaults on — an admin writing a skip rule has
+     * already said the audio is unwanted, and a second opt-in per device would mostly read as the
+     * feature being broken.
+     */
+    const val SkipAdSegments = "skip_ad_segments"
+
+    /**
      * What playback does when the cross-library queue runs dry: `stop`, or keep going with the
      * oldest unplayed chapter in the library.
      *
@@ -83,6 +95,7 @@ object AccountPreferenceKeys {
         ReaderLineHeight,
         ReaderTheme,
         ReaderHighlight,
+        SkipAdSegments,
     )
 }
 
@@ -106,6 +119,15 @@ const val DefaultSleepTimerMinutes: Int = 0
  * behaves as the account would have told it to.
  */
 const val DefaultAutoMarkPlayed: Boolean = true
+
+/**
+ * Whether adverts and disclaimers are skipped when the server marks them.
+ *
+ * True to match the server's own default for `skip_ad_segments`, so a phone that has never synced
+ * behaves as the account would have told it to. It costs nothing on a server with no skip rules:
+ * the endpoint answers an empty list and nothing is skipped.
+ */
+const val DefaultSkipAdSegments: Boolean = true
 
 /**
  * The server's `reader_font_size` range, and the size its default corresponds to.
@@ -260,6 +282,7 @@ data class SyncedPreferences(
     val readerLineHeight: Float = DefaultReaderLineHeight,
     val readerTheme: ReaderTheme = DefaultReaderTheme,
     val readerHighlight: HighlightGranularity = DefaultHighlightGranularity,
+    val skipAdSegments: Boolean = DefaultSkipAdSegments,
 )
 
 /**
@@ -282,6 +305,7 @@ fun reconcileAccountPreferences(
     val theme = readerThemeFromServer(server.preferenceString(AccountPreferenceKeys.ReaderTheme))
     val highlight =
         readerHighlightFromServer(server.preferenceString(AccountPreferenceKeys.ReaderHighlight))
+    val skipAdSegments = server.preferenceBool(AccountPreferenceKeys.SkipAdSegments)
 
     return SyncedPreferences(
         chapterFilter = if (hidePlayed == null) {
@@ -292,6 +316,7 @@ fun reconcileAccountPreferences(
         // A plain boolean with no lossy projection, so the general rule collapses to "take the
         // server's answer when it has one".
         autoMarkPlayed = autoMarkPlayed ?: local.autoMarkPlayed,
+        skipAdSegments = skipAdSegments ?: local.skipAdSegments,
         // No projection to compare against: both ends store the same multiplier over the same
         // range, so "the server has a value" is the whole condition.
         readerLineHeight = lineHeight
@@ -339,6 +364,9 @@ fun chapterFilterPatch(filter: ChapterFilter): Map<String, Any?> =
 
 fun autoMarkPlayedPatch(enabled: Boolean): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.AutoMarkPlayed to enabled)
+
+fun skipAdSegmentsPatch(enabled: Boolean): Map<String, Any?> =
+    mapOf(AccountPreferenceKeys.SkipAdSegments to enabled)
 
 fun sleepTimerDefaultPatch(minutes: Int): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.SleepTimerDefaultMinutes to sanitizeSleepTimerMinutes(minutes))

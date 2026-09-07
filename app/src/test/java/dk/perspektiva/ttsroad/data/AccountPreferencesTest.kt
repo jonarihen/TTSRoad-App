@@ -421,4 +421,23 @@ class AccountPreferencePatchTest {
     fun `line height is synced now that there is a control for it`() {
         assertTrue("reader_line_height" in AccountPreferenceKeys.Synced)
     }
+
+    @Test
+    fun `skipping adverts is synced, and defaults to on when the account says nothing`() {
+        // It sits in the server's *player* table beside the four device keys, and is not one of
+        // them: "do I want to hear this book's Patreon plug" is a fact about the listener and the
+        // library, not about the speakers in the room.
+        assertTrue("skip_ad_segments" in AccountPreferenceKeys.Synced)
+        assertEquals(mapOf("skip_ad_segments" to false), skipAdSegmentsPatch(false))
+
+        // The default matters more than usual because it is *on*: a phone that has never synced
+        // must behave as the account would have told it to, and a key the server does not hold
+        // must leave the local answer alone rather than reading as "off".
+        assertTrue(DefaultSkipAdSegments)
+        val local = SyncedPreferences(skipAdSegments = false)
+        assertFalse(reconcileAccountPreferences(emptyMap(), local).skipAdSegments)
+        assertTrue(
+            reconcileAccountPreferences(mapOf("skip_ad_segments" to true), local).skipAdSegments,
+        )
+    }
 }
