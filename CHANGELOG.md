@@ -2,6 +2,14 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- **Word-only read-along highlighting now covers the full word.** It previously changed only the
+  glyph colour and weight, which made the highlight look like it covered half or only the centre of
+  every word. Word-only mode now paints the word's complete text range while it is spoken.
+
 ## 0.15.1 — 2026-09-06
 
 ### Fixed

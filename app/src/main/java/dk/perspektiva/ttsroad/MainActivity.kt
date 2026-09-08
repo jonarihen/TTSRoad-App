@@ -8876,11 +8876,7 @@ private fun ReaderParagraph(
             append(document.textIn(span))
             sentence?.let { addStyle(SpanStyle(background = palette.band), span, it) }
             word?.let {
-                addStyle(
-                    SpanStyle(color = palette.accent, fontWeight = FontWeight.Bold),
-                    span,
-                    it,
-                )
+                addStyle(readerWordStyle(granularity, palette), span, it)
             }
         }
     }
@@ -8921,6 +8917,15 @@ private fun AnnotatedString.Builder.addStyle(
 }
 
 private fun TextSpan.overlaps(other: TextSpan): Boolean = start < other.end && other.start < end
+
+internal fun readerWordStyle(
+    granularity: HighlightGranularity,
+    palette: ReaderPalette,
+): SpanStyle = SpanStyle(
+    background = if (granularity == HighlightGranularity.WordOnly) palette.band else Color.Unspecified,
+    color = palette.accent,
+    fontWeight = FontWeight.Bold,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
