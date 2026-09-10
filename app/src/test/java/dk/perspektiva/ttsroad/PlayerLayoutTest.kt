@@ -71,6 +71,26 @@ class PlayerLayoutTest {
     }
 
     @Test
+    @Config(sdk = [34], qualifiers = "w320dp-h800dp")
+    fun `transport controls remain full size in bounds and do not overlap at 320dp`() {
+        renderPlayer()
+
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val bounds = transportControls.map {
+            compose.onNodeWithContentDescription(it).fetchSemanticsNode().boundsInRoot
+        }
+        bounds.forEach {
+            assertTrue("transport target $it must be at least 46dp", it.width >= 46f && it.height >= 46f)
+            assertTrue("transport target $it must remain inside $root", root.contains(it.topLeft) && root.contains(it.bottomRight))
+        }
+        bounds.indices.forEach { first ->
+            ((first + 1) until bounds.size).forEach { second ->
+                assertTrue("transport targets overlap: ${bounds[first]} and ${bounds[second]}", !bounds[first].overlaps(bounds[second]))
+            }
+        }
+    }
+
+    @Test
     @Config(sdk = [34], qualifiers = "w411dp-h891dp")
     fun `the chapter position survives the move to an icon`() {
         // The count was the one thing "CHAPTERS 53/246" said that a list glyph cannot, so it rides

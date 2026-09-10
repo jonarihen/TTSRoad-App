@@ -82,6 +82,7 @@ object AarisColor {
      */
     val Disabled = Color(0xFF4D545E)
 
+    val ControlOutline = Color(0xFF687075)
     val Line = Color(0xFF232830)
     val LineSoft = Color(0xFF1A1E25)
     val Accent = Color(0xFFFF5A1F)
@@ -111,7 +112,7 @@ private val AarisColorScheme = darkColorScheme(
     onSurfaceVariant = AarisColor.Muted,
     surfaceContainer = AarisColor.BgRaise,
     surfaceContainerHigh = AarisColor.BgHover,
-    outline = AarisColor.Line,
+    outline = AarisColor.ControlOutline,
     outlineVariant = AarisColor.LineSoft,
     error = AarisColor.Danger,
     onError = AarisColor.Bg,
@@ -314,6 +315,7 @@ fun <T> AarisChoiceRow(
     label: (T) -> String,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     FlowRow(
         modifier = modifier.selectableGroup(),
@@ -324,6 +326,7 @@ fun <T> AarisChoiceRow(
             val isSelected = option == selected
             OutlinedButton(
                 onClick = { onSelect(option) },
+                enabled = enabled,
                 modifier = Modifier
                     .heightIn(min = MinTouchTargetSize)
                     .semantics { this.selected = isSelected },

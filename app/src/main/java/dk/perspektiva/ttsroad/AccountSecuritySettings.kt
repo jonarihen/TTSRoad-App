@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -25,8 +27,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -61,6 +69,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
     var showDisable by remember { mutableStateOf(false) }
     var disablePassword by remember { mutableStateOf("") }
     var recoveryCodes by remember { mutableStateOf<List<String>?>(null) }
+    val authenticationCodeFocus = remember { FocusRequester() }
 
     fun rejected(message: String) {
         error = message
@@ -171,7 +180,10 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
             onDismissRequest = { if (!busy) showPassword = false },
             title = { Text("Change password") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     PasswordField("Current password", currentPassword) { currentPassword = it }
                     PasswordField("New password", newPassword) { newPassword = it }
                     PasswordField("Repeat new password", confirmPassword) { confirmPassword = it }
@@ -216,14 +228,19 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
     }
 
     setup?.let { provisional ->
+        LaunchedEffect(provisional) { authenticationCodeFocus.requestFocus() }
         AlertDialog(
             onDismissRequest = { if (!busy) setup = null },
             title = { Text("Connect an authenticator") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     MetaText(
                         text = "Open this account in your authenticator, then enter its six-digit code.",
                         color = AarisColor.Dim,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     )
                     provisional.otpauthUri?.let { uri ->
                         OutlinedButton(
@@ -243,9 +260,12 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                         value = authenticationCode,
                         onValueChange = { authenticationCode = it.filter(Char::isDigit).take(6) },
                         label = { Text("Authentication code") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.NumberPassword,
+                            imeAction = ImeAction.Done,
+                        ),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().focusRequester(authenticationCodeFocus),
                     )
                     error?.let { MetaText(text = it, color = AarisColor.Danger) }
                 }
@@ -288,7 +308,10 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
             onDismissRequest = { if (!busy) showReissueConfirmation = false },
             title = { Text("Replace recovery codes?") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Text("Every old recovery code will stop working immediately.")
                     error?.let { MetaText(text = it, color = AarisColor.Danger) }
                 }
@@ -332,7 +355,10 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
             onDismissRequest = { if (!busy) showDisable = false },
             title = { Text("Turn off two-factor authentication?") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Text("Enter your current password to remove the second factor.")
                     PasswordField("Current password", disablePassword) { disablePassword = it }
                     error?.let { MetaText(text = it, color = AarisColor.Danger) }

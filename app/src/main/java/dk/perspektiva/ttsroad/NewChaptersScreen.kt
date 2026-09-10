@@ -13,9 +13,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,7 +33,9 @@ import dk.perspektiva.ttsroad.data.presentation
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.MetaText
+import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
+import dk.perspektiva.ttsroad.ui.ThinProgress
 import kotlinx.coroutines.launch
 
 /**
@@ -54,9 +58,11 @@ internal fun NewChaptersScreen(
 ) {
     val scope = rememberCoroutineScope()
     val library by repository.currentCapabilities.collectAsStateWithLifecycle()
+    var actionError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var busyId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Int?>(null) }
 
     fun refresh() {
-        scope.launch { runCatching { repository.chapterNotifications() } }
+        state.refreshRequest += 1
     }
 
     Column(
@@ -92,38 +98,63 @@ internal fun NewChaptersScreen(
             color = AarisColor.Dim,
         )
 
-        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (state.isLoading) {
+            ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+        }
 
-        val rows = state.rows
-        if (rows.isEmpty()) {
-            // On most screens an empty list is a mild disappointment. Here it is usually the answer
-            // somebody came for, so it is described rather than left blank.
+        if (state.isUnsupported) {
             MetaText(
-                chapterNotificationsEmptyNote(followsAnything = state.loadedOnce),
+                "This server does not support new chapter notifications. Update the backend to track new chapters.",
                 color = AarisColor.Muted,
             )
         } else {
-            rows.forEach { entry ->
-                NewChapterRow(
-                    entry = entry,
-                    onPlay = { onPlay(entry) },
-                    onOpen = { onOpenFiction(entry) },
-                    onDismiss = {
-                        scope.launch {
-                            if (repository.dismissChapterNotification(entry.id)) {
-                                repository.chapterNotifications()?.let { fresh ->
-                                    state.notifications = fresh.notifications
-                                    state.unread = fresh.unread
-                                    state.ready = fresh.ready
-                                }
-                            } else {
-                                // The server refused, which means this list is out of date rather
-                                // than that anything failed. Re-reading it is the honest answer.
-                                refresh()
-                            }
-                        }
-                    },
+            val visibleError = actionError ?: state.error
+            visibleError?.let {
+                Text(it, color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = { actionError = null; refresh() }, enabled = !state.isLoading) {
+                    Text("RETRY")
+                }
+            }
+
+            val rows = state.rows
+            if (!state.loadedOnce && state.isLoading) {
+                MetaText("Loading new chapters…", color = AarisColor.Muted)
+            } else if (!state.loadedOnce && state.error != null) {
+                Unit
+            } else if (rows.isEmpty()) {
+                MetaText(
+                    chapterNotificationsEmptyNote(followsAnything = state.followsAnything == true),
+                    color = AarisColor.Muted,
                 )
+            } else {
+                rows.forEach { entry ->
+                    NewChapterRow(
+                        entry = entry,
+                        busy = busyId == entry.id,
+                        onPlay = {
+                            runCatching { onPlay(entry) }
+                                .onFailure { actionError = it.message ?: "Could not play that chapter" }
+                        },
+                        onOpen = {
+                            runCatching { onOpenFiction(entry) }
+                                .onFailure { actionError = it.message ?: "Could not open that fiction" }
+                        },
+                        onDismiss = {
+                            scope.launch {
+                                busyId = entry.id
+                                actionError = null
+                                runCatching { repository.dismissChapterNotification(entry.id) }
+                                    .onSuccess { dismissed ->
+                                        if (dismissed) refresh() else actionError = "Could not dismiss that chapter"
+                                    }
+                                    .onFailure {
+                                        actionError = it.message ?: "Could not dismiss that chapter"
+                                    }
+                                busyId = null
+                            }
+                        },
+                    )
+                }
             }
         }
         Spacer(Modifier.heightIn(min = 24.dp))
@@ -136,6 +167,7 @@ private fun NewChapterRow(
     onPlay: () -> Unit,
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
+    busy: Boolean = false,
 ) {
     AarisCard(modifier = Modifier.fillMaxWidth(), onClick = onOpen) {
         Column(
@@ -160,10 +192,20 @@ private fun NewChapterRow(
             if (entry.playable || entry.dismissible) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (entry.playable) {
-                        OutlinedButton(onClick = onPlay, shape = RectangleShape) { Text("PLAY") }
+                        OutlinedButton(
+                            onClick = onPlay,
+                            enabled = !busy,
+                            shape = RectangleShape,
+                            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                        ) { Text(if (busy) "WORKING" else "PLAY") }
                     }
                     if (entry.dismissible) {
-                        OutlinedButton(onClick = onDismiss, shape = RectangleShape) { Text("DISMISS") }
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            enabled = !busy,
+                            shape = RectangleShape,
+                            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                        ) { Text(if (busy) "WORKING" else "DISMISS") }
                     }
                 }
             }

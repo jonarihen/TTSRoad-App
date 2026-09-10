@@ -35,6 +35,25 @@ class FictionMetadataEditTest {
     )
 
     @Test
+    fun `changedFieldLabels and formatDiscardBody format exact scope copy for one and multiple fields`() {
+        val singlePatch = FictionUpdateRequest(title = "New Title")
+        val singleLabels = changedFieldLabels(singlePatch)
+        assertEquals(listOf("title"), singleLabels)
+        assertEquals(
+            "Your unsaved title changes will be discarded. Cover changes already uploaded are kept.",
+            formatDiscardBody(singleLabels),
+        )
+
+        val multiPatch = FictionUpdateRequest(title = "New Title", author = "Author X", description = "Desc")
+        val multiLabels = changedFieldLabels(multiPatch)
+        assertEquals(listOf("title", "author", "synopsis"), multiLabels)
+        assertEquals(
+            "Your unsaved title, author and synopsis changes will be discarded. Cover changes already uploaded are kept.",
+            formatDiscardBody(multiLabels),
+        )
+    }
+
+    @Test
     fun `a form nobody touched sends nothing at all`() {
         val fiction = fiction()
 

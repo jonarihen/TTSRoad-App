@@ -124,6 +124,32 @@ fun fictionMetadataPatch(
     return request.takeIf { it != FictionUpdateRequest() }
 }
 
+/** Labels for the fields actually touched in a metadata/narration patch. */
+fun changedFieldLabels(patch: FictionUpdateRequest?): List<String> {
+    if (patch == null) return emptyList()
+    val labels = mutableListOf<String>()
+    if (patch.title != null) labels.add("title")
+    if (patch.author != null) labels.add("author")
+    if (patch.description != null) labels.add("synopsis")
+    if (patch.tags != null) labels.add("tags")
+    if (patch.voice != null) labels.add("voice")
+    if (patch.rate != null) labels.add("narration rate")
+    return labels
+}
+
+/** Formats the discard confirmation text for only the exact changed fields. */
+fun formatDiscardBody(labels: List<String>): String {
+    if (labels.isEmpty()) {
+        return "Your unsaved changes will be discarded. Cover changes already uploaded are kept."
+    }
+    val names = when (labels.size) {
+        1 -> labels.single()
+        2 -> "${labels[0]} and ${labels[1]}"
+        else -> labels.dropLast(1).joinToString(", ") + " and ${labels.last()}"
+    }
+    return "Your unsaved $names changes will be discarded. Cover changes already uploaded are kept."
+}
+
 /** A content type as it should be compared: no `; charset=…` parameter, no case, no padding. */
 private fun normalisedType(mimeType: String): String = mimeType.substringBefore(';').trim().lowercase()
 

@@ -59,6 +59,20 @@ class TtsRoadThemeContrastTest {
     }
 
     @Test
+    fun `control outlines clear non-text contrast while separators remain subtle`() {
+        surfaces.forEach { (name, surface) ->
+            assertTrue(
+                "ControlOutline on $name must clear 3:1",
+                contrastRatio(AarisColor.ControlOutline, surface) >= 3.0,
+            )
+        }
+        assertTrue(
+            "Line is a separator, not a control outline",
+            contrastRatio(AarisColor.Line, AarisColor.BgRaise) < 3.0,
+        )
+    }
+
+    @Test
     fun `the two tokens that had regressed are held above the floor`() {
         // Named individually so a future change to either fails with the reason attached rather
         // than as one line of a list.

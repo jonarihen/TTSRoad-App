@@ -42,7 +42,19 @@ class NewChaptersState internal constructor() {
     var error: String? by mutableStateOf(null)
         internal set
 
+    var isUnsupported: Boolean by mutableStateOf(false)
+        internal set
+
+    var isLoading: Boolean by mutableStateOf(true)
+        internal set
+
     var loadedOnce: Boolean by mutableStateOf(false)
+        internal set
+
+    var followsAnything: Boolean? by mutableStateOf(null)
+        internal set
+
+    var refreshRequest: Int by mutableStateOf(0)
         internal set
 
     val rows: List<ChapterNotificationEntry> get() = visibleNotifications(notifications)
@@ -84,7 +96,7 @@ internal fun rememberNewChapters(
     // settings *before* being interrupted rather than only in response to it.
     LaunchedEffect(available) { if (available) notifier.ensureChannel() }
 
-    LaunchedEffect(isLoggedIn, available) {
+    LaunchedEffect(isLoggedIn, available, state.refreshRequest) {
         if (!isLoggedIn || !available) {
             // Signing out forgets what was seen as well as what was shown: notices belong to an
             // account, and keeping the set would let the next account's ready chapters arrive
@@ -93,11 +105,16 @@ internal fun rememberNewChapters(
             state.unread = 0
             state.ready = 0
             state.loadedOnce = false
+            state.followsAnything = null
+            state.isUnsupported = false
+            state.isLoading = false
+            state.error = null
             readySeen = null
             notifier.clear()
             return@LaunchedEffect
         }
         while (currentCoroutineContext().isActive) {
+            state.isLoading = true
             runCatching { repository.chapterNotifications() }
                 .onSuccess { response ->
                     if (response != null) {
@@ -107,17 +124,26 @@ internal fun rememberNewChapters(
                         state.unread = response.unread
                         state.ready = response.ready
                         state.error = null
+                        state.isUnsupported = false
                         state.loadedOnce = true
+                        if (state.followsAnything == null) {
+                            state.followsAnything = runCatching { repository.library().fictions.isNotEmpty() }
+                                .getOrNull()
+                        }
                         readyNotificationText(fresh)?.let { (title, body) ->
                             notifier.notifyReady(title, body, fresh.singleOrNull())
                         }
+                    } else {
+                        state.isUnsupported = true
+                        state.error = null
+                        state.loadedOnce = true
                     }
                 }
                 .onFailure {
-                    // Content is kept. A poll that failed says nothing about the notices already on
-                    // screen, and blanking them would lose the very thing being waited for.
                     state.error = it.message ?: "Could not check for new chapters"
+                    state.isUnsupported = false
                 }
+            state.isLoading = false
             delay(PollIntervalMs)
         }
     }

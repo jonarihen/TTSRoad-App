@@ -133,8 +133,11 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -176,6 +179,8 @@ import dk.perspektiva.ttsroad.data.FictionAddResult
 import dk.perspektiva.ttsroad.data.FictionEditResult
 import dk.perspektiva.ttsroad.data.FictionMetadataDraft
 import dk.perspektiva.ttsroad.data.FictionSort
+import dk.perspektiva.ttsroad.data.changedFieldLabels
+import dk.perspektiva.ttsroad.data.formatDiscardBody
 import dk.perspektiva.ttsroad.data.shortVoiceName
 import dk.perspektiva.ttsroad.data.parseSyncLimit
 import dk.perspektiva.ttsroad.data.SyncDirection
@@ -814,7 +819,19 @@ private fun MainScaffold(
         stateHolder.removeState(screen.saveKey)
         onReplaceScreen(next)
     }
-    BackHandler(enabled = canGoBack, onBack = popBackStack)
+    var editorDirty by remember(screen.saveKey) { mutableStateOf(false) }
+    var editorIsBusy by remember(screen.saveKey) { mutableStateOf(false) }
+    var editorBackRequest by remember(screen.saveKey) { mutableStateOf(0) }
+    val requestBack: () -> Unit = {
+        if (screen is AppScreen.FictionEdit) {
+            if (!editorIsBusy) {
+                if (editorDirty) editorBackRequest++ else popBackStack()
+            }
+        } else {
+            popBackStack()
+        }
+    }
+    BackHandler(enabled = canGoBack, onBack = requestBack)
     val scaffoldScope = rememberCoroutineScope()
     val scaffoldCapabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     // Hoisted to the scaffold rather than to the screen: the badge and the system notification are
@@ -850,7 +867,7 @@ private fun MainScaffold(
     Scaffold(
         containerColor = AarisColor.Bg,
         topBar = {
-            AppTopBar(title = title, canGoBack = canGoBack, onBack = popBackStack)
+            AppTopBar(title = title, canGoBack = canGoBack, onBack = requestBack)
         },
         bottomBar = {
             AppBottomBar(
@@ -930,6 +947,9 @@ private fun MainScaffold(
                     // screen behind the editor is already correct when the editor closes.
                     onFictionChanged = onFictionUpdated,
                     onDone = popBackStack,
+                    externalBackRequest = editorBackRequest,
+                    onDirtyChange = { editorDirty = it },
+                    onBusyChange = { editorIsBusy = it },
                 )
 
                 AppScreen.Player -> PlayerScreen(
@@ -1973,7 +1993,7 @@ private fun FictionScreen(
  * rather than "which chapter mentioned the lighthouse".
  */
 @Composable
-private fun ChapterListControls(
+internal fun ChapterListControls(
     filter: ChapterFilter,
     ascending: Boolean,
     showJumpToCurrent: Boolean,
@@ -2000,10 +2020,10 @@ private fun ChapterListControls(
         modifier = Modifier.fillMaxWidth(),
     )
     Spacer(modifier = Modifier.height(8.dp))
-    Row(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         ChapterFilter.entries.forEach { option ->
             FilterChip(
@@ -2011,10 +2031,13 @@ private fun ChapterListControls(
                 onClick = { onFilter(option) },
                 label = { Text(option.label) },
                 shape = RectangleShape,
+                modifier = Modifier.heightIn(min = MinTouchTargetSize),
             )
         }
-        Spacer(modifier = Modifier.weight(1f))
-        TextButton(onClick = onToggleSort) {
+        TextButton(
+            onClick = onToggleSort,
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        ) {
             Text(if (ascending) "OLDEST" else "NEWEST")
         }
     }
@@ -2351,6 +2374,8 @@ private fun PlayerIconAction(
  * So the parameters are deliberately data and lambdas rather than the objects they came from —
  * [canRead] rather than the capability set, [onBookmark] rather than the repository.
  */
+internal data class PlayerActionFeedback(val message: String, val danger: Boolean = false)
+
 @Composable
 internal fun PlayerScreenBody(
     playerState: PlayerUiState,
@@ -2364,7 +2389,7 @@ internal fun PlayerScreenBody(
      * *while listening*, they are never both true, and a second identical line would only make the
      * player taller for no reader.
      */
-    actionFeedback: String?,
+    actionFeedback: PlayerActionFeedback?,
     canRead: Boolean,
     canBookmark: Boolean,
     /** The server can store a captured mispronunciation, and there is a chapter to hang it on. */
@@ -2482,11 +2507,13 @@ internal fun PlayerScreenBody(
             Spacer(modifier = Modifier.height(12.dp))
             PlaybackErrorBanner(message = message, onRetry = onRetry)
         }
-        actionFeedback?.let { message ->
+        actionFeedback?.let { feedback ->
             MetaText(
-                text = "// $message",
-                color = AarisColor.Accent,
-                modifier = Modifier.padding(top = 4.dp),
+                text = "// ${feedback.message}",
+                color = if (feedback.danger) AarisColor.Danger else AarisColor.Accent,
+                modifier = Modifier
+                    .padding(top = 4.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
         if (isShortHeight) {
@@ -2641,7 +2668,8 @@ internal fun PlayerScreenBody(
         Spacer(modifier = Modifier.height(24.dp))
         // Single transport row: chapter skips outside, fine seek inside, primary in the middle.
         Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TransportIconButton(
@@ -2774,9 +2802,9 @@ private fun PlayerScreen(
     // Confirmation for the writes made from this screen — a bookmark, a pronunciation report.
     // Either one made while listening gives no other sign that anything happened, and the
     // alternative — opening the list — is the thing they exist to avoid.
-    var actionFeedback by remember { mutableStateOf<String?>(null) }
+    var actionFeedback by remember { mutableStateOf<PlayerActionFeedback?>(null) }
     val transientFeedback by playbackController.transientFeedback.collectAsStateWithLifecycle()
-    val displayedFeedback = actionFeedback ?: transientFeedback
+    val displayedFeedback = actionFeedback ?: transientFeedback?.let(::PlayerActionFeedback)
 
     // The marks in *this* chapter, for the strip under the scrub bar (#121). Scoped server-side:
     // `bookmarks()` takes a chapter id and had never been passed one, so the app was fetching the
@@ -2854,9 +2882,9 @@ private fun PlayerScreen(
                 }.fold(
                     onSuccess = {
                         bookmarkWrites++
-                        "Bookmarked at ${formatDuration(playerState.positionMs)}"
+                        PlayerActionFeedback("Bookmarked at ${formatDuration(playerState.positionMs)}")
                     },
-                    onFailure = { "Could not save the bookmark" },
+                    onFailure = { PlayerActionFeedback("Could not save the bookmark", danger = true) },
                 )
             }
         },
@@ -2886,17 +2914,14 @@ private fun PlayerScreen(
                     },
                 )
                 actionFeedback = when (outcome) {
-                    // Success says what was captured, because the whole question a second later is
-                    // "did it get the word, or just the spot?".
-                    PronunciationReportOutcome.Filed -> if (word == null) {
-                        "Reported at ${formatDuration(positionMs)}"
-                    } else {
-                        "Reported \"$word\" at ${formatDuration(positionMs)}"
-                    }
-
-                    // Everything else already carries a sentence, and for the ceiling's 409 it is
-                    // the server's own.
-                    else -> outcome.message
+                    PronunciationReportOutcome.Filed -> PlayerActionFeedback(
+                        if (word == null) {
+                            "Reported at ${formatDuration(positionMs)}"
+                        } else {
+                            "Reported \"$word\" at ${formatDuration(positionMs)}"
+                        },
+                    )
+                    else -> PlayerActionFeedback(outcome.message, danger = true)
                 }
             }
         },
@@ -3640,6 +3665,7 @@ private fun SettingsScreen(
     val downloadCacheBytes by downloads.downloadCacheBytes.collectAsStateWithLifecycle()
     val streamedBytes by downloads.streamingCacheBytes.collectAsStateWithLifecycle()
     var confirmDeleteDownloads by remember { mutableStateOf(false) }
+    var confirmClearStreamed by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
 
     // Podcast URLs (#115) and the listening-state backup (#116). Both are Settings-side and both
@@ -3916,7 +3942,17 @@ private fun SettingsScreen(
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = MinTouchTargetSize)
+                        .toggleable(
+                            value = prefs.autoMarkPlayed,
+                            role = Role.Switch,
+                            onValueChange = {
+                                scope.launch { accountPreferenceSync.setAutoMarkPlayed(it) }
+                            },
+                        )
+                        .padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -3934,9 +3970,7 @@ private fun SettingsScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Switch(
                         checked = prefs.autoMarkPlayed,
-                        onCheckedChange = {
-                            scope.launch { accountPreferenceSync.setAutoMarkPlayed(it) }
-                        },
+                        onCheckedChange = null,
                     )
                 }
 
@@ -3953,7 +3987,15 @@ private fun SettingsScreen(
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = MinTouchTargetSize)
+                        .toggleable(
+                            value = prefs.skipSilence,
+                            role = Role.Switch,
+                            onValueChange = { scope.launch { preferences.setSkipSilence(it) } },
+                        )
+                        .padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -3971,7 +4013,7 @@ private fun SettingsScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Switch(
                         checked = prefs.skipSilence,
-                        onCheckedChange = { scope.launch { preferences.setSkipSilence(it) } },
+                        onCheckedChange = null,
                     )
                 }
 
@@ -4001,7 +4043,15 @@ private fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = MinTouchTargetSize)
+                        .toggleable(
+                            value = downloadPrefs.wifiOnly,
+                            role = Role.Switch,
+                            onValueChange = { scope.launch { downloadPreferences.setWifiOnly(it) } },
+                        )
+                        .padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -4018,7 +4068,7 @@ private fun SettingsScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Switch(
                         checked = downloadPrefs.wifiOnly,
-                        onCheckedChange = { scope.launch { downloadPreferences.setWifiOnly(it) } },
+                        onCheckedChange = null,
                     )
                 }
 
@@ -4077,8 +4127,20 @@ private fun SettingsScreen(
                         "once it is over the size above.",
                     color = AarisColor.Dim,
                 )
+                MetaText(
+                    text = "Clears ${formatStorageSize(streamedBytes)} of audio cached while streaming. " +
+                        "Downloaded chapters stay on this phone. Cleared chapters stream from the " +
+                        "server again the next time you play them.",
+                    color = AarisColor.Dim,
+                )
                 OutlinedButton(
-                    onClick = { downloads.clearStreamingCache() },
+                    onClick = {
+                        if (streamedBytes >= 100L * 1024L * 1024L) {
+                            confirmClearStreamed = true
+                        } else {
+                            downloads.clearStreamingCache()
+                        }
+                    },
                     enabled = streamedBytes > 0,
                     shape = RectangleShape,
                 ) {
@@ -4334,6 +4396,21 @@ private fun SettingsScreen(
                     isBusy = false
                 }
             },
+        )
+    }
+
+    if (confirmClearStreamed) {
+        ConfirmDialog(
+            title = "CLEAR STREAMED AUDIO?",
+            body = "${formatStorageSize(streamedBytes)} of audio cached while streaming will be " +
+                "removed. Downloaded chapters and playback progress stay. Cleared chapters must " +
+                "stream from the server again the next time you play them.",
+            confirmLabel = "CLEAR",
+            onConfirm = {
+                confirmClearStreamed = false
+                downloads.clearStreamingCache()
+            },
+            onDismiss = { confirmClearStreamed = false },
         )
     }
 
@@ -5000,7 +5077,7 @@ internal fun List<QueueItem>.moveItem(index: Int, offset: Int): List<Int> {
 }
 
 @Composable
-private fun QueueRow(
+internal fun QueueRow(
     item: QueueItem,
     position: Int,
     onMoveUp: (() -> Unit)?,
@@ -5009,58 +5086,61 @@ private fun QueueRow(
     onPlay: (() -> Unit)?,
 ) {
     AarisCard {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (onPlay != null) Modifier.clickable(onClick = onPlay) else Modifier)
                 .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            MetaText(
-                text = position.toString().padStart(2, '0'),
-                color = AarisColor.Dim,
-                modifier = Modifier.width(32.dp),
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = item.resolvedTitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = AarisColor.Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            Row(verticalAlignment = Alignment.Top) {
+                MetaText(
+                    text = position.toString().padStart(2, '0'),
+                    color = AarisColor.Dim,
+                    modifier = Modifier.width(32.dp),
                 )
-                val meta = listOfNotNull(
-                    item.fictionTitle?.takeIf { it.isNotBlank() },
-                    item.audioDuration?.let { formatDuration((it * 1000).toLong()) },
-                    // Worth saying: a played chapter in the queue is usually a deliberate re-listen,
-                    // but it is also what an accidental add looks like.
-                    "Played".takeIf { item.isPlayed },
-                ).joinToString("  ·  ")
-                if (meta.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    MetaText(text = meta, color = AarisColor.Dim, maxLines = 1)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.resolvedTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AarisColor.Ink,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val meta = listOfNotNull(
+                        item.fictionTitle?.takeIf { it.isNotBlank() },
+                        item.audioDuration?.let { formatDuration((it * 1000).toLong()) },
+                        "Played".takeIf { item.isPlayed },
+                    ).joinToString("  ·  ")
+                    if (meta.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(text = meta, color = AarisColor.Dim, maxLines = 2)
+                    }
                 }
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            TransportIconButton(
-                icon = Icons.Default.KeyboardArrowUp,
-                contentDescription = "Move up",
-                enabled = onMoveUp != null,
-                size = 36.dp,
-            ) { onMoveUp?.invoke() }
-            TransportIconButton(
-                icon = Icons.Default.KeyboardArrowDown,
-                contentDescription = "Move down",
-                enabled = onMoveDown != null,
-                size = 36.dp,
-            ) { onMoveDown?.invoke() }
-            TransportIconButton(
-                icon = Icons.Default.Close,
-                contentDescription = "Remove from queue",
-                enabled = onRemove != null,
-                size = 36.dp,
-            ) { onRemove?.invoke() }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TransportIconButton(
+                    icon = Icons.Default.KeyboardArrowUp,
+                    contentDescription = "Move up",
+                    enabled = onMoveUp != null,
+                    size = 48.dp,
+                ) { onMoveUp?.invoke() }
+                TransportIconButton(
+                    icon = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Move down",
+                    enabled = onMoveDown != null,
+                    size = 48.dp,
+                ) { onMoveDown?.invoke() }
+                TransportIconButton(
+                    icon = Icons.Default.Close,
+                    contentDescription = "Remove from queue",
+                    enabled = onRemove != null,
+                    size = 48.dp,
+                ) { onRemove?.invoke() }
+            }
         }
     }
 }
@@ -5075,7 +5155,7 @@ private fun QueueRow(
  * rather than a device setting.
  */
 @Composable
-private fun QueueWhenEmptyCard(
+internal fun QueueWhenEmptyCard(
     value: String,
     enabled: Boolean,
     onSelect: (String) -> Unit,
@@ -5098,7 +5178,8 @@ private fun QueueWhenEmptyCard(
                 options = listOf(QueueWhenEmptyStop, QueueWhenEmptyContinue),
                 selected = value,
                 label = { if (it == QueueWhenEmptyContinue) "KEEP GOING" else "STOP" },
-                onSelect = { if (enabled) onSelect(it) },
+                onSelect = onSelect,
+                enabled = enabled,
             )
         }
     }
@@ -7786,7 +7867,7 @@ private fun ProductionMeta(fiction: FictionSummary) {
 }
 
 @Composable
-private fun FictionEditScreen(
+internal fun FictionEditScreen(
     padding: PaddingValues,
     fiction: FictionSummary,
     repository: TtsRoadRepository,
@@ -7794,6 +7875,9 @@ private fun FictionEditScreen(
     /** Called with the server's copy after every accepted write — an edit or a cover alike. */
     onFictionChanged: (FictionSummary) -> Unit,
     onDone: () -> Unit,
+    externalBackRequest: Int = 0,
+    onDirtyChange: (Boolean) -> Unit = {},
+    onBusyChange: (Boolean) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -7817,6 +7901,7 @@ private fun FictionEditScreen(
     var message by remember { mutableStateOf<String?>(null) }
     var isError by remember { mutableStateOf(false) }
     var confirmRevert by remember { mutableStateOf(false) }
+    var confirmDiscard by remember { mutableStateOf(false) }
 
     val draft = FictionMetadataDraft(
         title = title,
@@ -7845,10 +7930,14 @@ private fun FictionEditScreen(
     }
     val overridden = fiction.overriddenFields
     val isBusy = isSaving || isUploading
-    // Whether this server understands hand-edited metadata at all. An older one accepts a
-    // description, drops it and answers "ok", so offering the field would be offering a lie; the
-    // title and author it has always been able to store are still editable.
     val editsEverything = fiction.supportsMetadataEditing
+    val hasUnsavedChanges = patch != null
+    LaunchedEffect(isBusy) { onBusyChange(isBusy) }
+    LaunchedEffect(hasUnsavedChanges) { onDirtyChange(hasUnsavedChanges) }
+    LaunchedEffect(externalBackRequest) {
+        if (externalBackRequest > 0 && hasUnsavedChanges && !isBusy) confirmDiscard = true
+    }
+    BackHandler(enabled = hasUnsavedChanges && !isBusy) { confirmDiscard = true }
 
     // The catalogue is only asked for when both halves of the UI gate are true. Listing is open to
     // any signed-in user, but saving a voice is admin-only; fetching it for a control that cannot
@@ -8201,6 +8290,21 @@ private fun FictionEditScreen(
         }
     }
 
+    if (confirmDiscard) {
+        val changedLabels = changedFieldLabels(patch)
+        ConfirmDialog(
+            title = "DISCARD UNSAVED CHANGES?",
+            body = formatDiscardBody(changedLabels),
+            confirmLabel = "DISCARD",
+            onConfirm = {
+                confirmDiscard = false
+                onDirtyChange(false)
+                onDone()
+            },
+            onDismiss = { confirmDiscard = false },
+        )
+    }
+
     if (confirmRevert) {
         ConfirmDialog(
             title = "USE SOURCE VALUES?",
@@ -8262,7 +8366,7 @@ private fun VoicePickerSheet(
  * the catalogue is the same several hundred rows either way.
  */
 @Composable
-private fun VoicePickerContent(
+internal fun VoicePickerContent(
     voices: List<MobileVoice>,
     current: String?,
     onSelect: (String) -> Unit,
@@ -8315,10 +8419,15 @@ private fun VoicePickerContent(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .sizeIn(minHeight = 48.dp)
-                                .clickable(enabled = query.isBlank()) {
+                                .clickable(enabled = query.isBlank(), role = Role.Button) {
                                     expandedLocale = group.locale.takeUnless {
                                         it == expandedLocale
                                     }
+                                }
+                                .semantics {
+                                    stateDescription = if (isExpanded) "Expanded" else "Collapsed"
+                                    contentDescription = "${group.label}, ${group.locale}, " +
+                                        "${group.voices.size} voices"
                                 }
                                 .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -8337,7 +8446,7 @@ private fun VoicePickerContent(
                                     } else {
                                         Icons.Default.KeyboardArrowDown
                                     },
-                                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                                    contentDescription = null,
                                     tint = AarisColor.Muted,
                                 )
                             }
@@ -8363,7 +8472,7 @@ private fun VoicePickerContent(
 }
 
 @Composable
-private fun VoiceChoiceRow(
+internal fun VoiceChoiceRow(
     choice: VoiceChoice,
     selected: Boolean,
     onSelect: () -> Unit,
@@ -8383,7 +8492,7 @@ private fun VoiceChoiceRow(
         if (selected) {
             Icon(
                 imageVector = Icons.Default.Check,
-                contentDescription = "Selected",
+                contentDescription = null,
                 tint = AarisColor.Accent,
             )
         }

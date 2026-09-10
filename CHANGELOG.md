@@ -2,6 +2,28 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.15.4 — 2026-09-10
+
+### Fixed
+
+- Player transport controls remain full-size, in bounds and separated on 320 dp screens; bookmark
+  and pronunciation-report results are announced politely, with failures shown as errors.
+- Setting rows now toggle from their labels and descriptions, chapter filters wrap at narrow widths
+  and large text, queued chapter titles retain two lines above full-size secondary actions, and the
+  queue-end selector is genuinely disabled while a change is in progress.
+- New Chapters now distinguishes loading, initial failure and a genuinely empty followed shelf,
+  offers retry and visible action failures, prevents duplicate actions while busy, and gives Play
+  and Dismiss 48 dp targets.
+- Leaving a fiction editor with unsaved metadata or narration changes now asks before discarding the
+  exact affected fields, from both the toolbar and system Back actions.
+- Two-factor setup focuses and announces its revealed code field with the correct keyboard action;
+  account-security dialogs scroll so recovery codes remain reachable with large text.
+- Voice groups expose one named expandable button while decorative arrows and selected checks stay
+  out of accessibility state; voice choices remain the sole radio selection.
+- Interactive outlines now use a dedicated non-text-contrast colour while structural separators stay
+  subtle, and clearing substantial streamed audio confirms the displayed byte scope and explains
+  that downloaded chapters remain while cleared audio must stream again.
+
 ## 0.15.3 — 2026-09-10
 
 ### Added
