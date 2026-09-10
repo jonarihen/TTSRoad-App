@@ -108,6 +108,12 @@ interface TtsRoadApi {
         @Header("If-None-Match") ifNoneMatch: String? = null,
     ): Response<ReadAlongResponse>
 
+    @GET("api/mobile/chapters/{chapter_id}/skips")
+    suspend fun playbackSkips(
+        @Path("chapter_id") chapterId: Int,
+        @Header("If-None-Match") ifNoneMatch: String? = null,
+    ): Response<ChapterSkipsResponse>
+
     @POST("api/mobile/playback/progress")
     suspend fun saveProgress(@Body request: PlaybackProgressRequest): PlaybackProgressResponse
 

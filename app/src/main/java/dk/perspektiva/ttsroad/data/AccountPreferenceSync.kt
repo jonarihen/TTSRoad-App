@@ -30,6 +30,7 @@ class AccountPreferenceSync(
             readerLineHeight = reader.lineHeight,
             readerTheme = reader.theme,
             readerHighlight = reader.highlight,
+            skipAdSegments = playback.skipAdSegments,
         )
     }
 
@@ -68,6 +69,9 @@ class AccountPreferenceSync(
         if (reconciled.readerHighlight != local.readerHighlight) {
             readerPreferences.setHighlight(reconciled.readerHighlight)
         }
+        if (reconciled.skipAdSegments != local.skipAdSegments) {
+            playbackPreferences.setSkipAdSegments(reconciled.skipAdSegments)
+        }
         return reconciled
     }
 
@@ -88,6 +92,11 @@ class AccountPreferenceSync(
     suspend fun setSleepTimerDefaultMinutes(minutes: Int) {
         playbackPreferences.setSleepTimerDefaultMinutes(minutes)
         repository.updateAccountPreferences(sleepTimerDefaultPatch(minutes))
+    }
+
+    suspend fun setSkipAdSegments(enabled: Boolean) {
+        playbackPreferences.setSkipAdSegments(enabled)
+        repository.updateAccountPreferences(skipAdSegmentsPatch(enabled))
     }
 
     suspend fun setReaderFontScale(scale: Float) {

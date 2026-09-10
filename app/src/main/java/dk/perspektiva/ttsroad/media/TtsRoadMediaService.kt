@@ -34,6 +34,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
+import dk.perspektiva.ttsroad.data.ChapterSkips
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
@@ -51,6 +52,7 @@ import dk.perspektiva.ttsroad.data.mergeLibraryDelta
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.PendingProgressStore
+import dk.perspektiva.ttsroad.player.adSkipTarget
 import dk.perspektiva.ttsroad.player.PlaybackFailure
 import dk.perspektiva.ttsroad.player.PlayedThreshold
 import dk.perspektiva.ttsroad.player.ProgressSync
@@ -74,6 +76,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
@@ -86,6 +89,9 @@ import kotlinx.coroutines.launch
 // Media3 marks much of its session and data-source surface @UnstableApi. The whole class works
 // against it, so opt in once here rather than annotating each member and still missing the
 // constructor and property references lint reports separately.
+const val PlaybackFeedbackCommand = "ttsroad.playback_feedback"
+const val PlaybackFeedbackMessage = "message"
+
 @OptIn(UnstableApi::class)
 class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -115,6 +121,13 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     // The chapter the keep-ahead window was last planned around; see moveKeepAheadWindow.
     private var lastKeepAheadChapterId: Int? = null
+    private var playbackSkips: ChapterSkips? = null
+    private var playbackSkipsLoad: Job? = null
+    private var playbackSkipsGeneration = 0L
+    private var playbackSkipsEnabled = false
+    private var playbackSkipsSupported = false
+    private val announcedSkipSegments = mutableSetOf<String>()
+    private var announcedNeedsTimings = false
 
     // Throttles for the server-side jump-back trail; see player/PlaybackBreadcrumbs.kt.
     private var lastBreadcrumbAt: Long? = null
@@ -227,6 +240,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     // A chapter title and cover should change as soon as auto-advance does. When a
                     // queue is cleared, publishNowPlaying preserves the last item and marks it
                     // stopped, which is the widget's "last heard" state.
+                    loadPlaybackSkips(mediaItem)
                     serviceScope.launch {
                         publishNowPlaying(forcePlaying = if (mediaItem == null) false else null)
                     }
@@ -252,6 +266,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             },
         )
         startProgressTicker()
+        startPlaybackSkipTicker()
         startSleepTimer()
         session = MediaLibrarySession.Builder(this, player, BrowserCallback(this))
             .setSessionActivity(playerActivityIntent())
@@ -440,6 +455,95 @@ class TtsRoadMediaService : MediaLibraryService() {
                 if (player.isPlaying) saveCurrentProgress(forcePlayed = false)
             }
         }
+    }
+
+    private fun loadPlaybackSkips(mediaItem: MediaItem?) {
+        val generation = ++playbackSkipsGeneration
+        playbackSkipsLoad?.cancel()
+        playbackSkips = null
+        announcedSkipSegments.clear()
+        announcedNeedsTimings = false
+        if (!playbackSkipsEnabled || !playbackSkipsSupported) return
+        val chapterId = mediaItem?.mediaMetadata?.extras?.getInt("chapter_id")?.takeIf { it > 0 }
+            ?: return
+        playbackSkipsLoad = serviceScope.launch {
+            val loaded = repository.playbackSkips(chapterId)
+            val currentChapterId = player.currentMediaItem?.mediaMetadata?.extras
+                ?.getInt("chapter_id")
+                ?.takeIf { it > 0 }
+            if (generation == playbackSkipsGeneration && currentChapterId == chapterId) {
+                playbackSkips = loaded
+                if (loaded.needsTimings && !announcedNeedsTimings) {
+                    announcedNeedsTimings = true
+                    publishPlaybackFeedback(
+                        "This chapter has a matching skip rule, but no timings. " +
+                            "Timings can be rebuilt in the web app or on the server.",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun startPlaybackSkipTicker() {
+        serviceScope.launch {
+            combine(
+                preferences.prefs.map { it.skipAdSegments },
+                repository.currentCapabilities.map { it.playbackSkips },
+            ) { enabled, supported -> enabled to supported }
+                .distinctUntilChanged()
+                .collect { (enabled, supported) ->
+                    val wasActive = playbackSkipsEnabled && playbackSkipsSupported
+                    playbackSkipsEnabled = enabled
+                    playbackSkipsSupported = supported
+                    val active = enabled && supported
+                    if (active && !wasActive) loadPlaybackSkips(player.currentMediaItem)
+                    if (!active) loadPlaybackSkips(null)
+                }
+        }
+        serviceScope.launch {
+            playerPlayingFlow()
+                .distinctUntilChanged()
+                .collectLatest { playing ->
+                    if (!playing) return@collectLatest
+                    while (isActive) {
+                        if (playbackSkipsEnabled && playbackSkipsSupported) {
+                            val skips = playbackSkips
+                            if (skips != null) {
+                                adSkipTarget(skips, player.currentPosition, player.duration)?.let { target ->
+                                    player.seekTo(target.targetMs)
+                                    val key = "${target.segment.startMs}:${target.segment.endMs}"
+                                    if (announcedSkipSegments.add(key)) {
+                                        publishPlaybackFeedback(
+                                            "Skipped ${dk.perspektiva.ttsroad.player.formatAdSkipLength(target.segment.durationMs)} " +
+                                                "of advert or author's note.",
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        delay(500)
+                    }
+                }
+        }
+    }
+
+    private fun publishPlaybackFeedback(message: String) {
+        if (!::session.isInitialized) return
+        session.broadcastCustomCommand(
+            SessionCommand(PlaybackFeedbackCommand, Bundle.EMPTY),
+            Bundle().apply { putString(PlaybackFeedbackMessage, message) },
+        )
+    }
+
+    private fun playerPlayingFlow() = kotlinx.coroutines.flow.callbackFlow {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                trySend(isPlaying)
+            }
+        }
+        trySend(player.isPlaying)
+        player.addListener(listener)
+        awaitClose { player.removeListener(listener) }
     }
 
     /**

@@ -4,13 +4,19 @@ import android.content.ComponentName
 import android.content.Context
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.sanitizeSpeed
+import dk.perspektiva.ttsroad.media.PlaybackFeedbackCommand
+import dk.perspektiva.ttsroad.media.PlaybackFeedbackMessage
 import dk.perspektiva.ttsroad.media.TtsRoadMediaItems
 import dk.perspektiva.ttsroad.media.TtsRoadMediaService
 import kotlin.math.roundToLong
@@ -76,6 +82,8 @@ class PlaybackController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
+    private val _transientFeedback = MutableStateFlow<String?>(null)
+    val transientFeedback: StateFlow<String?> = _transientFeedback.asStateFlow()
 
     private var controller: MediaController? = null
     private var connecting: Deferred<MediaController?>? = null
@@ -105,7 +113,23 @@ class PlaybackController(
                 ComponentName(context, TtsRoadMediaService::class.java),
             )
             val created = runCatching {
-                MediaController.Builder(context, token).buildAsync().await()
+                MediaController.Builder(context, token)
+                    .setListener(
+                        object : MediaController.Listener {
+                            override fun onCustomCommand(
+                                controller: MediaController,
+                                command: SessionCommand,
+                                args: android.os.Bundle,
+                            ): ListenableFuture<SessionResult> {
+                                if (command.customAction == PlaybackFeedbackCommand) {
+                                    _transientFeedback.value = args.getString(PlaybackFeedbackMessage)
+                                }
+                                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                            }
+                        },
+                    )
+                    .buildAsync()
+                    .await()
             }.getOrNull()
             if (created != null) {
                 controller = created
@@ -193,6 +217,10 @@ class PlaybackController(
      * any error is corrected on the very next frame.
      */
     fun reportedPositionMs(): Long? = controller?.currentPosition?.coerceAtLeast(0L)
+
+    fun clearTransientFeedback() {
+        _transientFeedback.value = null
+    }
 
     fun seekTo(positionMs: Long) {
         val controller = controller ?: return

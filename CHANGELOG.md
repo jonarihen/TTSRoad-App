@@ -2,6 +2,18 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.15.3 — 2026-09-10
+
+### Added
+
+- **Playback now skips timed adverts and disclaimers when the account asks it to.** Skip regions are
+  loaded asynchronously at each chapter transition, cached and revalidated with the server's ETag,
+  and checked only every half-second while audio is actually playing. Paused scrubbing is never
+  overridden, trailing regions end the chapter cleanly, unsupported or failed requests play the
+  original audio unchanged, and changing the account-scoped setting takes effect immediately.
+  The Settings control appears only when the server supports both playback skips and shared player
+  preferences, with the complete row acting as its accessible switch target.
+
 ## 0.15.2 — 2026-09-08
 
 ### Fixed

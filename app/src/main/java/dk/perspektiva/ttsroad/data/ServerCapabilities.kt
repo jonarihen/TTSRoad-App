@@ -213,6 +213,19 @@ data class ServerCapabilities(
     val notifications: Boolean = false,
 
     /**
+     * The server can say which seconds of a chapter are advert or disclaimer, over
+     * `/api/mobile/chapters/{id}/skips`.
+     *
+     * Its own flag because the skipping is done *here*: a capable server holds the rules and answers
+     * the endpoint while an older client plays the plug straight through, and nothing about the
+     * server's side of it changes. Says nothing about whether any fiction has such a rule — that is
+     * a per-chapter answer, and an empty segment list is the normal response on an installation
+     * where nobody has written one. So the setting is worth showing on any server that advertises
+     * this, not only on one that currently has something to skip.
+     */
+    val playbackSkips: Boolean = false,
+
+    /**
      * Every flag the server advertised, exactly as sent, including ones this build has never heard
      * of.
      *
@@ -280,6 +293,7 @@ data class ServerCapabilities(
                 logs = flags.flag("logs"),
                 storage = flags.flag("storage"),
                 notifications = flags.flag("notifications"),
+                playbackSkips = flags.flag("playback_skips"),
                 // Only entries that are actually booleans. A server sending something else for a
                 // key is saying something this build cannot read, and listing it as "off" would be
                 // a guess presented as fact.

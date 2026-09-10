@@ -40,6 +40,14 @@ import kotlin.math.roundToInt
  * direction: both ends store the same multiplier over the same 1.3–2.4 range, so the value that
  * comes back is the value that was sent.
  *
+ * **`skip_ad_segments` syncs, and is the one player key that does.** It sits in the backend's player
+ * table beside the four device keys below, but it is not the same kind of setting: the four say how
+ * this hardware should sound, whereas this one says whether the listener wants to hear the library's
+ * Patreon plugs and disclaimers at all. That is a fact about the person, not about the speakers, so
+ * turning it off in a browser must turn it off here. It defaults to *on*, which is why the read is
+ * "adopt whatever the server holds" — a phone that has never synced skips adverts, exactly as the
+ * web player does.
+ *
  * ## Lossy mappings, and why reads do not write
  *
  * The app's reader vocabulary is richer than the server's in two places: four highlight modes
@@ -63,6 +71,15 @@ object AccountPreferenceKeys {
     const val ReaderHighlight = "reader_highlight"
 
     /**
+     * Whether the player jumps over the advert and disclaimer regions the server describes.
+     *
+     * In [Synced] despite living in the backend's *player* table, unlike the four keys named in
+     * [SyncedPlayerKeys]: see the note at the top of this file. The segments themselves are asked
+     * for per chapter and are the same for everybody; this only decides whether to act on them.
+     */
+    const val SkipAdSegments = "skip_ad_segments"
+
+    /**
      * What playback does when the cross-library queue runs dry: `stop`, or keep going with the
      * oldest unplayed chapter in the library.
      *
@@ -83,6 +100,7 @@ object AccountPreferenceKeys {
         ReaderLineHeight,
         ReaderTheme,
         ReaderHighlight,
+        SkipAdSegments,
     )
 }
 
@@ -91,6 +109,9 @@ object AccountPreferenceKeys {
  *
  * Named rather than merely absent, so the decision above is greppable and a future change is one
  * list rather than an archaeology exercise.
+ *
+ * `skip_ad_segments` is deliberately *not* here even though the backend groups it with these: it is
+ * in [AccountPreferenceKeys.Synced], for the reason given at the top of this file.
  */
 val SyncedPlayerKeys: Set<String> = emptySet()
 
@@ -106,6 +127,16 @@ const val DefaultSleepTimerMinutes: Int = 0
  * behaves as the account would have told it to.
  */
 const val DefaultAutoMarkPlayed: Boolean = true
+
+/**
+ * Whether adverts and disclaimers are jumped over when the server describes where they are.
+ *
+ * True to match the server's own default for `skip_ad_segments`. The direction matters: a listener
+ * whose account has never been told otherwise has adverts skipped in the browser, and a phone that
+ * defaulted this to false would play them — a difference that reads as the phone being broken rather
+ * than as a setting nobody set.
+ */
+const val DefaultSkipAdSegments: Boolean = true
 
 /**
  * The server's `reader_font_size` range, and the size its default corresponds to.
@@ -260,6 +291,7 @@ data class SyncedPreferences(
     val readerLineHeight: Float = DefaultReaderLineHeight,
     val readerTheme: ReaderTheme = DefaultReaderTheme,
     val readerHighlight: HighlightGranularity = DefaultHighlightGranularity,
+    val skipAdSegments: Boolean = DefaultSkipAdSegments,
 )
 
 /**
@@ -276,6 +308,7 @@ fun reconcileAccountPreferences(
 ): SyncedPreferences {
     val hidePlayed = server.preferenceBool(AccountPreferenceKeys.HidePlayed)
     val autoMarkPlayed = server.preferenceBool(AccountPreferenceKeys.AutoMarkPlayed)
+    val skipAdSegments = server.preferenceBool(AccountPreferenceKeys.SkipAdSegments)
     val sleepMinutes = server.preferenceInt(AccountPreferenceKeys.SleepTimerDefaultMinutes)
     val fontSize = server.preferenceInt(AccountPreferenceKeys.ReaderFontSize)
     val lineHeight = server.preferenceNumber(AccountPreferenceKeys.ReaderLineHeight)
@@ -292,6 +325,9 @@ fun reconcileAccountPreferences(
         // A plain boolean with no lossy projection, so the general rule collapses to "take the
         // server's answer when it has one".
         autoMarkPlayed = autoMarkPlayed ?: local.autoMarkPlayed,
+        // Also a plain boolean. An absent key is an account that has never been told about this
+        // client's copy of the setting, which must leave the local value alone rather than reset it.
+        skipAdSegments = skipAdSegments ?: local.skipAdSegments,
         // No projection to compare against: both ends store the same multiplier over the same
         // range, so "the server has a value" is the whole condition.
         readerLineHeight = lineHeight
@@ -339,6 +375,9 @@ fun chapterFilterPatch(filter: ChapterFilter): Map<String, Any?> =
 
 fun autoMarkPlayedPatch(enabled: Boolean): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.AutoMarkPlayed to enabled)
+
+fun skipAdSegmentsPatch(enabled: Boolean): Map<String, Any?> =
+    mapOf(AccountPreferenceKeys.SkipAdSegments to enabled)
 
 fun sleepTimerDefaultPatch(minutes: Int): Map<String, Any?> =
     mapOf(AccountPreferenceKeys.SleepTimerDefaultMinutes to sanitizeSleepTimerMinutes(minutes))

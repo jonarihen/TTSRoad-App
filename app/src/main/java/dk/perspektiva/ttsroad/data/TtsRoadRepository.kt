@@ -4,6 +4,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -186,6 +187,19 @@ class TtsRoadRepository(
         val document: ReadAlongDocument,
     )
 
+    private val playbackSkipsCache = HashMap<PlaybackSkipsCacheKey, CachedPlaybackSkips>()
+
+    private data class PlaybackSkipsCacheKey(
+        val serverUrl: String,
+        val username: String?,
+        val chapterId: Int,
+    )
+
+    private data class CachedPlaybackSkips(
+        val etag: String?,
+        val skips: ChapterSkips,
+    )
+
     /**
      * The last stats payload seen for each `weeks` value, with the `ETag` that answered it.
      *
@@ -285,6 +299,7 @@ class TtsRoadRepository(
         // Chapter text is account-visible content, and chapter ids are only unique per server, so a
         // cached read-along must never outlive the session that fetched it.
         synchronized(readAlongCache) { readAlongCache.clear() }
+        synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
         readAlongStore.clear()
     }
 
@@ -644,6 +659,40 @@ class TtsRoadRepository(
             // Offline, or the server is down: the text the user already read is a far better answer
             // than an error screen.
             cached?.document ?: throw e
+        }
+    }
+
+    suspend fun playbackSkips(chapterId: Int): ChapterSkips = withContext(Dispatchers.IO) {
+        if (chapterId <= 0 || !_currentCapabilities.value.playbackSkips) {
+            return@withContext ChapterSkips.empty(chapterId)
+        }
+        val session = tokenStore.current()
+        if (!session.isLoggedIn) return@withContext ChapterSkips.empty(chapterId)
+        val key = PlaybackSkipsCacheKey(session.serverUrl, session.username, chapterId)
+        val cached = synchronized(playbackSkipsCache) { playbackSkipsCache[key] }
+        try {
+            authorized { api ->
+                val response = api.playbackSkips(chapterId, cached?.etag)
+                when {
+                    response.code() == 304 -> cached?.skips ?: ChapterSkips.empty(chapterId)
+                    response.isSuccessful -> response.body()?.let { body ->
+                        if (body.chapterId != chapterId) return@let ChapterSkips.empty(chapterId)
+                        ChapterSkips.from(body, chapterId).also { skips ->
+                            synchronized(playbackSkipsCache) {
+                                playbackSkipsCache[key] = CachedPlaybackSkips(
+                                    response.headers()["ETag"],
+                                    skips,
+                                )
+                            }
+                        }
+                    } ?: ChapterSkips.empty(chapterId)
+                    else -> throw HttpException(response)
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            cached?.skips ?: ChapterSkips.empty(chapterId)
         }
     }
 

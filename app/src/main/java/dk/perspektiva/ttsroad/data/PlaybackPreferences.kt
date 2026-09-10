@@ -49,6 +49,15 @@ data class PlaybackPrefs(
      * to leave undecided until a sync lands.
      */
     val autoMarkPlayed: Boolean = DefaultAutoMarkPlayed,
+    /**
+     * Whether the player jumps over the advert regions the server describes for a chapter.
+     *
+     * Follows the account, like [autoMarkPlayed]. Cached here because the decision is made in the
+     * media service on a half-second tick with no UI attached — reading it from the network at each
+     * boundary is not an option, and a chapter that started before the first sync of a session must
+     * still skip.
+     */
+    val skipAdSegments: Boolean = DefaultSkipAdSegments,
 )
 
 /**
@@ -159,6 +168,7 @@ class PlaybackPreferences(private val context: Context) {
         val VolumeBoost = stringPreferencesKey("volume_boost")
         val SleepTimerDefaultMinutes = intPreferencesKey("sleep_timer_default_minutes")
         val AutoMarkPlayed = booleanPreferencesKey("auto_mark_played")
+        val SkipAdSegments = booleanPreferencesKey("skip_ad_segments")
     }
 
     val prefs: Flow<PlaybackPrefs> = context.playbackDataStore.data
@@ -177,6 +187,7 @@ class PlaybackPreferences(private val context: Context) {
                     stored[Keys.SleepTimerDefaultMinutes] ?: DefaultSleepTimerMinutes,
                 ),
                 autoMarkPlayed = stored[Keys.AutoMarkPlayed] ?: DefaultAutoMarkPlayed,
+                skipAdSegments = stored[Keys.SkipAdSegments] ?: DefaultSkipAdSegments,
             )
         }
 
@@ -208,5 +219,9 @@ class PlaybackPreferences(private val context: Context) {
 
     suspend fun setAutoMarkPlayed(enabled: Boolean) {
         context.playbackDataStore.edit { it[Keys.AutoMarkPlayed] = enabled }
+    }
+
+    suspend fun setSkipAdSegments(enabled: Boolean) {
+        context.playbackDataStore.edit { it[Keys.SkipAdSegments] = enabled }
     }
 }

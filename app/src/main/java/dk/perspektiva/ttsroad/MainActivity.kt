@@ -2775,6 +2775,9 @@ private fun PlayerScreen(
     // Either one made while listening gives no other sign that anything happened, and the
     // alternative — opening the list — is the thing they exist to avoid.
     var actionFeedback by remember { mutableStateOf<String?>(null) }
+    val transientFeedback by playbackController.transientFeedback.collectAsStateWithLifecycle()
+    val displayedFeedback = actionFeedback ?: transientFeedback
+
     // The marks in *this* chapter, for the strip under the scrub bar (#121). Scoped server-side:
     // `bookmarks()` takes a chapter id and had never been passed one, so the app was fetching the
     // whole account to render one chapter's worth.
@@ -2803,18 +2806,20 @@ private fun PlayerScreen(
             durationMs = playerState.durationMs,
         )
     }
-    LaunchedEffect(actionFeedback) {
-        // Clears itself: it is a confirmation, not a state the screen should settle into.
+    LaunchedEffect(actionFeedback, transientFeedback) {
         if (actionFeedback != null) {
             delay(4_000)
             actionFeedback = null
+        } else if (transientFeedback != null) {
+            delay(4_000)
+            playbackController.clearTransientFeedback()
         }
     }
     PlayerScreenBody(
         playerState = playerState,
         skipIntervalMs = skipIntervalMs,
         sleepTimerState = sleepTimerState,
-        actionFeedback = actionFeedback,
+        actionFeedback = displayedFeedback,
         canRead = capabilities.readAlong && playingChapterId != null,
         canBookmark = capabilities.bookmarks && playingChapterId != null,
         canReportPronunciation = capabilities.pronunciationReports && playingChapterId != null,
@@ -3931,6 +3936,16 @@ private fun SettingsScreen(
                         checked = prefs.autoMarkPlayed,
                         onCheckedChange = {
                             scope.launch { accountPreferenceSync.setAutoMarkPlayed(it) }
+                        },
+                    )
+                }
+
+                if (capabilities.playbackSkips && capabilities.playerPreferences) {
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    PlaybackSkipsSetting(
+                        enabled = prefs.skipAdSegments,
+                        onEnabledChange = {
+                            scope.launch { accountPreferenceSync.setSkipAdSegments(it) }
                         },
                     )
                 }
@@ -9077,6 +9092,41 @@ private fun ErrorPane(
         Button(onClick = onRetry, shape = RectangleShape) {
             Text("RETRY")
         }
+    }
+}
+
+@Composable
+internal fun PlaybackSkipsSetting(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = enabled,
+                role = Role.Switch,
+                onValueChange = onEnabledChange,
+            )
+            .semantics { contentDescription = "SKIP ADVERTS AND DISCLAIMERS" }
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            MetaText(text = "SKIP ADVERTS AND DISCLAIMERS")
+            Spacer(modifier = Modifier.height(2.dp))
+            MetaText(
+                text = "Jumps over timed non-story sections while playing. If scrubbing while paused, " +
+                    "the jump occurs when playback resumes. Follows your account.",
+                color = AarisColor.Dim,
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = enabled,
+            onCheckedChange = null,
+        )
     }
 }
 
