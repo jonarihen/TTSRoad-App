@@ -3468,6 +3468,7 @@ internal enum class SettingsSection(
     ServerStorage("DISK", "Server storage", alwaysPresent = false),
     PodcastFeeds("RSS", "Podcast feeds", alwaysPresent = false),
     ListeningState("BAK", "Listening state", alwaysPresent = false),
+    Shelf("LIB", "Your shelf", alwaysPresent = false),
     AudiobookExports("M4B", "Audiobook exports", alwaysPresent = false),
     App("05", "App", alwaysPresent = true),
 }
@@ -3675,6 +3676,12 @@ private fun SettingsScreen(
     var feedsError by remember { mutableStateOf<String?>(null) }
     var confirmRotateFeed by remember { mutableStateOf(false) }
     var backupNote by remember { mutableStateOf<String?>(null) }
+    // Emptying the shelf (#179). The count is loaded when the button is pressed rather than on
+    // entry, for the same reason the feed list is: this screen is opened to read a version number
+    // far more often than to do any of this, and the confirmation is the only thing that needs it.
+    var confirmEmptyShelf by remember { mutableStateOf(false) }
+    var shelfCount by remember { mutableStateOf<Int?>(null) }
+    var shelfNote by remember { mutableStateOf<String?>(null) }
     var backupError by remember { mutableStateOf<String?>(null) }
     var isBackupBusy by remember { mutableStateOf(false) }
 
@@ -4262,6 +4269,54 @@ private fun SettingsScreen(
             }
         }
 
+        // Emptying the shelf, under the backup and away from the library screen on purpose: the
+        // web console moved it off its dashboard for the same reason (TTSRoad#219). This is done
+        // once, if ever — usually right after the upgrade that handed you a shelf you did not pick
+        // — and it does not belong beside a control pressed every day.
+        //
+        // Gated on `bulkUnfollow`, not on `follows`: a server can have follow and unfollow without
+        // this one route, and that is exactly the server the flag exists to describe.
+        if (capabilities.bulkUnfollow) {
+            SettingsSectionHeader(SettingsSection.Shelf)
+            AarisCard {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MetaText(
+                        text = "Per-user libraries arrived by following every book that already " +
+                            "existed, so a shelf nobody picked is the usual starting state — and " +
+                            "every one of those follows can raise a new-chapter notice.",
+                        color = AarisColor.Dim,
+                    )
+                    shelfNote?.let { MetaText(text = it, color = AarisColor.Ok) }
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                isBusy = true
+                                shelfNote = null
+                                // Ask what the shelf holds before promising a number in the
+                                // confirmation. A count that failed to load is not shown as zero:
+                                // the dialog drops the number rather than inventing a reassuring
+                                // one for a destructive action.
+                                shelfCount = runCatching {
+                                    repository.library().followingIds.size
+                                }.getOrNull()
+                                isBusy = false
+                                confirmEmptyShelf = true
+                            }
+                        },
+                        enabled = !isBusy,
+                        shape = RectangleShape,
+                    ) {
+                        Text("EMPTY MY SHELF")
+                    }
+                }
+            }
+        }
+
         // Whole-book M4B files the server has already made (#113). Read-only and admin-only,
         // exactly as the server has it: starting an export and deleting one stay on the web
         // console. The app deliberately does not *play* these — it streams a fiction chapter by
@@ -4363,6 +4418,56 @@ private fun SettingsScreen(
         ) {
             Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
         }
+    }
+
+    if (confirmEmptyShelf) {
+        val count = shelfCount
+        ConfirmDialog(
+            title = "EMPTY YOUR SHELF?",
+            // The count is the promise, so it leads. When it could not be loaded the sentence is
+            // written without it rather than around a zero: "Remove 0 books" reads as "this will do
+            // nothing", which is the one thing it must not say before a destructive confirmation.
+            body = buildString {
+                append(
+                    when (count) {
+                        null -> "Every book you follow is removed from your shelf. "
+                        1 -> "The one book you follow is removed from your shelf. "
+                        else -> "All $count books you follow are removed from your shelf. "
+                    },
+                )
+                append(
+                    "Nothing is deleted on the server: every book stays, stays findable in " +
+                        "Browse, and keeps your positions, bookmarks and played marks if you " +
+                        "follow it again. Any new-chapter notices you are holding go with the " +
+                        "follows.",
+                )
+            },
+            confirmLabel = "EMPTY SHELF",
+            onDismiss = { confirmEmptyShelf = false },
+            onConfirm = {
+                confirmEmptyShelf = false
+                scope.launch {
+                    isBusy = true
+                    // Not swallowed: the user confirmed a destructive action against a stated
+                    // number and is owed the outcome. Reporting "removed 0" for a call that never
+                    // landed would read as "there was nothing there".
+                    shelfNote = runCatching { repository.unfollowAllFictions() }
+                        .fold(
+                            onSuccess = { removed ->
+                                when (removed) {
+                                    null -> "This server cannot empty a shelf in one call."
+                                    0 -> "Your shelf was already empty."
+                                    1 -> "One book removed from your shelf."
+                                    else -> "$removed books removed from your shelf."
+                                }
+                            },
+                            onFailure = { "Could not empty your shelf: ${it.message ?: "unknown error"}" },
+                        )
+                    shelfCount = null
+                    isBusy = false
+                }
+            },
+        )
     }
 
     if (confirmRotateFeed) {

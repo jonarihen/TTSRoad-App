@@ -403,6 +403,22 @@ class TtsRoadRepository(
     }
 
     /**
+     * Empty this account's shelf, answering how many follows went, or null when this server has no
+     * such route and the control should not have been offered.
+     *
+     * Gated on `bulkUnfollow` rather than on `follows` for the reason the flag exists: a server can
+     * have follow and unfollow and still not have this one call.
+     *
+     * A failure is *not* swallowed. The user confirmed a destructive action against a stated count
+     * and is waiting to hear whether it happened; answering 0 to a call that failed would read as
+     * "there was nothing to remove", which is the opposite of what went wrong.
+     */
+    suspend fun unfollowAllFictions(): Int? {
+        if (!_currentCapabilities.value.bulkUnfollow) return null
+        return withAuthorizedApi { it.unfollowAllFictions() }.removed
+    }
+
+    /**
      * Track a new fiction, or report why the server would not.
      *
      * Unlike most of this class, a failure here is *not* swallowed: the user typed something and is
