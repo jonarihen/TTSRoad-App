@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A point on the playback timeline: where the audio was at a given wall-clock moment. */
 data class HistorySnapshot(
@@ -37,6 +39,8 @@ class PlaybackHistoryStore(context: Context) {
         Types.newParameterizedType(List::class.java, HistorySnapshot::class.java),
     )
     private val file = File(context.applicationContext.filesDir, "playback_history.json")
+    private val lock = Any()
+    private val writeMutex = Mutex()
 
     private val _snapshots = MutableStateFlow(load())
     val snapshots: StateFlow<List<HistorySnapshot>> = _snapshots.asStateFlow()
@@ -52,22 +56,48 @@ class PlaybackHistoryStore(context: Context) {
     ) {
         if (mediaId.isBlank()) return
         val snap = HistorySnapshot(timestamp, mediaId, fictionId, chapterId, title, fictionTitle, positionMs.coerceAtLeast(0L))
-        val current = _snapshots.value
-        val last = current.lastOrNull()
-        // Collapse rapid repeats on the same chapter (e.g. pause right after a tick) into one point.
-        val updated = if (last != null && last.mediaId == mediaId && timestamp - last.timestamp < 5_000L) {
-            current.dropLast(1) + snap
-        } else {
-            current + snap
+        val capped = synchronized(lock) {
+            val current = _snapshots.value
+            val last = current.lastOrNull()
+            val updated = if (last != null && last.mediaId == mediaId && timestamp - last.timestamp < 5_000L) {
+                current.dropLast(1) + snap
+            } else {
+                current + snap
+            }
+            val list = if (updated.size > MAX_SNAPSHOTS) updated.takeLast(MAX_SNAPSHOTS) else updated
+            _snapshots.value = list
+            list
         }
-        val capped = if (updated.size > MAX_SNAPSHOTS) updated.takeLast(MAX_SNAPSHOTS) else updated
-        _snapshots.value = capped
-        scope.launch { runCatching { file.writeText(adapter.toJson(capped)) } }
+        scope.launch {
+            writeMutex.withLock {
+                val toWrite = synchronized(lock) {
+                    if (_snapshots.value.isEmpty()) null else capped
+                } ?: return@withLock
+                runCatching {
+                    val tmp = File(file.parentFile, "${file.name}.tmp")
+                    tmp.writeText(adapter.toJson(toWrite))
+                    if (!tmp.renameTo(file)) {
+                        if (file.exists()) file.delete()
+                        tmp.renameTo(file)
+                    }
+                }
+            }
+        }
     }
 
     fun clear() {
-        _snapshots.value = emptyList()
-        scope.launch { runCatching { if (file.exists()) file.delete() } }
+        synchronized(lock) {
+            _snapshots.value = emptyList()
+        }
+        scope.launch {
+            writeMutex.withLock {
+                runCatching {
+                    val tmp = File(file.parentFile, "${file.name}.tmp")
+                    if (tmp.exists()) tmp.delete()
+                    if (file.exists()) file.delete()
+                }
+            }
+        }
     }
 
     private fun load(): List<HistorySnapshot> =
