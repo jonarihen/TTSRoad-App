@@ -49,6 +49,8 @@ object ServiceLocator {
 
     @Volatile
     private var playbackPreferences: PlaybackPreferences? = null
+
+    @Volatile
     private var fictionSpeedPreferences: FictionSpeedPreferences? = null
 
     @Volatile
