@@ -1,5 +1,7 @@
 package dk.perspektiva.ttsroad.core
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+
 /**
  * The server builds absolute media URLs from its configured BASE_URL, which may not be the host
  * the device actually used to log in (and may even be relative if BASE_URL is unset). Rewriting
@@ -46,6 +48,16 @@ object ServerUrls {
         val absolute = Origin.find(value) ?: return rewriteHost(value, serverUrl)
         val path = value.substring(absolute.value.length)
         return if (ServerCoverPath.containsMatchIn(path)) rewriteHost(value, serverUrl) else value
+    }
+
+    /** True only when both URLs have the same scheme, host and effective port. */
+    fun isSameOrigin(requestUrl: String?, serverUrl: String?): Boolean {
+        if (requestUrl.isNullOrBlank() || serverUrl.isNullOrBlank()) return false
+        val request = requestUrl.toHttpUrlOrNull() ?: return false
+        val server = serverUrl.toHttpUrlOrNull() ?: return false
+        return request.scheme.equals(server.scheme, ignoreCase = true) &&
+            request.host.equals(server.host, ignoreCase = true) &&
+            request.port == server.port
     }
 
     /** `scheme://authority` of [serverUrl], or null if it is blank or has no authority. */

@@ -32,6 +32,7 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
+import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
 import dk.perspektiva.ttsroad.data.ChapterSkips
@@ -136,6 +137,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     @Volatile
     private var authHeader: String? = null
 
+    @Volatile
+    private var serverUrl: String = ""
+
     // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
     // and car transport read the preference from here rather than the DataStore.
     @Volatile
@@ -159,6 +163,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         serviceScope.launch {
             tokenStore.session.collectLatest { state ->
                 authHeader = state.authorizationHeader
+                serverUrl = state.serverUrl
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
                 // for the instant before its DataStore read finishes.
@@ -323,6 +328,9 @@ class TtsRoadMediaService : MediaLibraryService() {
             object : ResolvingDataSource.Resolver {
                 override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
                     val header = authHeader ?: return dataSpec
+                    if (!ServerUrls.isSameOrigin(dataSpec.uri.toString(), serverUrl)) {
+                        return dataSpec
+                    }
                     return dataSpec.withAdditionalHeaders(mapOf("Authorization" to header))
                 }
             },
