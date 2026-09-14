@@ -4,6 +4,7 @@ import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import dk.perspektiva.ttsroad.core.CrashReporter
+import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.map
@@ -52,10 +53,5 @@ class TtsRoadApplication : Application(), ImageLoaderFactory {
 }
 
 /** True only when both URLs have the same scheme, host and effective port. */
-internal fun isSameOrigin(requestUrl: String, serverUrl: String): Boolean {
-    val request = requestUrl.toHttpUrlOrNull() ?: return false
-    val server = serverUrl.toHttpUrlOrNull() ?: return false
-    return request.scheme.equals(server.scheme, ignoreCase = true) &&
-        request.host.equals(server.host, ignoreCase = true) &&
-        request.port == server.port
-}
+internal fun isSameOrigin(requestUrl: String, serverUrl: String): Boolean =
+    ServerUrls.isSameOrigin(requestUrl, serverUrl)

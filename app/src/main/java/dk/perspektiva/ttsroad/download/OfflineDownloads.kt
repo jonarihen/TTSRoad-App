@@ -171,6 +171,9 @@ class OfflineDownloads(
         DefaultHttpDataSource.Factory(),
         ResolvingDataSource.Resolver { dataSpec ->
             val header = authHeader ?: return@Resolver dataSpec
+            if (!ServerUrls.isSameOrigin(dataSpec.uri.toString(), serverUrl)) {
+                return@Resolver dataSpec
+            }
             dataSpec.withAdditionalHeaders(mapOf("Authorization" to header))
         },
     )

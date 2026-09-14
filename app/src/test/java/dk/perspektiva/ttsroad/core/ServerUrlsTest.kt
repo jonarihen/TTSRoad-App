@@ -1,7 +1,9 @@
 package dk.perspektiva.ttsroad.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServerUrlsTest {
@@ -111,6 +113,60 @@ class ServerUrlsTest {
     fun `resolveCoverOrNull rejects missing cover values`() {
         assertNull(ServerUrls.resolveCoverOrNull(null, "https://ttsroad.example.com/"))
         assertNull(ServerUrls.resolveCoverOrNull("   ", "https://ttsroad.example.com/"))
+    }
+
+    @Test
+    fun `isSameOrigin accepts matching scheme host and port`() {
+        assertTrue(
+            ServerUrls.isSameOrigin(
+                "https://ttsroad.example.com/audio/1.mp3",
+                "https://ttsroad.example.com/",
+            ),
+        )
+        assertTrue(
+            ServerUrls.isSameOrigin(
+                "https://ttsroad.example.com:8443/audio/1.mp3",
+                "https://ttsroad.example.com:8443",
+            ),
+        )
+        assertTrue(
+            ServerUrls.isSameOrigin(
+                "https://ttsroad.example.com:443/audio/1.mp3",
+                "https://ttsroad.example.com",
+            ),
+        )
+    }
+
+    @Test
+    fun `isSameOrigin rejects mismatched host or port or scheme`() {
+        assertFalse(
+            ServerUrls.isSameOrigin(
+                "https://evil.example.com/audio/1.mp3",
+                "https://ttsroad.example.com/",
+            ),
+        )
+        assertFalse(
+            ServerUrls.isSameOrigin(
+                "http://ttsroad.example.com/audio/1.mp3",
+                "https://ttsroad.example.com/",
+            ),
+        )
+        assertFalse(
+            ServerUrls.isSameOrigin(
+                "https://ttsroad.example.com:8000/audio/1.mp3",
+                "https://ttsroad.example.com:9000/",
+            ),
+        )
+    }
+
+    @Test
+    fun `isSameOrigin rejects blank or invalid inputs`() {
+        assertFalse(ServerUrls.isSameOrigin(null, "https://ttsroad.example.com/"))
+        assertFalse(ServerUrls.isSameOrigin("", "https://ttsroad.example.com/"))
+        assertFalse(ServerUrls.isSameOrigin("https://ttsroad.example.com/audio/1.mp3", null))
+        assertFalse(ServerUrls.isSameOrigin("https://ttsroad.example.com/audio/1.mp3", ""))
+        assertFalse(ServerUrls.isSameOrigin("not a url", "https://ttsroad.example.com/"))
+        assertFalse(ServerUrls.isSameOrigin("https://ttsroad.example.com/audio/1.mp3", "not a url"))
     }
 
     @Test
