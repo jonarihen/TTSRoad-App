@@ -77,7 +77,7 @@ fun chapterDownloadSpec(
     origin: DownloadOrigin = DownloadOrigin.Manual,
 ): ChapterDownloadSpec? {
     val rawUrl = chapter.audio?.url?.takeIf { it.isNotBlank() } ?: return null
-    val url = ServerUrls.rewriteHost(rawUrl.trim(), serverUrl)
+    val url = ServerUrls.rewriteAudioUrlOrNull(rawUrl.trim(), serverUrl) ?: return null
     return ChapterDownloadSpec(
         id = TtsRoadMediaIds.chapter(chapter.resolvedChapterId),
         url = url,

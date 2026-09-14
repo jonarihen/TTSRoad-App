@@ -168,4 +168,34 @@ class ServerUrlsTest {
         assertFalse(ServerUrls.isSameOrigin("not a url", "https://ttsroad.example.com/"))
         assertFalse(ServerUrls.isSameOrigin("https://ttsroad.example.com/audio/1.mp3", "not a url"))
     }
+
+    @Test
+    fun `rewriteAudioUrlOrNull rewrites onto the server origin`() {
+        assertEquals(
+            "https://ttsroad.example.com/audio/1.mp3",
+            ServerUrls.rewriteAudioUrlOrNull(
+                url = "https://base.example/audio/1.mp3",
+                serverUrl = "https://ttsroad.example.com/",
+            ),
+        )
+        assertEquals(
+            "https://ttsroad.example.com/audio/1.mp3",
+            ServerUrls.rewriteAudioUrlOrNull(
+                url = "/audio/1.mp3",
+                serverUrl = "https://ttsroad.example.com/",
+            ),
+        )
+    }
+
+    @Test
+    fun `rewriteAudioUrlOrNull fails closed when server url is unusable`() {
+        val url = "https://base.example/audio/1.mp3"
+        assertNull(ServerUrls.rewriteAudioUrlOrNull(url, serverUrl = null))
+        assertNull(ServerUrls.rewriteAudioUrlOrNull(url, serverUrl = ""))
+        assertNull(ServerUrls.rewriteAudioUrlOrNull(url, serverUrl = "   "))
+        assertNull(ServerUrls.rewriteAudioUrlOrNull(url, serverUrl = "not-a-url"))
+        assertNull(ServerUrls.rewriteAudioUrlOrNull(url, serverUrl = "https://"))
+        assertNull(ServerUrls.rewriteAudioUrlOrNull(null, serverUrl = "https://ttsroad.example.com/"))
+        assertNull(ServerUrls.rewriteAudioUrlOrNull("", serverUrl = "https://ttsroad.example.com/"))
+    }
 }

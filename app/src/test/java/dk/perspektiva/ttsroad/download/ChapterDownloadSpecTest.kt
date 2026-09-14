@@ -149,4 +149,12 @@ class ChapterDownloadSpecTest {
             decodeDownloadIds("7:42:something-later".toByteArray()),
         )
     }
+
+    @Test
+    fun `an unusable serverUrl returns null`() {
+        assertNull(chapterDownloadSpec(chapter(), serverUrl = null))
+        assertNull(chapterDownloadSpec(chapter(), serverUrl = ""))
+        assertNull(chapterDownloadSpec(chapter(), serverUrl = "   "))
+        assertNull(chapterDownloadSpec(chapter(), serverUrl = "not-a-url"))
+    }
 }
