@@ -96,6 +96,7 @@ class PlaybackController(
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
+            updateTicker(player)
             publishState(player)
         }
     }
@@ -134,12 +135,16 @@ class PlaybackController(
             if (created != null) {
                 controller = created
                 created.addListener(listener)
-                startTicker()
+                updateTicker(created)
                 publishState(created)
             }
             created
         }.also { connecting = it }
-        return pending.await()
+        val result = runCatching { pending.await() }.getOrNull()
+        if (result == null) {
+            connecting = null
+        }
+        return result
     }
 
     suspend fun play(chapter: ChapterSummary, fiction: FictionSummary? = chapter.fiction) {
@@ -333,6 +338,8 @@ class PlaybackController(
     /** Stop and clear playback, e.g. on logout. */
     fun stop() {
         val controller = controller ?: return
+        tickerJob?.cancel()
+        tickerJob = null
         controller.pause()
         controller.clearMediaItems()
         _state.value = PlayerUiState()
@@ -340,6 +347,7 @@ class PlaybackController(
 
     fun release() {
         tickerJob?.cancel()
+        tickerJob = null
         controller?.removeListener(listener)
         controller?.release()
         controller = null
@@ -347,13 +355,19 @@ class PlaybackController(
         _state.value = PlayerUiState()
     }
 
-    private fun startTicker() {
-        tickerJob?.cancel()
-        tickerJob = scope.launch {
-            while (isActive) {
-                controller?.let(::publishState)
-                delay(1000)
+    private fun updateTicker(player: Player) {
+        if (player.isPlaying) {
+            if (tickerJob?.isActive != true) {
+                tickerJob = scope.launch {
+                    while (isActive) {
+                        delay(1000)
+                        controller?.let(::publishState)
+                    }
+                }
             }
+        } else {
+            tickerJob?.cancel()
+            tickerJob = null
         }
     }
 
