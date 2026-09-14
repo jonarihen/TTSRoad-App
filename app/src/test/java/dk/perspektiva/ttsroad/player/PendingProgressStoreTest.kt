@@ -229,4 +229,40 @@ class PendingProgressStoreTest {
         assertTrue(store.isEmpty())
         assertFalse(file.exists())
     }
+
+    @Test
+    fun `playback history store records and clears snapshots atomically`() {
+        val context = RuntimeEnvironment.getApplication()
+        val historyFile = File(context.filesDir, "playback_history.json")
+        historyFile.delete()
+        val historyStore = PlaybackHistoryStore(context)
+
+        historyStore.record(
+            timestamp = 1000L,
+            mediaId = "chapter:1",
+            fictionId = 10,
+            chapterId = 1,
+            title = "Chapter 1",
+            fictionTitle = "Fiction A",
+            positionMs = 5000L,
+        )
+        assertEquals(1, historyStore.snapshots.value.size)
+        assertEquals("chapter:1", historyStore.snapshots.value[0].mediaId)
+
+        historyStore.clear()
+        assertEquals(0, historyStore.snapshots.value.size)
+    }
+
+    @Test
+    fun `playback history store collapses rapid repeats on the same chapter`() {
+        val context = RuntimeEnvironment.getApplication()
+        val historyStore = PlaybackHistoryStore(context)
+        historyStore.clear()
+
+        historyStore.record(1000L, "chapter:1", 10, 1, "C1", "F", 1000L)
+        historyStore.record(2000L, "chapter:1", 10, 1, "C1", "F", 2000L)
+
+        assertEquals(1, historyStore.snapshots.value.size)
+        assertEquals(2000L, historyStore.snapshots.value[0].positionMs)
+    }
 }
