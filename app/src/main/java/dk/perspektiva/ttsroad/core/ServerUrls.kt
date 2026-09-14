@@ -34,6 +34,17 @@ object ServerUrls {
     fun rewriteHostOrNull(url: String?, serverUrl: String?): String? =
         url?.takeIf { it.isNotBlank() }?.let { rewriteHost(it, serverUrl) }
 
+    fun rewriteAudioUrlOrNull(url: String?, serverUrl: String?): String? {
+        val value = url?.takeIf { it.isNotBlank() } ?: return null
+        val origin = origin(serverUrl) ?: return null
+        val absolute = Origin.find(value)
+        return if (absolute != null) {
+            origin + value.substring(absolute.value.length)
+        } else {
+            origin + "/" + value.trimStart('/')
+        }
+    }
+
     /**
      * Resolve a cover URL without rewriting third-party artwork onto the TTSRoad server.
      *

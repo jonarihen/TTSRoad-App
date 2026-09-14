@@ -133,7 +133,8 @@ object TtsRoadMediaItems {
         serverUrl: String? = null,
     ): MediaItem? {
         val rawUrl = chapter.audio?.url ?: return null
-        val audioUri = ServerUrls.rewriteHost(rawUrl, serverUrl).toUri()
+        val audioUrl = ServerUrls.rewriteAudioUrlOrNull(rawUrl, serverUrl) ?: return null
+        val audioUri = audioUrl.toUri()
         val extras = Bundle().apply {
             putInt("fiction_id", chapter.resolvedFictionId)
             putInt("chapter_id", chapter.resolvedChapterId)
@@ -186,7 +187,8 @@ object TtsRoadMediaItems {
      */
     fun queueItem(item: QueueItem, serverUrl: String? = null): MediaItem? {
         val rawUrl = item.audio?.url ?: return null
-        val audioUri = ServerUrls.rewriteHost(rawUrl, serverUrl).toUri()
+        val audioUrl = ServerUrls.rewriteAudioUrlOrNull(rawUrl, serverUrl) ?: return null
+        val audioUri = audioUrl.toUri()
         val extras = Bundle().apply {
             putInt("fiction_id", item.fictionId)
             putInt("chapter_id", item.chapterId)

@@ -568,7 +568,7 @@ class OfflineDownloads(
                     send(
                         DownloadRequest.Builder(
                             request.id,
-                            ServerUrls.rewriteHost(request.uri.toString(), serverUrl).toUri(),
+                            ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), serverUrl)?.toUri() ?: request.uri,
                         )
                             .setCustomCacheKey(
                                 DownloadCacheKeys.forUrl(request.uri.toString(), identity),
