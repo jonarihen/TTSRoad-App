@@ -3,8 +3,10 @@ package dk.perspektiva.ttsroad.player
 import dk.perspektiva.ttsroad.data.PlaybackSyncItem
 import dk.perspektiva.ttsroad.data.PlaybackSyncState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * A rejection the client should stop retrying.
@@ -103,7 +105,7 @@ class ProgressSync(
                     .filter { it.reason in TerminalRejectReasons }
                     .forEach { rejected -> byChapter[rejected.chapterId]?.let(::add) }
             }
-            store.resolve(settled)
+            withContext(Dispatchers.IO) { store.resolve(settled) }
 
             // A `stale` rejection is the case this whole mechanism exists for: the phone's write
             // lost to a newer one. Hand back what the server actually holds so the caller can show
@@ -143,7 +145,7 @@ class ProgressSync(
                 )
             }.isSuccess
             if (!ok) break // Still offline; keep this and everything after it.
-            store.resolve(listOf(entry))
+            withContext(Dispatchers.IO) { store.resolve(listOf(entry)) }
             accepted++
         }
         return ProgressFlushResult(

@@ -145,12 +145,23 @@ class PendingProgressStore(
     fun clear() {
         synchronized(lock) {
             entries.clear()
-            runCatching { if (file.exists()) file.delete() }
+            runCatching {
+                val tmp = File(file.parentFile, "${file.name}.tmp")
+                if (tmp.exists()) tmp.delete()
+                if (file.exists()) file.delete()
+            }
         }
     }
 
     private fun persist() {
-        runCatching { file.writeText(adapter.toJson(entries)) }
+        runCatching {
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            tmp.writeText(adapter.toJson(entries))
+            if (!tmp.renameTo(file)) {
+                if (file.exists()) file.delete()
+                tmp.renameTo(file)
+            }
+        }
     }
 
     private fun load(): List<PendingProgress> =

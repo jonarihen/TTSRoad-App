@@ -86,6 +86,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Media3 marks much of its session and data-source surface @UnstableApi. The whole class works
 // against it, so opt in once here rather than annotating each member and still missing the
@@ -168,7 +169,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // on sign-out so a later process can never show the previous account's book, even
                 // for the instant before its DataStore read finishes.
                 if (!state.isLoggedIn) {
-                    nowPlayingStore.clear()
+                    withContext(Dispatchers.IO) { nowPlayingStore.clear() }
                     runCatching { NowPlayingWidget().updateAll(this@TtsRoadMediaService) }
                 }
             }
@@ -770,11 +771,13 @@ class TtsRoadMediaService : MediaLibraryService() {
             isPlaying = forcePlaying ?: player.isPlaying,
             updatedAt = now,
         )
-        if (current != null) {
-            nowPlayingStore.write(current)
-        } else {
-            nowPlayingStore.read()?.let { previous ->
-                nowPlayingStore.write(previous.copy(isPlaying = false, updatedAt = now))
+        withContext(Dispatchers.IO) {
+            if (current != null) {
+                nowPlayingStore.write(current)
+            } else {
+                nowPlayingStore.read()?.let { previous ->
+                    nowPlayingStore.write(previous.copy(isPlaying = false, updatedAt = now))
+                }
             }
         }
         runCatching { NowPlayingWidget().updateAll(this) }
@@ -825,12 +828,14 @@ class TtsRoadMediaService : MediaLibraryService() {
         // carried an unstamped position the server could not order against one reached in the
         // browser meanwhile, and so overwrote it. The queue is what makes the position survive
         // being offline, and the stamp is what lets the server decide who is actually newer.
-        pendingProgress.record(
-            fictionId = fictionId,
-            chapterId = chapterId,
-            positionSeconds = position / 1000.0,
-            isPlayed = forcePlayed || nearComplete,
-        )
+        withContext(Dispatchers.IO) {
+            pendingProgress.record(
+                fictionId = fictionId,
+                chapterId = chapterId,
+                positionSeconds = position / 1000.0,
+                isPlayed = forcePlayed || nearComplete,
+            )
+        }
         progressSync.flush()
 
         writeBreadcrumb(chapterId = chapterId, positionMs = position)
