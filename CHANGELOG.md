@@ -2,6 +2,53 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.15.5 — 2026-09-15
+
+### Added
+
+- **Settings can empty your shelf in one go.** Per-user libraries arrived by giving every existing
+  account a follow of every existing fiction, so a shelf nobody picked is the usual starting state
+  — and since new-chapter notices arrived, every one of those follows can make the phone buzz for a
+  serial the reader never chose. Undoing that a book at a time is a long scroll. A *Your shelf*
+  band on Settings now does it in one call, behind a confirmation that names the number it is about
+  to remove.
+
+  It sits under the listening-state backup rather than near the library, matching where the web
+  console put it: this is done once, if ever, and does not belong beside a control pressed every
+  day. Nothing is deleted on the server — every book stays, stays findable in Browse, and keeps its
+  positions, bookmarks and played marks if it is followed again — but the new-chapter notices go
+  with the follows, which is most of the point. Offered only on a server advertising
+  `bulk_unfollow`, which is its own capability: a server can have follow and unfollow without this
+  one route. (TTSRoad-App#179)
+
+### Fixed
+
+- Audio and download requests only carry the bearer token when they go to the signed-in server:
+  the header is gated on an origin check, redirects never forward it to another host, and the
+  token and server address are published together as one snapshot so a sign-in can never pair a
+  new account's token with the previous server. Audio URLs also fail closed when no usable server
+  origin is known instead of streaming from an unvouched address.
+- Signing out now stops playback and clears the queue in the service itself, so cached audio cannot
+  keep playing after the session ends — even when started from the car or a notification.
+- Read-along documents are keyed to the session that fetched them: a chapter opened on a new
+  server, or by a different account, can no longer show the previous session's text and timings.
+- Playback history writes and deletes are ordered by generation and written atomically, so the
+  jump-back trail can no longer lose recent snapshots or be resurrected after a clear.
+- The home-screen widget snapshot is published in capture order with atomic file replacement, so a
+  stale "playing" state cannot overwrite a newer pause, and clearing on sign-out is durable.
+- Pending progress, widget snapshots and sign-out cleanup no longer write to disk on the main
+  thread; the UI ticker only runs while audio is actually playing and the media controller is
+  fully released on sign-out, with failed connection attempts no longer poisoning playback until
+  a force-stop.
+- Update downloads survive rotation and are aborted cleanly on cancellation instead of continuing
+  in the background and dropping the finished APK.
+- Library delta refreshes and per-fiction chapter refreshes are serialized, so a sparse update can
+  no longer overwrite a change that already arrived and mark it consumed.
+- The capabilities panel lists new-chapter notices instead of burying them. `notifications` had
+  been live on the server and parsed by the app since 0.15.0, but was missing from the panel's
+  ordered table, so it sorted into the unknown tail under its raw key. The panel's own test only
+  ever asked whether a flag had a label, not whether it had a place; it now asks both.
+
 ## 0.15.4 — 2026-09-10
 
 ### Fixed
@@ -46,23 +93,6 @@ Notable changes to the TTSRoad Android client.
 
 ## 0.15.1 — 2026-09-06
 
-### Added
-
-- **Settings can empty your shelf in one go.** Per-user libraries arrived by giving every existing
-  account a follow of every existing fiction, so a shelf nobody picked is the usual starting state
-  — and since new-chapter notices arrived, every one of those follows can make the phone buzz for a
-  serial the reader never chose. Undoing that a book at a time is a long scroll. A *Your shelf*
-  band on Settings now does it in one call, behind a confirmation that names the number it is about
-  to remove.
-
-  It sits under the listening-state backup rather than near the library, matching where the web
-  console put it: this is done once, if ever, and does not belong beside a control pressed every
-  day. Nothing is deleted on the server — every book stays, stays findable in Browse, and keeps its
-  positions, bookmarks and played marks if it is followed again — but the new-chapter notices go
-  with the follows, which is most of the point. Offered only on a server advertising
-  `bulk_unfollow`, which is its own capability: a server can have follow and unfollow without this
-  one route. (TTSRoad-App#179)
-
 ### Fixed
 
 - **The reader no longer lets the spoken line walk off the bottom of the screen.** Auto-scroll
@@ -93,11 +123,6 @@ Notable changes to the TTSRoad Android client.
   shows whenever it is there. The local mapping stays as the fallback for an older server, and
   Royal Road is still hidden — that is a decision about the default source, so it keys off
   `source_type` rather than off whatever the server calls it. (TTSRoad-App#178)
-
-- **The capabilities panel lists new-chapter notices instead of burying them.** `notifications` had
-  been live on the server and parsed by the app since 0.15.0, but was missing from the panel's
-  ordered table, so it sorted into the unknown tail under its raw key. The panel's own test only
-  ever asked whether a flag had a label, not whether it had a place; it now asks both.
 
 ### Changed
 
