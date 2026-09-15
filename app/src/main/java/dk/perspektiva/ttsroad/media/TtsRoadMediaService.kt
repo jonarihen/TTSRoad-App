@@ -708,12 +708,11 @@ class TtsRoadMediaService : MediaLibraryService() {
         // Null in the ordinary case — a car has no reader open — and the contract expects that: a
         // report with no word still names ten seconds for a human to listen to. Nothing here is
         // allowed to fail the capture, so the lookup neither fetches nor throws.
-        val word = pronunciationWordAt(
-            document = repository.loadedReadAlong(target.chapterId),
-            positionSeconds = target.positionSeconds,
-        )
-
         return serviceScope.future {
+            val word = pronunciationWordAt(
+                document = repository.loadedReadAlong(target.chapterId),
+                positionSeconds = target.positionSeconds,
+            )
             val outcome = pronunciationReportOutcomeFor(
                 runCatching {
                     repository.createPronunciationReport(

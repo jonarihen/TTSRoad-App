@@ -185,6 +185,7 @@ class TtsRoadRepository(
     private data class CachedReadAlongDocument(
         val etag: String?,
         val document: ReadAlongDocument,
+        val owner: String,
     )
 
     private val playbackSkipsCache = HashMap<PlaybackSkipsCacheKey, CachedPlaybackSkips>()
@@ -280,6 +281,7 @@ class TtsRoadRepository(
     suspend fun endSession(end: SessionEnd) = withContext(Dispatchers.IO) {
         authHeader = null
         tokenStore.clearToken()
+        invalidateReader()
         _sessionEnd.value = end
     }
 
@@ -298,9 +300,8 @@ class TtsRoadRepository(
         _currentCapabilities.value = ServerCapabilities.Baseline
         // Chapter text is account-visible content, and chapter ids are only unique per server, so a
         // cached read-along must never outlive the session that fetched it.
-        synchronized(readAlongCache) { readAlongCache.clear() }
+        invalidateReader()
         synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
-        readAlongStore.clear()
     }
 
     /**
@@ -627,24 +628,57 @@ class TtsRoadRepository(
      * into a `304` — chapter text never changes after conversion, so that is the normal case, and
      * it is what keeps re-entering a chapter from re-downloading a megabyte of cues.
      */
+    private val readerMutex = kotlinx.coroutines.sync.Mutex()
+    @Volatile private var readerGeneration = 0L
+
+    private suspend fun invalidateReader() {
+        readerMutex.lock()
+        try {
+            readerGeneration++
+            synchronized(readAlongCache) { readAlongCache.clear() }
+            readAlongStore.clear()
+        } finally {
+            readerMutex.unlock()
+        }
+    }
+
+    private fun readerOwner(session: SessionState): String = readAlongOwnerOf(session)
+
+    private suspend fun <T> readerAccess(session: SessionState, generation: Long, block: () -> T): T {
+        readerMutex.lock()
+        try {
+            check(session.isLoggedIn && tokenStore.current() == session && generation == readerGeneration) {
+                "Read-along session changed"
+            }
+            return block()
+        } finally {
+            readerMutex.unlock()
+        }
+    }
+
     suspend fun readAlong(chapterId: Int): ReadAlongDocument? = withContext(Dispatchers.IO) {
-        val cached = cachedReadAlong(chapterId)
+        val session = tokenStore.current()
+        val generation = readerGeneration
+        val owner = readerOwner(session)
+        val cached = readerAccess(session, generation) { cachedReadAlong(chapterId, owner) }
         try {
             authorized { api ->
                 // Only send If-None-Match when there is something to revalidate, so a 304 can never
                 // arrive without a document to answer it with.
                 val response = api.readAlong(chapterId, cached?.etag)
                 when {
-                    response.code() == 304 -> cached?.document
+                    response.code() == 304 -> readerAccess(session, generation) { cached?.document }
                     response.code() == 404 -> null
                     response.isSuccessful -> response.body()?.let { body ->
                         val document = ReadAlongDocument.from(body)
                         val etag = response.headers()["ETag"]
-                        synchronized(readAlongCache) {
-                            readAlongCache[chapterId] = CachedReadAlongDocument(etag, document)
+                        readerAccess(session, generation) {
+                            synchronized(readAlongCache) {
+                                readAlongCache[chapterId] = CachedReadAlongDocument(etag, document, owner)
+                            }
+                            readAlongStore.write(chapterId, CachedReadAlong(etag, body, owner))
+                            document
                         }
-                        readAlongStore.write(chapterId, CachedReadAlong(etag, body))
-                        document
                     }
 
                     // Rethrown so `authorized` can see a 401 and expire the session; every other
@@ -652,13 +686,13 @@ class TtsRoadRepository(
                     else -> throw HttpException(response)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: HttpException) {
             if (e.code() == 401) throw e
-            cached?.document ?: throw e
+            readerAccess(session, generation) { cached?.document ?: throw e }
         } catch (e: Exception) {
-            // Offline, or the server is down: the text the user already read is a far better answer
-            // than an error screen.
-            cached?.document ?: throw e
+            readerAccess(session, generation) { cached?.document ?: throw e }
         }
     }
 
@@ -717,29 +751,42 @@ class TtsRoadRepository(
      * quietly half-broken rather than asking for a sign-in.
      */
     suspend fun pinReadAlong(chapterId: Int): Boolean = withContext(Dispatchers.IO) {
-        if (readAlongStore.isPinned(chapterId)) return@withContext true
-        // Already on disk from having been read: promote it rather than spending a request.
-        readAlongStore.read(chapterId)?.let { cached ->
-            readAlongStore.pin(chapterId, cached)
-            return@withContext true
+        val session = tokenStore.current()
+        if (!session.isLoggedIn) return@withContext false
+        val generation = readerGeneration
+        val owner = readerOwner(session)
+        val promoted = readerAccess(session, generation) {
+            val held = readAlongStore.read(chapterId)?.takeIf { it.owner == owner }
+            when {
+                held == null -> false
+                readAlongStore.isPinned(chapterId) -> true
+                else -> {
+                    readAlongStore.pin(chapterId, held)
+                    true
+                }
+            }
         }
-        runCatching {
+        if (promoted) return@withContext true
+        try {
             authorized { api ->
                 val response = api.readAlong(chapterId, null)
                 when {
                     response.code() == 404 -> false
                     response.isSuccessful -> response.body()?.let { body ->
-                        readAlongStore.pin(
-                            chapterId,
-                            CachedReadAlong(response.headers()["ETag"], body),
-                        )
-                        true
+                        readerAccess(session, generation) {
+                            readAlongStore.pin(chapterId, CachedReadAlong(response.headers()["ETag"], body, owner))
+                            true
+                        }
                     } ?: false
 
                     else -> throw HttpException(response)
                 }
             }
-        }.getOrDefault(false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /** Release a pinned document, when its chapter's audio is deleted. */
@@ -762,14 +809,19 @@ class TtsRoadRepository(
      * reader has this chapter open, or had it open this session — which is exactly the case the
      * issue describes as "a read-along document happens to be loaded".
      */
-    fun loadedReadAlong(chapterId: Int): ReadAlongDocument? =
-        synchronized(readAlongCache) { readAlongCache[chapterId] }?.document
+    suspend fun loadedReadAlong(chapterId: Int): ReadAlongDocument? {
+        val session = tokenStore.current()
+        if (!session.isLoggedIn) return null
+        return synchronized(readAlongCache) {
+            readAlongCache[chapterId]?.takeIf { it.owner == readerOwner(session) }?.document
+        }
+    }
 
     /** Whatever copy of [chapterId] we already hold, promoting the on-disk one into memory. */
-    private fun cachedReadAlong(chapterId: Int): CachedReadAlongDocument? {
-        synchronized(readAlongCache) { readAlongCache[chapterId] }?.let { return it }
-        val stored = readAlongStore.read(chapterId) ?: return null
-        val restored = CachedReadAlongDocument(stored.etag, ReadAlongDocument.from(stored.response))
+    private fun cachedReadAlong(chapterId: Int, owner: String): CachedReadAlongDocument? {
+        synchronized(readAlongCache) { readAlongCache[chapterId] }?.takeIf { it.owner == owner }?.let { return it }
+        val stored = readAlongStore.read(chapterId)?.takeIf { it.owner == owner } ?: return null
+        val restored = CachedReadAlongDocument(stored.etag, ReadAlongDocument.from(stored.response), owner)
         synchronized(readAlongCache) { readAlongCache[chapterId] = restored }
         return restored
     }
@@ -1540,6 +1592,7 @@ class TtsRoadRepository(
                 if (tokenStore.current().token == session.token) {
                     authHeader = null
                     tokenStore.clearToken()
+                    invalidateReader()
                     _sessionEnd.value = parseSessionEnd(e.response()?.errorBody()?.string())
                 }
             }
