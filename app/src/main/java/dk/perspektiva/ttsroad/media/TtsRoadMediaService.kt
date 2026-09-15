@@ -169,6 +169,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // on sign-out so a later process can never show the previous account's book, even
                 // for the instant before its DataStore read finishes.
                 if (!state.isLoggedIn) {
+                    if (::player.isInitialized) stopSignedOutPlayback(player)
                     withContext(Dispatchers.IO) { nowPlayingStore.clear() }
                     runCatching { NowPlayingWidget().updateAll(this@TtsRoadMediaService) }
                 }
@@ -1347,5 +1348,11 @@ class TtsRoadMediaService : MediaLibraryService() {
         /** Short enough that the sleep timer's fade-out is smooth rather than stepped. */
         const val SLEEP_TIMER_TICK_MS = 500L
     }
+}
+
+internal fun stopSignedOutPlayback(player: Player) {
+    player.pause()
+    player.stop()
+    player.clearMediaItems()
 }
 

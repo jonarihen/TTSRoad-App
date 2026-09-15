@@ -439,6 +439,7 @@ private fun TtsRoadApp(
             }
         } else {
             backStack = rootBackStack
+            playbackController.stop()
             playbackController.release()
             // The cache outlives the composition, so signing out has to empty it explicitly —
             // otherwise the next account is shown the previous one's library.
