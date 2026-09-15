@@ -27,20 +27,88 @@ data class HistorySnapshot(
 )
 
 /**
+ * Where the history lives between launches.
+ *
+ * An interface so the ordering of writes against deletes can be tested without a filesystem, and
+ * without depending on which of two IO threads happens to win.
+ */
+internal interface HistoryPersistence {
+    fun read(): String?
+    fun write(json: String)
+    fun delete()
+}
+
+/** The real one: a temp file renamed over the target, so a kill mid-write cannot truncate it. */
+internal class FileHistoryPersistence(private val file: File) : HistoryPersistence {
+    override fun read(): String? = runCatching { if (file.isFile) file.readText() else null }.getOrNull()
+
+    override fun write(json: String) {
+        runCatching {
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            tmp.writeText(json)
+            if (!tmp.renameTo(file)) {
+                if (file.exists()) file.delete()
+                tmp.renameTo(file)
+            }
+        }
+    }
+
+    override fun delete() {
+        runCatching {
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            if (tmp.exists()) tmp.delete()
+            if (file.exists()) file.delete()
+        }
+    }
+}
+
+/**
+ * What the next persist should make the file say, and which mutation asked for it.
+ *
+ * The generation is the whole point: every mutation orders itself against the others, so a persist
+ * that starts late can tell that it has nothing left to say rather than writing what it captured.
+ */
+private sealed interface PendingPersist {
+    val generation: Long
+
+    data class Write(override val generation: Long, val snapshots: List<HistorySnapshot>) : PendingPersist
+    data class Delete(override val generation: Long) : PendingPersist
+}
+
+/**
  * Records a rolling history of playback positions over real time so the user can "jump back to
  * where they fell asleep" — even though playback kept going. Snapshots are taken by the media
  * service while playing (so it keeps logging with the app backgrounded) and persisted to disk so
  * they survive process death. Inspired by Audiobookshelf's listening-history rewind.
+ *
+ * Mutations are ordered by a generation counter rather than by which IO job reaches the write lock
+ * first. Two jobs launched in order can arrive in either order — they run on a multi-threaded
+ * dispatcher — so a job that wrote the list it captured could put an older history back over a
+ * newer one, and a `clear` could delete a file that a later `record` had just written. Each persist
+ * instead performs the newest pending intent and skips entirely if a newer one has already landed.
  */
-class PlaybackHistoryStore(context: Context) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+class PlaybackHistoryStore internal constructor(
+    private val persistence: HistoryPersistence,
+    private val scope: CoroutineScope,
+) {
+    constructor(context: Context) : this(
+        FileHistoryPersistence(File(context.applicationContext.filesDir, "playback_history.json")),
+        CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
+
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val adapter = moshi.adapter<List<HistorySnapshot>>(
         Types.newParameterizedType(List::class.java, HistorySnapshot::class.java),
     )
-    private val file = File(context.applicationContext.filesDir, "playback_history.json")
     private val lock = Any()
     private val writeMutex = Mutex()
+
+    /** Guarded by [lock]: the newest intent, and how many mutations have been ordered. */
+    private var generation = 0L
+    private var pending: PendingPersist? = null
+
+    /** Guarded by [writeMutex]: the newest generation that has actually reached the disk. */
+    private var persistedGeneration = 0L
 
     private val _snapshots = MutableStateFlow(load())
     val snapshots: StateFlow<List<HistorySnapshot>> = _snapshots.asStateFlow()
@@ -56,7 +124,7 @@ class PlaybackHistoryStore(context: Context) {
     ) {
         if (mediaId.isBlank()) return
         val snap = HistorySnapshot(timestamp, mediaId, fictionId, chapterId, title, fictionTitle, positionMs.coerceAtLeast(0L))
-        val capped = synchronized(lock) {
+        synchronized(lock) {
             val current = _snapshots.value
             val last = current.lastOrNull()
             val updated = if (last != null && last.mediaId == mediaId && timestamp - last.timestamp < 5_000L) {
@@ -66,42 +134,43 @@ class PlaybackHistoryStore(context: Context) {
             }
             val list = if (updated.size > MAX_SNAPSHOTS) updated.takeLast(MAX_SNAPSHOTS) else updated
             _snapshots.value = list
-            list
+            pending = PendingPersist.Write(++generation, list)
         }
-        scope.launch {
-            writeMutex.withLock {
-                val toWrite = synchronized(lock) {
-                    if (_snapshots.value.isEmpty()) null else capped
-                } ?: return@withLock
-                runCatching {
-                    val tmp = File(file.parentFile, "${file.name}.tmp")
-                    tmp.writeText(adapter.toJson(toWrite))
-                    if (!tmp.renameTo(file)) {
-                        if (file.exists()) file.delete()
-                        tmp.renameTo(file)
-                    }
-                }
-            }
-        }
+        schedulePersist()
     }
 
     fun clear() {
         synchronized(lock) {
             _snapshots.value = emptyList()
+            pending = PendingPersist.Delete(++generation)
         }
-        scope.launch {
-            writeMutex.withLock {
-                runCatching {
-                    val tmp = File(file.parentFile, "${file.name}.tmp")
-                    if (tmp.exists()) tmp.delete()
-                    if (file.exists()) file.delete()
-                }
+        schedulePersist()
+    }
+
+    private fun schedulePersist() {
+        scope.launch { persistPending() }
+    }
+
+    /**
+     * Carry out the newest pending intent, or nothing at all.
+     *
+     * Deliberately reads [pending] *inside* the lock rather than being handed a list: that read is
+     * what makes a late job write the current history instead of the one it was queued with.
+     */
+    internal suspend fun persistPending() {
+        writeMutex.withLock {
+            val action = synchronized(lock) { pending } ?: return@withLock
+            if (action.generation <= persistedGeneration) return@withLock
+            when (action) {
+                is PendingPersist.Write -> persistence.write(adapter.toJson(action.snapshots))
+                is PendingPersist.Delete -> persistence.delete()
             }
+            persistedGeneration = action.generation
         }
     }
 
     private fun load(): List<HistorySnapshot> =
-        runCatching { if (file.isFile) adapter.fromJson(file.readText()) else null }
+        runCatching { persistence.read()?.let { adapter.fromJson(it) } }
             .getOrNull()
             ?: emptyList()
 
