@@ -98,11 +98,9 @@ class OfflineDownloads(
     // Same contract as the player's resolver: read the latest header per request, so signing out
     // and back in does not require rebuilding the cache, the manager or the player.
     @Volatile
-    private var authHeader: String? = null
+    private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
 
-    /** Address the phone signed in on — used to point a re-keyed download at a reachable host. */
-    @Volatile
-    private var serverUrl: String = ""
+    private val serverUrl: String get() = audioAuth.serverUrl
 
     /**
      * Which server the cache entries belong to, once it has said so. Null until capabilities come
@@ -170,11 +168,8 @@ class OfflineDownloads(
     private val upstreamFactory: DataSource.Factory = ResolvingDataSource.Factory(
         DefaultHttpDataSource.Factory(),
         ResolvingDataSource.Resolver { dataSpec ->
-            val header = authHeader ?: return@Resolver dataSpec
-            if (!ServerUrls.isSameOrigin(dataSpec.uri.toString(), serverUrl)) {
-                return@Resolver dataSpec
-            }
-            dataSpec.withAdditionalHeaders(mapOf("Authorization" to header))
+            val snapshot = audioAuth
+            snapshot.resolve(dataSpec)
         },
     )
 
@@ -220,8 +215,7 @@ class OfflineDownloads(
     init {
         scope.launch {
             tokenStore.session.collectLatest {
-                authHeader = it.authorizationHeader
-                serverUrl = it.serverUrl
+                audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(it.serverUrl, it.authorizationHeader)
             }
         }
         scope.launch {

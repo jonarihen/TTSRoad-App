@@ -136,10 +136,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var lastBreadcrumbPruneAt: Long? = null
 
     @Volatile
-    private var authHeader: String? = null
-
-    @Volatile
-    private var serverUrl: String = ""
+    private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
 
     // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
     // and car transport read the preference from here rather than the DataStore.
@@ -163,8 +160,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         serviceScope.launch { progressSync.flush() }
         serviceScope.launch {
             tokenStore.session.collectLatest { state ->
-                authHeader = state.authorizationHeader
-                serverUrl = state.serverUrl
+                audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(state.serverUrl, state.authorizationHeader)
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
                 // for the instant before its DataStore read finishes.
@@ -329,11 +325,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             DefaultHttpDataSource.Factory(),
             object : ResolvingDataSource.Resolver {
                 override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
-                    val header = authHeader ?: return dataSpec
-                    if (!ServerUrls.isSameOrigin(dataSpec.uri.toString(), serverUrl)) {
-                        return dataSpec
-                    }
-                    return dataSpec.withAdditionalHeaders(mapOf("Authorization" to header))
+                    val snapshot = audioAuth
+                    return snapshot.resolve(dataSpec)
                 }
             },
         )
