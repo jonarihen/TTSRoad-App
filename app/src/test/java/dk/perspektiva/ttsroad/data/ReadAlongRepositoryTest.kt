@@ -1,6 +1,10 @@
 package dk.perspektiva.ttsroad.data
 
+import java.util.concurrent.TimeUnit.MILLISECONDS
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
@@ -33,6 +37,11 @@ private class FakeReaderSessionStore(private var state: SessionState) : SessionS
     override suspend fun clearToken() {
         clearTokenCalls++
         state = state.copy(token = null)
+    }
+
+    /** Sign a different account in, the way a fresh login would. */
+    fun adopt(next: SessionState) {
+        state = next
     }
 }
 
@@ -126,9 +135,12 @@ class ReadAlongRepositoryTest {
         runCatching { server.shutdown() }
     }
 
-    private fun store() = FakeReaderSessionStore(
-        SessionState(serverUrl = server.url("/").toString(), token = "session-token", username = "admin"),
-    )
+    private fun sessionState() =
+        SessionState(serverUrl = server.url("/").toString(), token = "session-token", username = "admin")
+
+    private fun store() = FakeReaderSessionStore(sessionState())
+
+    private fun owner() = readAlongOwnerOf(sessionState())
 
     private fun repository(
         sessionStore: SessionStore = store(),
@@ -380,7 +392,7 @@ class ReadAlongRepositoryTest {
         // nothing enqueued, so a request here would fail the test rather than pass it quietly.
         val store = FakeReadAlongStore()
         val repository = repository(readAlongStore = store)
-        store.seed(chapterId = 10, entry = cachedEntry())
+        store.seed(chapterId = 10, entry = cachedEntry(owner = owner()))
 
         assertTrue(repository.pinReadAlong(chapterId = 10))
 
@@ -392,7 +404,7 @@ class ReadAlongRepositoryTest {
     fun `pinning an already pinned chapter is free`() = runTest {
         val store = FakeReadAlongStore()
         val repository = repository(readAlongStore = store)
-        store.pin(chapterId = 10, entry = cachedEntry())
+        store.pin(chapterId = 10, entry = cachedEntry(owner = owner()))
 
         assertTrue(repository.pinReadAlong(chapterId = 10))
 
@@ -487,6 +499,96 @@ class ReadAlongRepositoryTest {
         assertNull(repository(readAlongStore = disk).loadedReadAlong(chapterId = 10))
     }
 
+    /**
+     * The transitions a cache keyed on the chapter id alone survives — and must not.
+     *
+     * Each one is a completion racing a session change, so they are driven through the real
+     * suspension points rather than by calling the accessors in sequence.
+     */
+    @Test
+    fun `a fetch that completes after sign-out publishes nothing to the next account`() = runTest {
+        val sessionStore = store()
+        val disk = FakeReadAlongStore()
+        val repository = repository(sessionStore = sessionStore, readAlongStore = disk)
+        // Held open so the sign-out lands while the response is still in flight.
+        server.enqueue(
+            MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\"").setBodyDelay(200, MILLISECONDS),
+        )
+
+        val inFlight = launch(Dispatchers.IO) { runCatching { repository.readAlong(chapterId = 10) } }
+        withContext(Dispatchers.IO) { server.takeRequest() }
+        repository.endSession(SessionEnd(reason = SessionEndReason.Expired, message = "This device session expired. Sign in again."))
+        inFlight.join()
+
+        assertEquals("the completion must not repopulate the store", 0, disk.size)
+        assertNull(repository.loadedReadAlong(chapterId = 10))
+
+        // The next account asks for the same chapter id, and must be told nothing is held.
+        sessionStore.adopt(
+            SessionState(serverUrl = server.url("/").toString(), token = "other-token", username = "other"),
+        )
+        assertNull(repository.loadedReadAlong(chapterId = 10))
+    }
+
+    @Test
+    fun `the offline fallback never answers a different account with the previous one's chapter`() = runTest {
+        val sessionStore = store()
+        val repository = repository(sessionStore = sessionStore, readAlongStore = FakeReadAlongStore())
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        assertNotNull(repository.readAlong(chapterId = 10))
+
+        // A different account on the same server: chapter 10 exists for both, and only the id was
+        // ever part of the key.
+        sessionStore.adopt(
+            SessionState(serverUrl = server.url("/").toString(), token = "other-token", username = "other"),
+        )
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+
+        val thrown = runCatching { repository.readAlong(chapterId = 10) }.exceptionOrNull()
+
+        assertNotNull("the fallback must refuse rather than serve the previous reader", thrown)
+        assertNull(repository.loadedReadAlong(chapterId = 10))
+    }
+
+    @Test
+    fun `a document pinned for one account is not promoted for the next`() = runTest {
+        val sessionStore = store()
+        val disk = FakeReadAlongStore()
+        val repository = repository(sessionStore = sessionStore, readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        assertTrue(repository.pinReadAlong(chapterId = 10))
+
+        sessionStore.adopt(
+            SessionState(serverUrl = server.url("/").toString(), token = "other-token", username = "other"),
+        )
+        // Nothing enqueued: a promotion of the held copy would be a hit, and any fetch would block.
+        server.enqueue(MockResponse().setResponseCode(404))
+
+        assertFalse(repository.pinReadAlong(chapterId = 10))
+    }
+
+    @Test
+    fun `concurrent readers racing a sign-out leave nothing behind`() = runTest {
+        val sessionStore = store()
+        val disk = FakeReadAlongStore()
+        val repository = repository(sessionStore = sessionStore, readAlongStore = disk)
+        repeat(4) {
+            server.enqueue(
+                MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\"").setBodyDelay(150, MILLISECONDS),
+            )
+        }
+
+        val readers = (0 until 4).map { index ->
+            launch(Dispatchers.IO) { runCatching { repository.readAlong(chapterId = 10 + index) } }
+        }
+        withContext(Dispatchers.IO) { repeat(4) { server.takeRequest() } }
+        repository.endSession(SessionEnd(reason = SessionEndReason.Expired, message = "This device session expired. Sign in again."))
+        readers.forEach { it.join() }
+
+        assertEquals("no in-flight completion may survive the sign-out", 0, disk.size)
+        repeat(4) { assertNull(repository.loadedReadAlong(chapterId = 10 + it)) }
+    }
+
     @Test
     fun `signing out drops what the capture could quote`() = runTest {
         val repository = repository()
@@ -500,8 +602,9 @@ class ReadAlongRepositoryTest {
     }
 }
 
-private fun cachedEntry(etag: String? = "\"abc\""): CachedReadAlong = CachedReadAlong(
+private fun cachedEntry(etag: String? = "\"abc\"", owner: String? = null): CachedReadAlong = CachedReadAlong(
     etag = etag,
+    owner = owner,
     response = ReadAlongResponse(
         chapter = ReadAlongChapter(id = 10, fictionId = 1, title = "Chapter 1", audioDuration = 60.0),
         text = "The knight rode north.",

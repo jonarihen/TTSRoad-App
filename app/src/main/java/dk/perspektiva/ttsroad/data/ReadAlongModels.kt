@@ -42,7 +42,20 @@ data class ReadAlongChapter(
 data class CachedReadAlong(
     val etag: String? = null,
     val response: ReadAlongResponse = ReadAlongResponse(),
+    val owner: String? = null,
 )
+
+/**
+ * Which signed-in session a cached read-along document belongs to.
+ *
+ * Chapter ids are unique per server only, so a cache keyed on the id alone hands one account's
+ * chapter text to the next. Hashed so no token is written to disk, and derived from the token as
+ * well as the account so a re-issued credential does not adopt the previous session's documents.
+ */
+fun readAlongOwnerOf(session: SessionState): String =
+    java.security.MessageDigest.getInstance("SHA-256")
+        .digest("${session.serverUrl}\u0000${session.username}\u0000${session.token}".toByteArray())
+        .joinToString("") { "%02x".format(it) }
 
 /** What read-along affordance a chapter gets, given what the server and the chapter support. */
 enum class ReadAlongAvailability(val offersReader: Boolean) {

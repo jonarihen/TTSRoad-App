@@ -2897,11 +2897,11 @@ private fun PlayerScreen(
             // contract is explicit that a report without one is still worth filing.
             val positionMs = playerState.positionMs
             val positionSeconds = positionMs / 1000.0
-            val word = pronunciationWordAt(
-                document = repository.loadedReadAlong(chapterId),
-                positionSeconds = positionSeconds,
-            )
             scope.launch {
+                val word = pronunciationWordAt(
+                    document = repository.loadedReadAlong(chapterId),
+                    positionSeconds = positionSeconds,
+                )
                 // Playback is untouched, exactly as for a bookmark: you flag a mispronunciation
                 // because you are still listening to the sentence after it.
                 val outcome = pronunciationReportOutcomeFor(
