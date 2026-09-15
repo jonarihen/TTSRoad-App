@@ -1000,6 +1000,25 @@ data class FollowResponse(
 )
 
 /**
+ * `DELETE /api/mobile/library/follows` — the whole shelf at once.
+ *
+ * Its own model rather than [FollowResponse]: this one names no fiction, and what it has to say is
+ * [removed], which is the number the confirmation promised.
+ *
+ * Nothing is deleted on the server. Every fiction stays, stays reachable through `scope=all`, and
+ * the account keeps its positions, bookmarks and played marks for the books it stopped following.
+ * The new-chapter notices do go, which is most of the point — an upgraded shelf nobody picked is
+ * what fills the tray.
+ */
+data class UnfollowAllResponse(
+    @param:Json(name = "api_version") val apiVersion: Int = 1,
+    val status: String = "",
+    /** Follows actually deleted. An empty shelf is `0` and a 200, not an error. */
+    val removed: Int = 0,
+    @param:Json(name = "following_ids") val followingIds: List<Int> = emptyList(),
+)
+
+/**
  * `GET`/`PATCH /api/me/preferences`.
  *
  * A loose map for the same reason [CapabilitiesResponse] uses one: the server owns the vocabulary

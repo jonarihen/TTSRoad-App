@@ -46,6 +46,23 @@ Notable changes to the TTSRoad Android client.
 
 ## 0.15.1 — 2026-09-06
 
+### Added
+
+- **Settings can empty your shelf in one go.** Per-user libraries arrived by giving every existing
+  account a follow of every existing fiction, so a shelf nobody picked is the usual starting state
+  — and since new-chapter notices arrived, every one of those follows can make the phone buzz for a
+  serial the reader never chose. Undoing that a book at a time is a long scroll. A *Your shelf*
+  band on Settings now does it in one call, behind a confirmation that names the number it is about
+  to remove.
+
+  It sits under the listening-state backup rather than near the library, matching where the web
+  console put it: this is done once, if ever, and does not belong beside a control pressed every
+  day. Nothing is deleted on the server — every book stays, stays findable in Browse, and keeps its
+  positions, bookmarks and played marks if it is followed again — but the new-chapter notices go
+  with the follows, which is most of the point. Offered only on a server advertising
+  `bulk_unfollow`, which is its own capability: a server can have follow and unfollow without this
+  one route. (TTSRoad-App#179)
+
 ### Fixed
 
 - **The reader no longer lets the spoken line walk off the bottom of the screen.** Auto-scroll
@@ -76,6 +93,11 @@ Notable changes to the TTSRoad Android client.
   shows whenever it is there. The local mapping stays as the fallback for an older server, and
   Royal Road is still hidden — that is a decision about the default source, so it keys off
   `source_type` rather than off whatever the server calls it. (TTSRoad-App#178)
+
+- **The capabilities panel lists new-chapter notices instead of burying them.** `notifications` had
+  been live on the server and parsed by the app since 0.15.0, but was missing from the panel's
+  ordered table, so it sorted into the unknown tail under its raw key. The panel's own test only
+  ever asked whether a flag had a label, not whether it had a place; it now asks both.
 
 ### Changed
 
