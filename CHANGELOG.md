@@ -2,6 +2,15 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.15.6 — 2026-09-15
+
+### Fixed
+
+- Read-along word highlighting no longer changes font weight, keeping word widths, line wrapping
+  and paragraph heights stable as playback advances. Accent color and the word-only background
+  remain visible. Regression tests cover both highlight modes across font families, text sizes
+  and narrow layouts. (TTSRoad-App#208)
+
 ## 0.15.5 — 2026-09-15
 
 ### Added
