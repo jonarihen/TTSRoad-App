@@ -9157,7 +9157,6 @@ internal fun readerWordStyle(
 ): SpanStyle = SpanStyle(
     background = if (granularity == HighlightGranularity.WordOnly) palette.band else Color.Unspecified,
     color = palette.accent,
-    fontWeight = FontWeight.Bold,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
