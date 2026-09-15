@@ -256,4 +256,71 @@ class LibraryCacheDeltaTest {
 
         assertNull(nextRequest().query("updated_since"))
     }
+
+    @Test
+    fun `local played change made during in-flight chapter delta is preserved and not overwritten`() {
+        val cache = cache()
+        enqueueChapters(
+            serverTime = "t1",
+            chapters = """{"id":1,"chapter_number":1.0,"playback":{"is_played":false}},{"id":2,"chapter_number":2.0,"playback":{"is_played":false}}""",
+        )
+        cache.refreshChapters(7)
+        cache.chapters(7).settled()
+        nextRequest()
+
+        // Server will deliver a delta adding chapter 3 with delay
+        server.enqueue(
+            json(
+                """
+                {"fiction":{"id":7,"title":"Book"},"chapters":[{"id":3,"chapter_number":3.0,"playback":{"is_played":false}}],
+                 "server_time":"t2","delta":true,"deleted":[]}
+                """.trimIndent(),
+            ).setBodyDelay(100, java.util.concurrent.TimeUnit.MILLISECONDS),
+        )
+
+        cache.refreshChapters(7)
+
+        // While request is in-flight on IO thread, mark chapter 1 played locally
+        cache.applyPlayed(fictionId = 7, chapterIds = listOf(1), played = true)
+
+        val settled = cache.chapters(7).settled()
+        val chapter1 = settled.value?.firstOrNull { it.resolvedChapterId == 1 }
+        val chapter3 = settled.value?.firstOrNull { it.resolvedChapterId == 3 }
+
+        assertEquals("chapter 1 played status must be preserved across merge", true, chapter1?.playback?.isPlayed)
+        assertEquals("new chapter 3 from delta must be present", 3, chapter3?.resolvedChapterId)
+    }
+
+    @Test
+    fun `local fiction edit during in-flight library delta is preserved and not overwritten`() {
+        val cache = cache()
+        enqueueLibrary(serverTime = "t1", fictions = """{"id":7,"title":"Before"}""")
+        cache.refreshLibraryAndSettle()
+        nextRequest()
+
+        enqueueSyncIndex(serverTime = "t2", libraryChanged = true, fictions = "")
+        // Delta adds fiction 8, delayed
+        server.enqueue(
+            json(
+                """
+                {"scope":"followed","following_ids":[7,8],"fictions":[{"id":8,"title":"New Book"}],
+                 "continue_listening":[],"recent_chapters":[],
+                 "server_time":"t2","delta":true,"deleted":[]}
+                """.trimIndent(),
+            ).setBodyDelay(100, java.util.concurrent.TimeUnit.MILLISECONDS),
+        )
+
+        cache.refreshLibrary()
+
+        // Edit fiction 7 locally while delta fetch is in flight
+        cache.applyFiction(FictionSummary(id = 7, title = "Locally Edited"))
+
+        val settled = cache.library.settled()
+        val fiction7 = settled.value?.fictions?.firstOrNull { it.id == 7 }
+        val fiction8 = settled.value?.fictions?.firstOrNull { it.id == 8 }
+
+        assertEquals("Locally Edited", fiction7?.title)
+        assertEquals("New Book", fiction8?.title)
+    }
 }
+

@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * A loaded thing, plus whether it is currently being reloaded.
@@ -71,6 +73,15 @@ class LibraryCache(private val repository: TtsRoadRepository) {
     private var libraryJob: Job? = null
     private val chapterJobs = mutableMapOf<Int, Job>()
 
+    private val libraryMutex = Mutex()
+    private val browseAllMutex = Mutex()
+    private val chapterMutexes = mutableMapOf<Int, Mutex>()
+
+    private fun chapterMutex(fictionId: Int): Mutex =
+        synchronized(chapterMutexes) {
+            chapterMutexes.getOrPut(fictionId) { Mutex() }
+        }
+
     fun chapters(fictionId: Int): StateFlow<Cached<List<ChapterSummary>>> =
         chapterState(fictionId).asStateFlow()
 
@@ -109,7 +120,7 @@ class LibraryCache(private val repository: TtsRoadRepository) {
      * list was updated simply repeats that row next time instead of advancing past data another
      * list never received.
      */
-    private suspend fun refreshedLibrary(): LibraryResponse {
+    private suspend fun refreshedLibrary(): LibraryResponse = libraryMutex.withLock {
         val existing = _library.value.value
         val cursor = libraryCursor
         if (existing == null || cursor == null || !repository.currentCapabilities.value.deltaSync) {
@@ -121,29 +132,36 @@ class LibraryCache(private val repository: TtsRoadRepository) {
 
         index.fictionsWithChapterChanges().forEach { fictionId ->
             val state = chapterStates[fictionId] ?: return@forEach
-            val chapters = state.value.value ?: return@forEach
-            // Each chapter list carries its own watermark, and it is not the library's. A list
-            // loaded before the shelf last synced is behind that cursor, so asking with the
-            // library's reading would skip everything that moved in between and then advance past
-            // it. No watermark at all means no baseline to be sparse against, so that is a full
-            // pull rather than a guess.
-            val update = repository.chapters(
-                fictionId = fictionId,
-                updatedSince = chapterCursors[fictionId],
-            )
-            state.value = Cached(value = mergeChapterDelta(chapters, update))
-            update.serverTime?.let { chapterCursors[fictionId] = it }
+            chapterMutex(fictionId).withLock {
+                val chapters = state.value.value ?: return@withLock
+                // Each chapter list carries its own watermark, and it is not the library's. A list
+                // loaded before the shelf last synced is behind that cursor, so asking with the
+                // library's reading would skip everything that moved in between and then advance past
+                // it. No watermark at all means no baseline to be sparse against, so that is a full
+                // pull rather than a guess.
+                val update = repository.chapters(
+                    fictionId = fictionId,
+                    updatedSince = chapterCursors[fictionId],
+                )
+                val latest = state.value.value ?: chapters
+                state.value = Cached(value = mergeChapterDelta(latest, update))
+                update.serverTime?.let { chapterCursors[fictionId] = it }
+            }
         }
 
         index.deleted.fictions.forEach { fictionId ->
-            chapterStates[fictionId]?.value = Cached(value = emptyList())
-            chapterCursors.remove(fictionId)
+            chapterMutex(fictionId).withLock {
+                chapterStates[fictionId]?.value = Cached(value = emptyList())
+                chapterCursors.remove(fictionId)
+            }
         }
 
         val refreshed = if (index.libraryMoved()) {
-            mergeLibraryDelta(existing, repository.library(updatedSince = cursor))
+            val delta = repository.library(updatedSince = cursor)
+            val latest = _library.value.value ?: existing
+            mergeLibraryDelta(latest, delta)
         } else {
-            existing
+            _library.value.value ?: existing
         }
         libraryCursor = index.serverTime
         return refreshed.copy(serverTime = index.serverTime)
@@ -171,21 +189,20 @@ class LibraryCache(private val repository: TtsRoadRepository) {
     }
 
     /** Browse-all is one payload, so its delta is already the cheapest possible change check. */
-    private suspend fun refreshedBrowseAll(): LibraryResponse {
+    private suspend fun refreshedBrowseAll(): LibraryResponse = browseAllMutex.withLock {
         val existing = _browseAll.value.value
         val cursor = browseAllCursor
         val refreshed = if (
             existing != null && cursor != null && repository.currentCapabilities.value.deltaSync
         ) {
-            mergeLibraryDelta(
-                existing,
-                repository.library(scope = LibraryScopeAll, updatedSince = cursor),
-            )
+            val delta = repository.library(scope = LibraryScopeAll, updatedSince = cursor)
+            val latest = _browseAll.value.value ?: existing
+            mergeLibraryDelta(latest, delta)
         } else {
             repository.library(LibraryScopeAll)
         }
         browseAllCursor = refreshed.serverTime ?: browseAllCursor
-        return refreshed
+        refreshed
     }
 
     /**
@@ -276,22 +293,25 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         chapterJobs[fictionId] = scope.launch {
             state.value = state.value.copy(isRefreshing = true, error = null)
             state.value = runCatching {
-                val current = state.value.value
-                val cursor = chapterCursors[fictionId]
-                val response = if (
-                    current != null && cursor != null && repository.currentCapabilities.value.deltaSync
-                ) {
-                    repository.chapters(fictionId, updatedSince = cursor)
-                } else {
-                    repository.chapters(fictionId)
+                chapterMutex(fictionId).withLock {
+                    val current = state.value.value
+                    val cursor = chapterCursors[fictionId]
+                    val response = if (
+                        current != null && cursor != null && repository.currentCapabilities.value.deltaSync
+                    ) {
+                        repository.chapters(fictionId, updatedSince = cursor)
+                    } else {
+                        repository.chapters(fictionId)
+                    }
+                    val latest = state.value.value
+                    val chapters = if (latest == null) {
+                        response.chapters
+                    } else {
+                        mergeChapterDelta(latest, response)
+                    }
+                    response.serverTime?.let { chapterCursors[fictionId] = it }
+                    chapters
                 }
-                val chapters = if (current == null) {
-                    response.chapters
-                } else {
-                    mergeChapterDelta(current, response)
-                }
-                response.serverTime?.let { chapterCursors[fictionId] = it }
-                chapters
             }.fold(
                 onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
@@ -340,5 +360,6 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         _library.value = Cached()
         chapterStates.values.forEach { it.value = Cached() }
         chapterStates.clear()
+        synchronized(chapterMutexes) { chapterMutexes.clear() }
     }
 }
