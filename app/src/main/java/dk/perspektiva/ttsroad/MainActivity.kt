@@ -488,7 +488,7 @@ private fun TtsRoadApp(
 
     UpdateOverlay(
         state = updateState,
-        onDownload = { release -> scope.launch { updateManager.downloadAndInstall(context, release) } },
+        onDownload = { release -> updateManager.downloadAndInstall(context, release) },
         onDismiss = { updateManager.dismiss() },
     )
 }
@@ -542,6 +542,9 @@ private fun UpdateOverlay(
                 }
             },
             confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("CANCEL") }
+            },
         )
 
         else -> Unit // Idle / Checking / UpToDate / Failed surface in Settings instead
