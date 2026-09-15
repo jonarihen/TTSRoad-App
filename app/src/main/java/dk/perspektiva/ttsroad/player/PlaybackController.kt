@@ -73,13 +73,28 @@ data class PlayerUiState(
  * audio focus, and Android Auto all share a single playback session. The UI only ever drives
  * the player through this controller — it never owns a player of its own.
  */
-class PlaybackController(
+class PlaybackController internal constructor(
     private val context: Context,
     private val tokenStore: TokenStore,
     private val preferences: PlaybackPreferences,
     private val fictionSpeeds: FictionSpeedPreferences,
+    private val connector: ControllerConnector,
+    private val scope: CoroutineScope,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    constructor(
+        context: Context,
+        tokenStore: TokenStore,
+        preferences: PlaybackPreferences,
+        fictionSpeeds: FictionSpeedPreferences,
+    ) : this(
+        context,
+        tokenStore,
+        preferences,
+        fictionSpeeds,
+        DefaultControllerConnector(),
+        CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    )
+
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
     private val _transientFeedback = MutableStateFlow<String?>(null)
@@ -87,6 +102,8 @@ class PlaybackController(
 
     private var controller: MediaController? = null
     private var connecting: Deferred<MediaController?>? = null
+    private var connectionGeneration = 0L
+    private var inFlightFuture: ListenableFuture<MediaController>? = null
     private var tickerJob: Job? = null
 
     // The queue only changes when a new playlist is set, but publishState runs every second.
@@ -108,40 +125,56 @@ class PlaybackController(
 
     private suspend fun controllerOrNull(): MediaController? {
         controller?.let { return it }
-        val pending = connecting ?: scope.async {
-            val token = SessionToken(
-                context,
-                ComponentName(context, TtsRoadMediaService::class.java),
-            )
-            val created = runCatching {
-                MediaController.Builder(context, token)
-                    .setListener(
-                        object : MediaController.Listener {
-                            override fun onCustomCommand(
-                                controller: MediaController,
-                                command: SessionCommand,
-                                args: android.os.Bundle,
-                            ): ListenableFuture<SessionResult> {
-                                if (command.customAction == PlaybackFeedbackCommand) {
-                                    _transientFeedback.value = args.getString(PlaybackFeedbackMessage)
-                                }
-                                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-                            }
-                        },
-                    )
-                    .buildAsync()
-                    .await()
-            }.getOrNull()
-            if (created != null) {
-                controller = created
-                created.addListener(listener)
-                updateTicker(created)
-                publishState(created)
-            }
-            created
-        }.also { connecting = it }
+        val pending = connecting ?: run {
+            val generation = ++connectionGeneration
+            scope.async {
+                val token = SessionToken(
+                    context,
+                    ComponentName(context, TtsRoadMediaService::class.java),
+                )
+                val sessionListener = object : MediaController.Listener {
+                    override fun onCustomCommand(
+                        controller: MediaController,
+                        command: SessionCommand,
+                        args: android.os.Bundle,
+                    ): ListenableFuture<SessionResult> {
+                        if (command.customAction == PlaybackFeedbackCommand) {
+                            _transientFeedback.value = args.getString(PlaybackFeedbackMessage)
+                        }
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                }
+                val future = connector.connect(context, token, sessionListener)
+                inFlightFuture = future
+                val created = try {
+                    future.await()
+                } catch (_: Throwable) {
+                    if (future.isDone && !future.isCancelled) {
+                        runCatching { Futures.getDone(future) }.getOrNull()
+                    } else {
+                        null
+                    }
+                } finally {
+                    if (inFlightFuture === future) {
+                        inFlightFuture = null
+                    }
+                }
+                if (created != null) {
+                    if (generation == connectionGeneration && isActive) {
+                        controller = created
+                        created.addListener(listener)
+                        updateTicker(created)
+                        publishState(created)
+                    } else {
+                        created.release()
+                        return@async null
+                    }
+                }
+                created
+            }.also { connecting = it }
+        }
         val result = runCatching { pending.await() }.getOrNull()
-        if (result == null) {
+        if (result == null && connecting === pending) {
             connecting = null
         }
         return result
@@ -348,10 +381,16 @@ class PlaybackController(
     fun release() {
         tickerJob?.cancel()
         tickerJob = null
+        connectionGeneration++
+        val pendingFuture = inFlightFuture
+        inFlightFuture = null
+        val pendingJob = connecting
+        connecting = null
+        pendingJob?.cancel()
+        pendingFuture?.let { connector.releaseFuture(it) }
         controller?.removeListener(listener)
         controller?.release()
         controller = null
-        connecting = null
         _state.value = PlayerUiState()
     }
 
@@ -386,3 +425,28 @@ class PlaybackController(
         _state.value = playerUiStateOf(player, queue)
     }
 }
+
+internal interface ControllerConnector {
+    fun connect(
+        context: Context,
+        token: SessionToken,
+        listener: MediaController.Listener,
+    ): ListenableFuture<MediaController>
+
+    fun releaseFuture(future: java.util.concurrent.Future<MediaController>) {
+        MediaController.releaseFuture(future)
+    }
+}
+
+internal class DefaultControllerConnector : ControllerConnector {
+    override fun connect(
+        context: Context,
+        token: SessionToken,
+        listener: MediaController.Listener,
+    ): ListenableFuture<MediaController> {
+        return MediaController.Builder(context, token)
+            .setListener(listener)
+            .buildAsync()
+    }
+}
+
