@@ -6,6 +6,9 @@ import androidx.media3.common.Player
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * The last thing the player was doing, written where a dead process can still be asked about it.
@@ -76,28 +79,123 @@ internal fun nowPlayingSnapshotOf(
  *
  * A plain file rather than DataStore because the reader is a Glance worker in whatever process the
  * launcher decided to wake, and the write is a fire-and-forget from the media service. There is one
- * record, it is small, and the last writer winning is the correct behaviour — a newer note about
- * what the player is doing always supersedes an older one.
+ * record, it is small, and the newest note about what the player is doing supersedes an older one.
+ *
+ * "Newest" is the subtle part. The service captures a snapshot on the main thread — Media3 requires
+ * that — and then persists it off it, from several paths at once: the 15s tick, playing changes,
+ * item transitions, discontinuities and speed changes. Whichever coroutine reached the disk last
+ * used to win, which is not the same as the newest capture, so a pause could be overwritten by a
+ * tick captured before it and the widget would offer a pause button over stopped audio. Sign-out
+ * had the same problem in reverse: its delete could be undone by a publish already in flight.
+ *
+ * So ordering is explicit. A caller takes a [nextGeneration] at capture time, on the thread it
+ * captured on, and every persist applies only if no newer generation has already landed.
  *
  * Every failure is swallowed to a null or a no-op. A widget that cannot read its own note should
  * show the empty state; it must never take the media service down with it.
  */
-class NowPlayingStore(context: Context) {
+class NowPlayingStore internal constructor(private val persistence: SnapshotPersistence) {
+    constructor(context: Context) : this(
+        FileSnapshotPersistence(File(context.applicationContext.filesDir, "widget_now_playing.json")),
+    )
+
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val adapter = moshi.adapter(NowPlayingSnapshot::class.java)
-    private val file = File(context.applicationContext.filesDir, "widget_now_playing.json")
+
+    private val mutex = Mutex()
+    private val generation = AtomicLong(0L)
+
+    /** Guarded by [mutex]: the newest generation that has actually reached the disk. */
+    private var appliedGeneration = 0L
 
     fun read(): NowPlayingSnapshot? =
-        runCatching { if (file.isFile) adapter.fromJson(file.readText()) else null }
+        runCatching { persistence.read()?.let { adapter.fromJson(it) } }
             .getOrNull()
             ?.takeIf { it.mediaId.isNotBlank() }
 
+    /**
+     * Claim a place in the order.
+     *
+     * Called at the moment the player is read, so the sequence the widget ends up agreeing with is
+     * the sequence things actually happened in — not the order the IO dispatcher got round to.
+     */
+    fun nextGeneration(): Long = generation.incrementAndGet()
+
     fun write(snapshot: NowPlayingSnapshot) {
-        runCatching { file.writeText(adapter.toJson(snapshot)) }
+        runCatching { persistence.write(adapter.toJson(snapshot)) }
     }
 
     /** Signing out must not leave the last book's title on the home screen. */
     fun clear() {
-        runCatching { if (file.exists()) file.delete() }
+        runCatching { persistence.delete() }
+    }
+
+    /**
+     * Persist [snapshot] as [generation], or do nothing because something newer already landed.
+     *
+     * A null [snapshot] means "the queue is empty": the previous record is kept but marked stopped,
+     * so "last heard" survives rather than collapsing into "nothing played". That read-modify-write
+     * happens under the same lock, or a concurrent publish could land between the two halves.
+     */
+    suspend fun publish(generation: Long, snapshot: NowPlayingSnapshot?, stoppedAt: Long) {
+        mutex.withLock {
+            if (generation <= appliedGeneration) return@withLock
+            appliedGeneration = generation
+            if (snapshot != null) {
+                write(snapshot)
+            } else {
+                read()?.let { previous ->
+                    write(previous.copy(isPlaying = false, updatedAt = stoppedAt))
+                }
+            }
+        }
+    }
+
+    /** Remove the note as [generation]. Ordered against [publish], so neither can undo the other. */
+    suspend fun clearAt(generation: Long) {
+        mutex.withLock {
+            if (generation <= appliedGeneration) return@withLock
+            appliedGeneration = generation
+            clear()
+        }
+    }
+}
+
+/**
+ * Where the note physically lives.
+ *
+ * An interface so the ordering above can be tested without a filesystem and without depending on
+ * which of two IO threads happens to win.
+ */
+internal interface SnapshotPersistence {
+    fun read(): String?
+    fun write(json: String)
+    fun delete()
+}
+
+/**
+ * The real one. Writes through a temp file and renames it over the target: the launcher may read
+ * this file at any moment, and a half-written record is one the widget has to discard.
+ */
+internal class FileSnapshotPersistence(private val file: File) : SnapshotPersistence {
+    override fun read(): String? = runCatching { if (file.isFile) file.readText() else null }.getOrNull()
+
+    override fun write(json: String) {
+        runCatching {
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            tmp.writeText(json)
+            if (!tmp.renameTo(file)) {
+                if (file.exists()) file.delete()
+                tmp.renameTo(file)
+            }
+        }
+    }
+
+    override fun delete() {
+        runCatching {
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            if (tmp.exists()) tmp.delete()
+            if (file.exists()) file.delete()
+        }
     }
 }

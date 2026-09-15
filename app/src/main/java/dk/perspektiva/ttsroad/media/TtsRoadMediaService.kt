@@ -166,7 +166,10 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // for the instant before its DataStore read finishes.
                 if (!state.isLoggedIn) {
                     if (::player.isInitialized) stopSignedOutPlayback(player)
-                    withContext(Dispatchers.IO) { nowPlayingStore.clear() }
+                    // Ordered against the publishes: a tick captured just before the sign-out must
+                    // not put the previous account's book back on the home screen.
+                    val generation = nowPlayingStore.nextGeneration()
+                    withContext(Dispatchers.IO) { nowPlayingStore.clearAt(generation) }
                     runCatching { NowPlayingWidget().updateAll(this@TtsRoadMediaService) }
                 }
             }
@@ -759,19 +762,17 @@ class TtsRoadMediaService : MediaLibraryService() {
      */
     private suspend fun publishNowPlaying(forcePlaying: Boolean?) {
         val now = System.currentTimeMillis()
+        // Both the player read and the place in the order are taken here, before anything suspends:
+        // Media3 requires the application thread, and a generation claimed after the hop would
+        // record the order the IO dispatcher ran in rather than the order things happened in.
         val current = nowPlayingSnapshotOf(
             player = player,
             isPlaying = forcePlaying ?: player.isPlaying,
             updatedAt = now,
         )
+        val generation = nowPlayingStore.nextGeneration()
         withContext(Dispatchers.IO) {
-            if (current != null) {
-                nowPlayingStore.write(current)
-            } else {
-                nowPlayingStore.read()?.let { previous ->
-                    nowPlayingStore.write(previous.copy(isPlaying = false, updatedAt = now))
-                }
-            }
+            nowPlayingStore.publish(generation, current, stoppedAt = now)
         }
         runCatching { NowPlayingWidget().updateAll(this) }
     }
