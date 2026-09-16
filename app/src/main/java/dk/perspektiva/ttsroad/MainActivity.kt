@@ -289,6 +289,7 @@ import dk.perspektiva.ttsroad.media.PronunciationReportOutcome
 import dk.perspektiva.ttsroad.media.pronunciationReportOutcomeFor
 import dk.perspektiva.ttsroad.media.pronunciationWordAt
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
+import dk.perspektiva.ttsroad.nav.SettingsCategory
 import dk.perspektiva.ttsroad.nav.AppScreen
 import dk.perspektiva.ttsroad.nav.AppRoot
 import dk.perspektiva.ttsroad.nav.activeRoot
@@ -473,7 +474,13 @@ private fun TtsRoadApp(
                 selectedRoot = backStack.activeRoot,
                 canGoBack = backStack.size > 1,
                 onScreenChange = { backStack = backStack.navigateTo(it) },
-                onRootChange = { backStack = backStack.switchToRoot(it) },
+                onRootChange = {
+                    backStack = if (it == AppRoot.Settings) {
+                        backStack.navigateTo(AppScreen.Settings)
+                    } else {
+                        backStack.switchToRoot(it)
+                    }
+                },
                 onReplaceScreen = { backStack = backStack.replaceTop(it) },
                 // A fiction rides *in* the stack, so an edit has to be written back into every entry
                 // holding it — otherwise the screen under the editor, and the top bar that reads its
@@ -859,6 +866,7 @@ private fun MainScaffold(
         AppScreen.Player -> "Now playing"
         is AppScreen.Reader -> screen.title
         AppScreen.Settings -> "Settings"
+        is AppScreen.SettingsDetail -> screen.category.title
         AppScreen.Devices -> "Device sessions"
         AppScreen.Bookmarks -> "Bookmarks"
         AppScreen.PronunciationReports -> "Pronunciation"
@@ -976,10 +984,16 @@ private fun MainScaffold(
                     onFollowChapter = replaceScreen,
                 )
 
-                AppScreen.Settings -> SettingsScreen(
+                AppScreen.Settings -> SettingsRootScreen(
+                    padding = padding,
+                    onOpenCategory = { onScreenChange(AppScreen.SettingsDetail(it)) },
+                )
+
+                is AppScreen.SettingsDetail -> SettingsScreen(
                     padding = padding,
                     session = session,
                     repository = repository,
+                    category = screen.category,
                     onOpenDevices = { onScreenChange(AppScreen.Devices) },
                 )
 
@@ -3651,10 +3665,36 @@ internal fun ListeningScreenBody(
 }
 
 @Composable
-private fun SettingsScreen(
+internal fun SettingsRootScreen(
+    padding: PaddingValues = PaddingValues(),
+    onOpenCategory: (SettingsCategory) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(padding)
+            .verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        AarisCard {
+            Column {
+                SettingsCategory.entries.forEach { category ->
+                    AarisActionRow(
+                        title = "${category.title} ›",
+                        subtitle = category.description,
+                        enabled = true,
+                        onClick = { onOpenCategory(category) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun SettingsScreen(
     padding: PaddingValues,
     session: SessionState,
     repository: TtsRoadRepository,
+    category: SettingsCategory,
     onOpenDevices: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -3692,8 +3732,8 @@ private fun SettingsScreen(
     var backupError by remember { mutableStateOf<String?>(null) }
     var isBackupBusy by remember { mutableStateOf(false) }
 
-    LaunchedEffect(capabilities.feedUrls) {
-        feeds = if (!capabilities.feedUrls) {
+    LaunchedEffect(capabilities.feedUrls, category) {
+        feeds = if (!capabilities.feedUrls || category != SettingsCategory.Library) {
             null
         } else {
             runCatching { repository.feeds() }
@@ -3709,9 +3749,9 @@ private fun SettingsScreen(
     var exportsError by remember { mutableStateOf<String?>(null) }
     val canListExports = capabilities.audiobookExport && session.isAdmin
 
-    LaunchedEffect(canListExports) {
+    LaunchedEffect(canListExports, category) {
         exportsError = null
-        exports = if (!canListExports) {
+        exports = if (!canListExports || category != SettingsCategory.Library) {
             null
         } else {
             runCatching { repository.audiobookExports() }
@@ -3778,7 +3818,9 @@ private fun SettingsScreen(
     }
 
     // The cache is only measured on demand: it means walking the cache index off the main thread.
-    LaunchedEffect(Unit) { downloads.refreshCacheBytes() }
+    LaunchedEffect(category) {
+        if (category == SettingsCategory.Storage) downloads.refreshCacheBytes()
+    }
 
     // Re-read on resume so returning from system settings reflects the new state.
     var notificationsOn by remember { mutableStateOf(notificationsEnabled(context)) }
@@ -3795,6 +3837,7 @@ private fun SettingsScreen(
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        if (category == SettingsCategory.Profile) {
         SettingsSectionHeader(SettingsSection.Session)
         AarisCard {
             Column(
@@ -3823,6 +3866,9 @@ private fun SettingsScreen(
             AccountSecuritySettings(repository = repository)
         }
 
+        }
+
+        if (category == SettingsCategory.About) {
         SettingsSectionHeader(SettingsSection.Server)
         AarisCard {
             Column(
@@ -3882,7 +3928,9 @@ private fun SettingsScreen(
             }
         }
 
-        if (!notificationsOn) {
+        }
+
+        if (category == SettingsCategory.Notifications) {
             SettingsSectionHeader(SettingsSection.Notifications)
             AarisCard {
                 Column(
@@ -3892,9 +3940,13 @@ private fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     MetaText(
-                        text = "Notifications are off — lockscreen and shade controls " +
-                            "will not appear during playback.",
-                        color = AarisColor.Danger,
+                        text = if (notificationsOn) {
+                            "Notifications are on. Manage playback and new-chapter channels in system settings."
+                        } else {
+                            "Notifications are off — lockscreen and shade controls " +
+                                "will not appear during playback."
+                        },
+                        color = if (notificationsOn) AarisColor.Muted else AarisColor.Danger,
                     )
                     OutlinedButton(
                         onClick = {
@@ -3912,6 +3964,7 @@ private fun SettingsScreen(
         // caption, which read as a second subject; they are the same one -- how a chapter sounds
         // once it is playing -- and splitting them meant the reader had to know which of two
         // look-alike cards a preference had been filed under (#162).
+        if (category == SettingsCategory.Playback) {
         SettingsSectionHeader(SettingsSection.Playback)
         AarisCard {
             Column(
@@ -4048,6 +4101,9 @@ private fun SettingsScreen(
             }
         }
 
+        }
+
+        if (category == SettingsCategory.Storage) {
         SettingsSectionHeader(SettingsSection.Offline)
         AarisCard {
             Column(
@@ -4180,12 +4236,13 @@ private fun SettingsScreen(
             isAdmin = session.isAdmin,
             repository = repository,
         )
+        }
 
         // Serving a private podcast feed is what TTSRoad is for, and the phone is where a podcast
         // app lives — so getting a tokenised URL onto the phone used to mean mailing it to yourself
         // from a laptop (#115). Share rather than copy, because handing the URL straight to a
         // podcast app is the actual goal.
-        if (capabilities.feedUrls) {
+        if (category == SettingsCategory.Library && capabilities.feedUrls) {
             SettingsSectionHeader(SettingsSection.PodcastFeeds)
             AarisCard {
                 Column(
@@ -4231,7 +4288,7 @@ private fun SettingsScreen(
 
         // "Audio can always be made again. Where you are in a four-hundred-chapter serial cannot."
         // The phone writes most of that state and could not save a copy of it (#116).
-        if (capabilities.listeningStateBackup) {
+        if (category == SettingsCategory.Library && capabilities.listeningStateBackup) {
             SettingsSectionHeader(SettingsSection.ListeningState)
             AarisCard {
                 Column(
@@ -4283,7 +4340,7 @@ private fun SettingsScreen(
         //
         // Gated on `bulkUnfollow`, not on `follows`: a server can have follow and unfollow without
         // this one route, and that is exactly the server the flag exists to describe.
-        if (capabilities.bulkUnfollow) {
+        if (category == SettingsCategory.Library && capabilities.bulkUnfollow) {
             SettingsSectionHeader(SettingsSection.Shelf)
             AarisCard {
                 Column(
@@ -4329,7 +4386,7 @@ private fun SettingsScreen(
         // console. The app deliberately does not *play* these — it streams a fiction chapter by
         // chapter with a position per chapter, and one multi-gigabyte file carrying a single
         // position is a downgrade, not a feature. What they are for is another audiobook player.
-        if (canListExports) {
+        if (category == SettingsCategory.Library && canListExports) {
             SettingsSectionHeader(SettingsSection.AudiobookExports)
             AarisCard {
                 Column(
@@ -4389,6 +4446,13 @@ private fun SettingsScreen(
             }
         }
 
+        if (category == SettingsCategory.Library && !capabilities.feedUrls &&
+            !capabilities.listeningStateBackup && !capabilities.bulkUnfollow && !canListExports
+        ) {
+            MetaText(text = "This server does not offer library sharing or backup tools.", color = AarisColor.Muted)
+        }
+
+        if (category == SettingsCategory.About) {
         SettingsSectionHeader(SettingsSection.App)
         AarisCard {
             Column(
@@ -4411,6 +4475,9 @@ private fun SettingsScreen(
             }
         }
 
+        }
+
+        if (category == SettingsCategory.Profile) {
         Button(
             onClick = {
                 scope.launch {
@@ -4424,6 +4491,7 @@ private fun SettingsScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
+        }
         }
     }
 
