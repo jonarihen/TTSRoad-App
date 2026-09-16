@@ -2,6 +2,24 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.15.7 — 2026-09-16
+
+### Changed
+
+- Settings now opens a concise category menu: Profile, Playback & sleep, Downloads & storage,
+  Library & sharing, Notifications, and App & server. Existing controls, account synchronization,
+  security and admin/capability gates remain available in their respective submenus. Toolbar and
+  system Back return through Settings to the previous screen. (TTSRoad-App#213)
+- Notification system settings remain accessible when notifications are already enabled. Feed and
+  export lists load only in Library & sharing; cache measurement runs only in Downloads & storage.
+
+### Fixed
+
+- End-of-chapter sleep timers use speed-adjusted listening time for their countdown, fade and cap
+  selection. Duration timers use a monotonic clock, avoiding jumps when the system clock changes.
+  The fade remains the final 30 seconds; a reported five-minute fade was not reproduced.
+  Five regression tests cover fade boundaries and volume restoration. (TTSRoad-App#211)
+
 ## 0.15.6 — 2026-09-15
 
 ### Fixed
