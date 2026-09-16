@@ -604,7 +604,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private fun tickSleepTimer() {
         applySleepTimerAction(
             sleepTimer.tick(
-                nowMs = System.currentTimeMillis(),
+                nowMs = android.os.SystemClock.elapsedRealtime(),
                 isPlaying = player.isPlaying,
                 chapterRemainingMs = chapterRemainingMs(),
             ),
@@ -749,7 +749,11 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     private fun chapterRemainingMs(): Long? {
         val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: return null
-        return (duration - player.currentPosition).coerceAtLeast(0L)
+        return dk.perspektiva.ttsroad.player.remainingMsAtSpeed(
+            positionMs = player.currentPosition,
+            durationMs = duration,
+            speed = player.playbackParameters.speed,
+        )
     }
 
     /**

@@ -33,6 +33,80 @@ class SleepTimerControllerTest {
     }
 
     @Test
+    fun `duration stays at full volume until the final thirty seconds`() {
+        controller.armDuration(10 * 60_000L)
+        controller.tick(0L, isPlaying = true, chapterRemainingMs = null)
+
+        for (now in 500L..569_500L step 500L) {
+            assertEquals(SleepTimerAction.None, controller.tick(now, true, null))
+            assertFalse(controller.state.value.isFading)
+        }
+        assertEquals(SleepTimerAction.SetVolume(1f), controller.tick(570_000L, true, null))
+        assertEquals(SleepTimerAction.SetVolume(0.5f), controller.tick(585_000L, true, null))
+        assertEquals(SleepTimerAction.Expire, controller.tick(600_000L, true, null))
+    }
+
+    @Test
+    fun `chapter fade uses listening time at every supported speed`() {
+        for (speed in listOf(0.5f, 1f, 2f, 3f)) {
+            val durationMs = (600_000L * speed).toLong()
+            controller.armEndOfChapter(remainingMsAtSpeed(0L, durationMs, speed))
+
+            for (now in 0L..600_000L step 500L) {
+                val positionMs = (now * speed).toLong()
+                val remaining = remainingMsAtSpeed(positionMs, durationMs, speed)
+                val action = controller.tick(now, true, remaining)
+                when {
+                    remaining > 30_000L -> {
+                        assertEquals(SleepTimerAction.None, action)
+                        assertFalse(controller.state.value.isFading)
+                    }
+                    remaining > 0L -> {
+                        assertEquals(SleepTimerAction.SetVolume(remaining / 30_000f), action)
+                        assertTrue(controller.state.value.isFading)
+                    }
+                    else -> assertEquals(SleepTimerAction.Expire, action)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `rearming during a fade restores full volume on the next tick`() {
+        controller.armDuration(5_000L)
+        controller.tick(0L, true, null)
+        controller.armDuration(300_000L)
+
+        assertEquals(SleepTimerAction.SetVolume(1f), controller.tick(500L, true, null))
+        assertEquals(300_000L, controller.state.value.remainingMs)
+        assertFalse(controller.state.value.isFading)
+    }
+
+    @Test
+    fun `pause and buffering restore volume without spending the remaining fade`() {
+        controller.armDuration(15_000L)
+        controller.tick(0L, true, null)
+
+        assertEquals(SleepTimerAction.SetVolume(1f), controller.tick(500L, false, null))
+        run(fromMs = 1_000L, forMs = 300_000L, isPlaying = false)
+        assertEquals(15_000L, controller.state.value.remainingMs)
+        assertEquals(SleepTimerAction.SetVolume(14_500f / 30_000f), controller.tick(301_500L, true, null))
+    }
+
+    @Test
+    fun `speed adjusted chapter time selects the cap and extends in listening minutes`() {
+        val remaining = remainingMsAtSpeed(0L, 40 * 60_000L, 2f)
+        controller.armEndOfChapter(remaining, capMs = SleepTimerController.ChapterEndCapMs)
+        assertEquals(20 * 60_000L, controller.state.value.remainingMs)
+        assertFalse(controller.state.value.willStopAtCap)
+
+        controller.tick(0L, true, 15_000L)
+        controller.extend(SleepTimerController.ExtendMs)
+        assertEquals(SleepTimerAction.SetVolume(1f), controller.tick(500L, true, 14_000L))
+        assertEquals(314_500L, controller.state.value.remainingMs)
+    }
+
+    @Test
     fun `idle controller does nothing`() {
         assertFalse(controller.state.value.isArmed)
         assertEquals(SleepTimerAction.None, controller.tick(0L, isPlaying = true, chapterRemainingMs = null))
