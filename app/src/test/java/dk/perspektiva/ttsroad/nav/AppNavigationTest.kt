@@ -8,6 +8,35 @@ import org.junit.Test
 
 class AppNavigationTest {
 
+    @Test
+    fun `settings categories return through settings to the previous screen`() {
+        for (category in SettingsCategory.entries) {
+            val stack = rootBackStack.navigateTo(AppScreen.Settings)
+                .navigateTo(AppScreen.SettingsDetail(category))
+            assertEquals(AppRoot.Settings, stack.activeRoot)
+            assertEquals(AppScreen.Settings, stack.popScreen().last())
+            assertEquals(rootBackStack, stack.popScreen().popScreen())
+        }
+    }
+
+    @Test
+    fun `device sessions return to profile before settings`() {
+        val profile = AppScreen.SettingsDetail(SettingsCategory.Profile)
+        val stack = listOf(AppScreen.Settings).navigateTo(profile).navigateTo(AppScreen.Devices)
+        assertEquals(profile, stack.popScreen().last())
+        assertEquals(AppScreen.Settings, stack.popScreen().popScreen().last())
+    }
+
+    @Test
+    fun `every settings category has independent stable saved state`() {
+        val keys = SettingsCategory.entries.map { AppScreen.SettingsDetail(it).saveKey }
+        assertEquals(SettingsCategory.entries.size, keys.toSet().size)
+        for (category in SettingsCategory.entries) {
+            assertEquals("Settings:${category.name}", AppScreen.SettingsDetail(category).saveKey)
+            assertNotEquals(AppScreen.Settings.saveKey, AppScreen.SettingsDetail(category).saveKey)
+        }
+    }
+
     private fun fiction(id: Int) = FictionSummary(id = id, title = "Fiction $id")
 
     @Test

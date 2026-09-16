@@ -2,6 +2,15 @@ package dk.perspektiva.ttsroad.nav
 
 import dk.perspektiva.ttsroad.data.FictionSummary
 
+enum class SettingsCategory(val title: String, val description: String) {
+    Profile("Profile", "Account, security, device sessions and sign out"),
+    Playback("Playback & sleep", "Skip interval, sleep timer and audio preferences"),
+    Storage("Downloads & storage", "Offline chapters, streamed audio and server storage"),
+    Library("Library & sharing", "Podcast feeds, listening backups, shelf and exports"),
+    Notifications("Notifications", "Notification permission and system controls"),
+    About("App & server", "Versions, updates and server capabilities"),
+}
+
 /** Destinations the phone UI can show. */
 sealed interface AppScreen {
     data object Library : AppScreen
@@ -36,6 +45,7 @@ sealed interface AppScreen {
     ) : AppScreen
 
     data object Settings : AppScreen
+    data class SettingsDetail(val category: SettingsCategory) : AppScreen
 
     /** The account's other mobile sign-ins, reached from Settings. */
     data object Devices : AppScreen
@@ -105,6 +115,7 @@ val AppScreen.saveKey: String
         // rather than restoring the scroll position of the one just finished.
         is AppScreen.Reader -> "Reader:$chapterId"
         AppScreen.Settings -> "Settings"
+        is AppScreen.SettingsDetail -> "Settings:${category.name}"
         AppScreen.Devices -> "Devices"
         AppScreen.Bookmarks -> "Bookmarks"
         AppScreen.PronunciationReports -> "PronunciationReports"
@@ -141,7 +152,7 @@ val AppScreen.appRoot: AppRoot
         AppScreen.NewChapters,
         -> AppRoot.Listening
 
-        AppScreen.Settings, AppScreen.Devices -> AppRoot.Settings
+        AppScreen.Settings, is AppScreen.SettingsDetail, AppScreen.Devices -> AppRoot.Settings
     }
 
 /** Which tab owns the destination currently on screen. */
