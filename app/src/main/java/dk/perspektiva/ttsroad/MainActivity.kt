@@ -3189,8 +3189,11 @@ private fun PlayerScreen(
             // Only offered once the chapter's duration is known — without it there is no boundary
             // to stop at, and the timer would fire the moment it was armed.
             if (playerState.durationMs > 0L) {
-                val chapterRemainingMs =
-                    (playerState.durationMs - playerState.positionMs).coerceAtLeast(0L)
+                val chapterRemainingMs = remainingMsAtSpeed(
+                    positionMs = playerState.positionMs,
+                    durationMs = playerState.durationMs,
+                    speed = playerState.speed,
+                )
                 SleepTimerOption(label = "End of current chapter") {
                     sleepTimer.armEndOfChapter(chapterRemainingMs)
                     showSleepTimer = false
