@@ -98,6 +98,17 @@ class ColdStartSmokeTest {
         assertEquals(HISTORY_SAMPLE, restored)
     }
 
+    @Test
+    fun thePendingProgressModelOutsideTheDataPackageStillSerialises() {
+        val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+        val adapter = moshi.adapter(PendingProgress::class.java)
+
+        val restored = adapter.fromJson(adapter.toJson(PENDING_PROGRESS_SAMPLE))
+
+        assertNotNull(restored)
+        assertEquals(PENDING_PROGRESS_SAMPLE, restored)
+    }
+
     private companion object {
         val HISTORY_SAMPLE = HistorySnapshot(
             timestamp = 1_762_000_000_000L,
@@ -107,6 +118,15 @@ class ColdStartSmokeTest {
             title = "Chapter 12",
             fictionTitle = "A Fiction",
             positionMs = 42_500L,
+        )
+
+        val PENDING_PROGRESS_SAMPLE = PendingProgress(
+            fictionId = 7,
+            chapterId = 12,
+            positionSeconds = 42.5,
+            isPlayed = false,
+            clientUpdatedAt = "2026-08-11T09:41:07.412Z",
+            recordedAtMillis = 1_762_000_000_000L,
         )
     }
 }
