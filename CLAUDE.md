@@ -70,8 +70,9 @@ pinned one. `./gradlew test` and `lint` do **not** need it.
 Release shrinking is deliberately disabled. Version 0.7.0 was the first minified APK and crashed
 at startup because R8 renamed a Moshi-reflected model outside `data/`. Keep every reflectively
 serialized model explicit in `proguard-rules.pro` — `data.**` is kept wholesale, and
-`player.HistorySnapshot`, `UpdateManager$GithubRelease` and `UpdateManager$GithubAsset` each have
-their own line because they live outside that package.
+`player.HistorySnapshot`, `player.PendingProgress`, `widget.NowPlayingSnapshot`,
+`UpdateManager$GithubRelease` and `UpdateManager$GithubAsset` each have their own line because they
+live outside that package.
 
 The on-device smoke test that guards this now exists (`app/src/androidTest`), but **it only proves
 anything when run against the minified build**:
