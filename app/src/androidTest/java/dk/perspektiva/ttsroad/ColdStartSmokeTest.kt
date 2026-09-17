@@ -8,6 +8,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dk.perspektiva.ttsroad.data.LoginResponse
 import dk.perspektiva.ttsroad.data.MobileUser
 import dk.perspektiva.ttsroad.player.HistorySnapshot
+import dk.perspektiva.ttsroad.player.PendingProgress
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
