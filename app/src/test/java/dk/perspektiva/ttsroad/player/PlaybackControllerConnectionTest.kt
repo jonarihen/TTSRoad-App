@@ -27,6 +27,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 private class RecordingConnector : ControllerConnector {
+    val listeners = mutableListOf<MediaController.Listener>()
     val futures = mutableListOf<SettableFuture<MediaController>>()
     val releasedFutures = mutableListOf<Future<MediaController>>()
 
@@ -36,6 +37,7 @@ private class RecordingConnector : ControllerConnector {
         listener: MediaController.Listener,
     ): ListenableFuture<MediaController> {
         val future = SettableFuture.create<MediaController>()
+        listeners += listener
         futures += future
         return future
     }
@@ -164,6 +166,33 @@ class PlaybackControllerConnectionTest {
         assertFalse("controller must be released", realController.isConnected)
         assertNull(controller.reportedPositionMs())
         assertEquals("Nothing playing", controller.state.value.title)
+    }
+
+    @Test
+    fun `disconnect resets state and reconnects only on demand ignoring stale callbacks`() = runTest {
+        val connector = RecordingConnector()
+        val controller = controller(connector)
+        controller.connect()
+        val first = createRealController()
+        connector.futures[0].set(first)
+        first.release()
+        connector.listeners[0].onDisconnected(first)
+
+        assertNull(controller.reportedPositionMs())
+        assertEquals(PlayerUiState(), controller.state.value)
+        assertEquals(1, connector.futures.size)
+
+        controller.connect()
+        assertEquals(2, connector.futures.size)
+        val second = createRealController()
+        connector.futures[1].set(second)
+        connector.listeners[0].onDisconnected(first)
+        assertNotNull(controller.reportedPositionMs())
+        assertTrue(second.isConnected)
+        controller.release()
+        connector.listeners[1].onDisconnected(second)
+        assertEquals(2, connector.futures.size)
+        assertNull(controller.reportedPositionMs())
     }
 
     @Test

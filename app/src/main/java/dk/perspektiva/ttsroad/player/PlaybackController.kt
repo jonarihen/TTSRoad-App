@@ -133,6 +133,20 @@ class PlaybackController internal constructor(
                     ComponentName(context, TtsRoadMediaService::class.java),
                 )
                 val sessionListener = object : MediaController.Listener {
+                    override fun onDisconnected(controller: MediaController) {
+                        if (generation != connectionGeneration) return
+                        connectionGeneration++
+                        connecting = null
+                        this@PlaybackController.controller?.removeListener(listener)
+                        this@PlaybackController.controller = null
+                        tickerJob?.cancel()
+                        tickerJob = null
+                        cachedQueue = emptyList()
+                        cachedQueueKey = null
+                        _transientFeedback.value = null
+                        _state.value = PlayerUiState()
+                    }
+
                     override fun onCustomCommand(
                         controller: MediaController,
                         command: SessionCommand,
@@ -160,7 +174,7 @@ class PlaybackController internal constructor(
                     }
                 }
                 if (created != null) {
-                    if (generation == connectionGeneration && isActive) {
+                    if (generation == connectionGeneration && isActive && created.isConnected) {
                         controller = created
                         created.addListener(listener)
                         updateTicker(created)
@@ -174,7 +188,7 @@ class PlaybackController internal constructor(
             }.also { connecting = it }
         }
         val result = runCatching { pending.await() }.getOrNull()
-        if (result == null && connecting === pending) {
+        if (connecting === pending) {
             connecting = null
         }
         return result
