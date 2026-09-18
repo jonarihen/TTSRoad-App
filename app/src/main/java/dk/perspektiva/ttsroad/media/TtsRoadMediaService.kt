@@ -240,6 +240,23 @@ class TtsRoadMediaService : MediaLibraryService() {
                  * the case that matters, since the car and the notification can both do it.
                  */
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    // The chapter just left never gets another tick, pause or queue-end: by the time
+                    // this fires the player already points at the new item, so saveCurrentProgress
+                    // can no longer see it. Persist its last known position first, keyed to the item
+                    // that ended rather than re-reading the player — otherwise an auto-advanced
+                    // chapter keeps only its last pre-boundary tick and is never marked played.
+                    val finished = transitionFinishedItem(lastProgressItem, mediaItem?.mediaId)
+                    if (finished != null) {
+                        lastProgressItem = null
+                        serviceScope.launch {
+                            saveProgressFor(
+                                finished,
+                                lastProgressPositionMs,
+                                lastProgressDurationMs,
+                                queueEnded = false,
+                            )
+                        }
+                    }
                     currentFictionId.value = mediaItem?.mediaMetadata?.extras
                         ?.getInt("fiction_id")
                         ?.takeIf { it > 0 }
@@ -781,10 +798,26 @@ class TtsRoadMediaService : MediaLibraryService() {
         runCatching { NowPlayingWidget().updateAll(this) }
     }
 
+    private var lastProgressItem: MediaItem? = null
+    private var lastProgressPositionMs: Long = 0L
+    private var lastProgressDurationMs: Long? = null
+
     private suspend fun saveCurrentProgress(queueEnded: Boolean) {
         val mediaItem = player.currentMediaItem ?: return
         val position = player.currentPosition.coerceAtLeast(0L)
         val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }
+        saveProgressFor(mediaItem, position, duration, queueEnded)
+    }
+
+    private suspend fun saveProgressFor(
+        mediaItem: MediaItem,
+        position: Long,
+        duration: Long?,
+        queueEnded: Boolean,
+    ) {
+        lastProgressItem = mediaItem
+        lastProgressPositionMs = position
+        lastProgressDurationMs = duration
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 }
         val chapterId = extras?.getInt("chapter_id")?.takeIf { it > 0 }
@@ -1353,6 +1386,15 @@ internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition
 ): MediaSession.MediaItemsWithStartPosition =
     if (requestedPositionMs == C.TIME_UNSET) this
     else MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, requestedPositionMs)
+
+/**
+ * Which previously-playing item a media-item transition leaves behind.
+ *
+ * Null when nothing was playing or the "transition" is the same item re-set; otherwise the item
+ * whose final position must be saved, since the player already points at the new one.
+ */
+internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): MediaItem? =
+    if (previous != null && previous.mediaId != newMediaId) previous else null
 
 internal fun stopSignedOutPlayback(player: Player) {
     player.pause()
