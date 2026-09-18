@@ -72,6 +72,54 @@ class PlayedThresholdTest {
     }
 
     @Test
+    fun `natural queue end does not mark played when automatic marking is disabled`() {
+        for (duration in listOf(hourMs, null, 0L, -1L)) {
+            assertFalse(
+                PlayedThreshold.reached(
+                    positionMs = hourMs,
+                    durationMs = duration,
+                    autoMarkEnabled = false,
+                    queueEnded = true,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `natural queue end marks played when automatic marking is enabled`() {
+        for (duration in listOf(hourMs, null, 0L, -1L)) {
+            assertTrue(
+                PlayedThreshold.reached(
+                    positionMs = hourMs,
+                    durationMs = duration,
+                    autoMarkEnabled = true,
+                    queueEnded = true,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `natural queue end still marks played before the position threshold`() {
+        assertTrue(
+            PlayedThreshold.reached(
+                positionMs = 0L,
+                durationMs = hourMs,
+                autoMarkEnabled = true,
+                queueEnded = true,
+            ),
+        )
+        assertFalse(
+            PlayedThreshold.reached(
+                positionMs = 0L,
+                durationMs = hourMs,
+                autoMarkEnabled = false,
+                queueEnded = true,
+            ),
+        )
+    }
+
+    @Test
     fun `the start of a chapter is never played`() {
         assertFalse(PlayedThreshold.reached(0L, hourMs, autoMarkEnabled = true))
         assertFalse(PlayedThreshold.reached(0L, twentyMinutesMs, autoMarkEnabled = true))

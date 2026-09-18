@@ -25,16 +25,15 @@ object PlayedThreshold {
      * [autoMarkEnabled] is the account's `auto_mark_played`. An explicit mark from the user does
      * not come through here — the service applies that unconditionally, which is how the web reads
      * the preference too: it governs the automatic path only.
-     *
-     * A null [durationMs] means the player has not resolved a duration yet, and nothing can be
-     * concluded from a position without one.
      */
     fun reached(
         positionMs: Long,
         durationMs: Long?,
         autoMarkEnabled: Boolean,
+        queueEnded: Boolean = false,
     ): Boolean {
         if (!autoMarkEnabled) return false
+        if (queueEnded) return true
         val total = durationMs?.takeIf { it > 0 } ?: return false
         return positionMs >= total - TailMs ||
             positionMs.toDouble() / total.toDouble() >= Fraction
