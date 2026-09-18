@@ -1,5 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -15,6 +17,12 @@ import org.junit.Test
  */
 class ChapterNotificationsTest {
 
+    private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+    private val adapter = moshi.adapter(ChapterNotificationsResponse::class.java)
+
+    private fun decode(json: String): ChapterNotificationsResponse =
+        requireNotNull(adapter.fromJson(json)) { "adapter returned null for $json" }
+
     private fun notice(
         id: Int,
         state: String,
@@ -29,7 +37,7 @@ class ChapterNotificationsTest {
         chapter = ChapterNotificationChapter(
             id = 100 + id,
             title = "Chapter $id",
-            chapterNumber = id,
+            chapterNumber = id.toDouble(),
             ttsProgress = progress,
         ),
     )
@@ -120,5 +128,37 @@ class ChapterNotificationsTest {
             chapterNotificationsEmptyNote(followsAnything = true),
         )
         assertTrue(chapterNotificationsEmptyNote(followsAnything = false).contains("Follow a serial"))
+    }
+
+    @Test
+    fun `chapter_number decodes as a float and as null`() {
+        // The backend stores chapter_number as a float, so 12.0 is a real wire value; an unnumbered
+        // interlude sends null. An Int adapter throws on 12.0 and takes the whole payload down.
+        val response = decode(
+            """
+            {
+              "notifications": [
+                {
+                  "id": 1,
+                  "state": "ready",
+                  "dismissible": true,
+                  "playable": true,
+                  "fiction": {"id": 7, "title": "A Test Serial"},
+                  "chapter": {"id": 101, "title": "Chapter 12", "chapter_number": 12.0}
+                },
+                {
+                  "id": 2,
+                  "state": "pulled",
+                  "fiction": {"id": 7, "title": "A Test Serial"},
+                  "chapter": {"id": 102, "title": "Interlude", "chapter_number": null}
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(12.0, response.notifications[0].chapter.chapterNumber)
+        assertEquals("Chapter 12  ·  ready to listen", response.notifications[0].detailLabel())
+        assertNull(response.notifications[1].chapter.chapterNumber)
     }
 }

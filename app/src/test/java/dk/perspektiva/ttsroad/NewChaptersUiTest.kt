@@ -105,7 +105,7 @@ class NewChaptersUiTest {
             playable = true,
             dismissible = true,
             fiction = ChapterNotificationFiction(title = "Test Serial"),
-            chapter = ChapterNotificationChapter(title = "Chapter 1", chapterNumber = 1),
+            chapter = ChapterNotificationChapter(title = "Chapter 1", chapterNumber = 1.0),
         )
         val state = NewChaptersState().apply {
             isLoading = false
