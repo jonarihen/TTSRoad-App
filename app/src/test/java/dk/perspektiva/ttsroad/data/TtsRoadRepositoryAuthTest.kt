@@ -153,6 +153,23 @@ class TtsRoadRepositoryAuthTest {
     }
 
     @Test
+    fun `logout posts the signed request and drops the bearer header`() = runTest {
+        val store = loggedInStore()
+        val repository = TtsRoadRepository(store)
+        server.enqueue(MockResponse().setBody("""{"status":"ok","revoked":true}"""))
+
+        repository.logout()
+
+        assertEquals("Bearer stale-token", server.takeRequest().getHeader("Authorization"))
+        assertEquals(1, store.clearTokenCalls)
+        assertNull(repository.authHeader)
+
+        server.enqueue(MockResponse().setBody("""{"api_version":1,"capabilities":{}}"""))
+        repository.capabilities(server.url("/").toString())
+        assertNull(server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
     fun `the recovered session sends the new token`() = runTest {
         val store = loggedInStore()
         val repository = TtsRoadRepository(store)
