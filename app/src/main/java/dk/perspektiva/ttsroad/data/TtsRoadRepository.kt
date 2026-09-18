@@ -121,6 +121,12 @@ class TtsRoadRepository(
     private val clock: () -> Long = System::currentTimeMillis,
     /** Where read-along documents survive a restart. Defaults to not persisting at all. */
     private val readAlongStore: ReadAlongStore = ReadAlongStore.None,
+    /**
+     * Runs wherever the session is dropped, so per-account state the repository cannot see —
+     * the offline progress backlog — is cleared with the rest rather than flushing under the
+     * next account. A callback rather than a reference: this class must not depend on player.
+     */
+    private val onSessionCleared: () -> Unit = {},
 ) {
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
@@ -282,6 +288,7 @@ class TtsRoadRepository(
         authHeader = null
         tokenStore.clearToken()
         invalidateReader()
+        onSessionCleared()
         _sessionEnd.value = end
     }
 
@@ -303,6 +310,7 @@ class TtsRoadRepository(
         // cached read-along must never outlive the session that fetched it.
         invalidateReader()
         synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
+        onSessionCleared()
     }
 
     /**
@@ -1610,6 +1618,7 @@ class TtsRoadRepository(
                     authHeader = null
                     tokenStore.clearToken()
                     invalidateReader()
+                    onSessionCleared()
                     _sessionEnd.value = parseSessionEnd(e.response()?.errorBody()?.string())
                 }
             }
