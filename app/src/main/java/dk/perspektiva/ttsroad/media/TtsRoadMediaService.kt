@@ -204,7 +204,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_ENDED) {
                         serviceScope.launch {
-                            saveCurrentProgress(forcePlayed = true)
+                            saveCurrentProgress(queueEnded = true)
                             // STATE_ENDED means the whole loaded queue is done, not one chapter,
                             // so this is the end of the book. Only now does the server queue get
                             // a say — everything before this point is the local queue, untouched.
@@ -225,7 +225,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (!isPlaying) {
-                        serviceScope.launch { saveCurrentProgress(forcePlayed = false) }
+                        serviceScope.launch { saveCurrentProgress(queueEnded = false) }
                     } else {
                         // Do not wait for the first 15-second progress tick to turn Play into Pause.
                         serviceScope.launch { publishNowPlaying(forcePlaying = true) }
@@ -458,7 +458,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         serviceScope.launch {
             while (isActive) {
                 delay(15_000)
-                if (player.isPlaying) saveCurrentProgress(forcePlayed = false)
+                if (player.isPlaying) saveCurrentProgress(queueEnded = false)
             }
         }
     }
@@ -781,7 +781,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         runCatching { NowPlayingWidget().updateAll(this) }
     }
 
-    private suspend fun saveCurrentProgress(forcePlayed: Boolean) {
+    private suspend fun saveCurrentProgress(queueEnded: Boolean) {
         val mediaItem = player.currentMediaItem ?: return
         val position = player.currentPosition.coerceAtLeast(0L)
         val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }
@@ -812,13 +812,11 @@ class TtsRoadMediaService : MediaLibraryService() {
         // and this client did not, marking past 96% regardless — and because the phone writes
         // is_played to the same rows the browser reads, unticking the box in a browser was being
         // overridden by the device doing most of the listening (#119).
-        //
-        // forcePlayed is deliberately outside the gate: the preference is about the automatic path,
-        // which is how the web reads it too. Pressing "mark played" still marks it played.
-        val nearComplete = PlayedThreshold.reached(
+        val isPlayed = PlayedThreshold.reached(
             positionMs = position,
             durationMs = duration,
             autoMarkEnabled = preferences.current().autoMarkPlayed,
+            queueEnded = queueEnded,
         )
 
         // Queue first, then try to send. The write used to be a bare `runCatching` around the post,
@@ -831,7 +829,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 fictionId = fictionId,
                 chapterId = chapterId,
                 positionSeconds = position / 1000.0,
-                isPlayed = forcePlayed || nearComplete,
+                isPlayed = isPlayed,
             )
         }
         progressSync.flush()
