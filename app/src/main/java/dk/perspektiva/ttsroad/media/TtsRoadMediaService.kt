@@ -1171,7 +1171,9 @@ class TtsRoadMediaService : MediaLibraryService() {
                 val fictionId = extras?.getInt("fiction_id", 0)?.takeIf { it > 0 }
                 val chapterId = extras?.getInt("chapter_id", 0)?.takeIf { it > 0 }
                 if (fictionId != null && chapterId != null) {
-                    service.buildFictionQueue(fictionId, chapterId)?.let { return@future it }
+                    service.buildFictionQueue(fictionId, chapterId)?.let {
+                        return@future it.withRequestedStartPosition(startPositionMs)
+                    }
                 }
                 MediaSession.MediaItemsWithStartPosition(
                     mediaItems.map(::restoreItem),
@@ -1346,6 +1348,13 @@ class TtsRoadMediaService : MediaLibraryService() {
         const val SLEEP_TIMER_TICK_MS = 500L
     }
 }
+
+@OptIn(UnstableApi::class)
+internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition(
+    requestedPositionMs: Long,
+): MediaSession.MediaItemsWithStartPosition =
+    if (requestedPositionMs == C.TIME_UNSET) this
+    else MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, requestedPositionMs)
 
 internal fun stopSignedOutPlayback(player: Player) {
     player.pause()
