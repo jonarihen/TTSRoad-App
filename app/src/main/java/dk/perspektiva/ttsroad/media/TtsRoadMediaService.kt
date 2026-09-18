@@ -115,6 +115,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var shakeDetector: ShakeDetector? = null
     private var lastLibrary: LibraryResponse? = null
     private var lastLibraryCursor: String? = null
+    private var lastSessionIdentity: Pair<String, String?>? = null
+    private var searchCacheGeneration = 0L
 
     // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
     // outage later in the night gets a fresh set of attempts rather than giving up immediately.
@@ -164,6 +166,19 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
                 // for the instant before its DataStore read finishes.
+                val sessionIdentity = if (state.isLoggedIn) {
+                    state.serverUrl to state.username
+                } else {
+                    null
+                }
+                if (sessionIdentity != lastSessionIdentity) {
+                    lastSessionIdentity = sessionIdentity
+                    // The car searches and browses off this memo. Never serve one account's
+                    // library — or its spoken-search results — to another, or to nobody.
+                    lastLibrary = null
+                    lastLibraryCursor = null
+                    searchCacheGeneration++
+                }
                 if (!state.isLoggedIn) {
                     if (::player.isInitialized) stopSignedOutPlayback(player)
                     // Ordered against the publishes: a tick captured just before the sign-out must
@@ -1003,6 +1018,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             }
         }.getOrNull()
         if (loaded != null) {
+            if (loaded != lastLibrary) searchCacheGeneration++
             lastLibrary = loaded
         }
         return loaded ?: lastLibrary
@@ -1228,16 +1244,12 @@ class TtsRoadMediaService : MediaLibraryService() {
         // Media3 splits searching in two: onSearch does the work and reports how many results
         // exist, then the browser asks for the page it wants. The result is cached between the two
         // so the library is not fetched and matched twice per spoken search.
-        private var cachedQuery: String? = null
-        private var cachedResults: List<MediaItem> = emptyList()
+        private val searchCache = SearchResultCache()
 
-        private suspend fun results(query: String): List<MediaItem> {
-            if (query == cachedQuery) return cachedResults
-            val found = service.searchItems(query)
-            cachedQuery = query
-            cachedResults = found
-            return found
-        }
+        private suspend fun results(query: String): List<MediaItem> =
+            searchCache.results(query, service.searchCacheGeneration) {
+                service.searchItems(query)
+            }
 
         override fun onSearch(
             session: MediaLibrarySession,
@@ -1396,6 +1408,33 @@ internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition
  */
 internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): MediaItem? =
     if (previous != null && previous.mediaId != newMediaId) previous else null
+
+/**
+ * The spoken-search result held between Media3's two-step search.
+ *
+ * `onSearch` does the work and `onGetSearchResult` pages it, so the library is not fetched twice
+ * per query — but a retained result must never outlive the library or session it was built from.
+ * The generation tags both: the service bumps it on sign-out, account switch and every library
+ * refresh, so a repeat query after any of those refetches instead of serving stale items.
+ */
+internal class SearchResultCache {
+    private var cachedQuery: String? = null
+    private var cachedGeneration = -1L
+    private var cachedResults: List<MediaItem> = emptyList()
+
+    suspend fun results(
+        query: String,
+        generation: Long,
+        search: suspend () -> List<MediaItem>,
+    ): List<MediaItem> {
+        if (query == cachedQuery && generation == cachedGeneration) return cachedResults
+        return search().also {
+            cachedQuery = query
+            cachedGeneration = generation
+            cachedResults = it
+        }
+    }
+}
 
 internal fun stopSignedOutPlayback(player: Player) {
     player.pause()
