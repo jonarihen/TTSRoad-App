@@ -7,6 +7,7 @@ import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.updateAll
+import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
@@ -14,7 +15,9 @@ import dk.perspektiva.ttsroad.media.TtsRoadMediaService
 import dk.perspektiva.ttsroad.media.TtsRoadSessionCommands
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.guava.await
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The widget's buttons, issued against the one real playback session (#150).
@@ -23,9 +26,11 @@ import kotlinx.coroutines.withContext
  * That is not a second playback path: it is the same session the notification, the lockscreen and
  * Android Auto drive, so a widget tap and a notification tap are indistinguishable to the player.
  *
- * Connecting also *starts* the service when the process is dead, which is what makes play work from
- * a cold home screen — the service's `onPlaybackResumption` then restores the newest
- * continue-listening item, exactly as it does for a media-button press.
+ * Binding alone does not *start* the service, so from a cold home screen the play command asks
+ * `onPlaybackResumption` to restore the newest continue-listening item, exactly as it does for a
+ * media-button press — and the play branch then holds the controller until audio actually starts,
+ * so the unbind in the `finally` below cannot destroy the service mid-resumption. Once media3
+ * reaches a ready state it foregrounds the service itself.
  *
  * All of it runs on [Dispatchers.Main]. Media3 verifies the application thread on every
  * [MediaController] call — `isPlaying`, `play`, `sendCustomCommand` and `release` alike — and Glance
@@ -63,13 +68,46 @@ private suspend fun refresh(context: Context) {
     runCatching { NowPlayingWidget().updateAll(context) }
 }
 
+/**
+ * Hold the bound controller after a cold play until audio actually starts.
+ *
+ * A bind does not start the service, and `play()` returns as soon as the resumption request is
+ * sent while the network fetch runs on. Releasing immediately would unbind the only client before
+ * the service foregrounds itself, destroying it mid-resumption. Once media3 reaches a playing or
+ * buffering state it has foregrounded the service, so the `finally` in [withController] is safe.
+ * On timeout it degrades to the old behaviour: release and let the widget still show Play.
+ */
+internal suspend fun MediaController.awaitPlaybackStart(timeoutMs: Long = 7_000L) {
+    if (isPlaying) return
+    withTimeoutOrNull(timeoutMs) {
+        suspendCancellableCoroutine { cont ->
+            val listener = object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) cont.resume(Unit) { _, _, _ -> }
+                }
+
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_BUFFERING) cont.resume(Unit) { _, _, _ -> }
+                }
+            }
+            addListener(listener)
+            cont.invokeOnCancellation { removeListener(listener) }
+        }
+    }
+}
+
 class TogglePlayPauseAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         withController(context) { controller ->
             // Asked of the live player rather than of the stored note: by the time a tap arrives the
             // snapshot may be minutes old, and toggling from a stale reading would pause a player
             // the user just started somewhere else.
-            if (controller.isPlaying) controller.pause() else controller.play()
+            if (controller.isPlaying) {
+                controller.pause()
+            } else {
+                controller.play()
+                controller.awaitPlaybackStart()
+            }
         }
         refresh(context)
     }
