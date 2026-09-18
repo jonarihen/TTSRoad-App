@@ -130,7 +130,7 @@ class TtsRoadRepository(
     // session, and thread pools are reused across calls — a new OkHttpClient per
     // request would force a fresh handshake every time (e.g. each progress save).
     @Volatile
-    private var authHeader: String? = null
+    internal var authHeader: String? = null
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -294,6 +294,7 @@ class TtsRoadRepository(
             }
         }
         tokenStore.clearToken()
+        authHeader = null
         // Discovery is per server, and the next sign-in may be a different one. Leaving the old
         // flags in place would show read-along or device management on a server without them.
         forgetCapabilities(session.serverUrl)
