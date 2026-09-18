@@ -929,9 +929,10 @@ class TtsRoadMediaService : MediaLibraryService() {
         // the next chapter rather than never — and so an off setting costs one preference read per
         // chapter rather than one per tick.
         lastKeepAheadChapterId = chapterId
-        if (keepAhead <= 0) return
-
-        val chapters = fictionChapters(fictionId)?.second ?: return
+        // No early return when the feature is off: the planner treats keepAhead <= 0 as
+        // release-everything, which is how switching it off gives back the space. The release
+        // path needs no chapter listing, so an unreachable server must not block it either.
+        val chapters = if (keepAhead <= 0) emptyList() else fictionChapters(fictionId)?.second ?: return
         ServiceLocator.offlineDownloads(this).applyKeepAhead(
             chapters = chapters,
             currentChapterId = chapterId,
