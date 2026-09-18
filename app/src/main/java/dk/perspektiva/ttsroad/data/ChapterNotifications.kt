@@ -36,7 +36,7 @@ val ChapterNotificationEntry.presentation: ChapterNotificationState
 
 /** "Chapter 412 · converting 62%", or what happened instead. */
 fun ChapterNotificationEntry.detailLabel(): String {
-    val chapterLabel = chapter.chapterNumber?.let { "Chapter $it" } ?: chapter.title
+    val chapterLabel = chapter.chapterNumber?.let { "Chapter ${chapterNumberText(it)}" } ?: chapter.title
     val state = when (presentation) {
         ChapterNotificationState.Ready -> "ready to listen"
         ChapterNotificationState.Stalled -> "conversion failed"

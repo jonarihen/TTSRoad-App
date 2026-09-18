@@ -1578,7 +1578,7 @@ data class ChapterNotificationFiction(
 data class ChapterNotificationChapter(
     val id: Int = 0,
     val title: String = "Untitled",
-    @param:Json(name = "chapter_number") val chapterNumber: Int? = null,
+    @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
     val status: String? = null,
     /** Conversion percentage while narrating; null once done, so a stalled row cannot read as busy. */
     @param:Json(name = "tts_progress") val ttsProgress: Int? = null,
