@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -201,5 +202,35 @@ class UpdateManagerTest {
         manager.check(currentVersionName = "1.0.0", manual = true)
 
         assertEquals(UpdateState.UpToDate, manager.state.value)
+    }
+
+    @Test
+    fun `manual check cancelled mid-fetch propagates cancellation and does not set Failed`() = runTest {
+        val manager = updateManager(this)
+        server.enqueue(
+            MockResponse()
+                .setBody("""{"tag_name": "v9.9.9", "assets": []}""")
+                .setBodyDelay(500, TimeUnit.MILLISECONDS),
+        )
+
+        var thrown: Throwable? = null
+        val checkJob = launch {
+            try {
+                manager.check(currentVersionName = "1.0.0", manual = true)
+            } catch (e: Throwable) {
+                thrown = e
+            }
+        }
+
+        while (server.requestCount == 0) {
+            delay(10)
+        }
+        assertEquals(UpdateState.Checking, manager.state.value)
+
+        checkJob.cancel()
+        checkJob.join()
+
+        assertTrue(thrown is CancellationException)
+        assertEquals(UpdateState.Idle, manager.state.value)
     }
 }

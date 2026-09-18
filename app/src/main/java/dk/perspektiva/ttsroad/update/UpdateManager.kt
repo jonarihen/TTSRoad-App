@@ -84,6 +84,9 @@ class UpdateManager internal constructor(
         _state.value = UpdateState.Checking
         val release = try {
             fetchLatestRelease()
+        } catch (e: CancellationException) {
+            _state.value = UpdateState.Idle
+            throw e
         } catch (e: Exception) {
             _state.value = if (manual) UpdateState.Failed(e.message ?: "Update check failed") else UpdateState.Idle
             return
@@ -105,7 +108,7 @@ class UpdateManager internal constructor(
                 installer(appContext, apk)
                 _state.value = UpdateState.Idle
             } catch (e: Exception) {
-                if (e is CancellationException || !isActive) {
+            if (e is CancellationException || !currentCoroutineContext().isActive) {
                     _state.value = UpdateState.Idle
                 } else {
                     _state.value = UpdateState.Failed(e.message ?: "Download failed")
