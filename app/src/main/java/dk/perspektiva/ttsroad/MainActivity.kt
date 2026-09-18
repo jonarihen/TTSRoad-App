@@ -445,6 +445,7 @@ private fun TtsRoadApp(
             // The cache outlives the composition, so signing out has to empty it explicitly —
             // otherwise the next account is shown the previous one's library.
             ServiceLocator.libraryCache(context).clear()
+            ServiceLocator.pendingProgress(context).clear()
         }
     }
 

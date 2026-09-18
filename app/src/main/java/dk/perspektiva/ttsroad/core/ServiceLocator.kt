@@ -107,12 +107,14 @@ object ServiceLocator {
 
     fun repository(context: Context): TtsRoadRepository =
         repository ?: synchronized(this) {
+            val appContext = context.applicationContext
             repository ?: TtsRoadRepository(
-                tokenStore = tokenStore(context),
+                tokenStore = tokenStore(appContext),
                 // Read-along documents outlive the process so a chapter opened once reads offline.
                 readAlongStore = ReadAlongFileStore(
-                    File(context.applicationContext.filesDir, "readalong"),
+                    File(appContext.filesDir, "readalong"),
                 ),
+                onSessionCleared = { pendingProgress(appContext).clear() },
             ).also { repository = it }
         }
 
