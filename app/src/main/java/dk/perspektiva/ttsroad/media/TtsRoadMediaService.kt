@@ -107,6 +107,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var sleepTimer: SleepTimerController
     private lateinit var fictionSpeeds: FictionSpeedPreferences
     private lateinit var nowPlayingStore: NowPlayingStore
+    private var playbackSessionGeneration = 0L
+    private var playbackSessionActive = false
 
     /** The book currently playing, or null. Drives the per-fiction speed; see [effectiveSpeed]. */
     private val currentFictionId = MutableStateFlow<Int?>(null)
@@ -160,6 +162,8 @@ class TtsRoadMediaService : MediaLibraryService() {
         serviceScope.launch { progressSync.flush() }
         serviceScope.launch {
             tokenStore.session.collectLatest { state ->
+                playbackSessionGeneration++
+                playbackSessionActive = state.isLoggedIn
                 audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(state.serverUrl, state.authorizationHeader)
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
@@ -202,15 +206,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_ENDED) {
-                        serviceScope.launch {
-                            saveCurrentProgress(queueEnded = true)
-                            // STATE_ENDED means the whole loaded queue is done, not one chapter,
-                            // so this is the end of the book. Only now does the server queue get
-                            // a say — everything before this point is the local queue, untouched.
-                            advanceServerQueue()
-                        }
-                    } else {
+                    if (playbackState != Player.STATE_ENDED) {
                         // READY is when duration first becomes trustworthy; BUFFERING also matters
                         // after restoring a queue before isPlaying has changed.
                         serviceScope.launch { publishNowPlaying(forcePlaying = null) }
@@ -288,6 +284,29 @@ class TtsRoadMediaService : MediaLibraryService() {
                 }
             },
         )
+        GrowingPlaybackQueue(
+            player = player,
+            scope = serviceScope,
+            sessionKey = { playbackSessionGeneration.takeIf { playbackSessionActive } },
+            load = { fictionId ->
+                val response = repository.chapters(fictionId = fictionId, playableOnly = true)
+                val url = serverUrl()
+                response.chapters.mapNotNull { TtsRoadMediaItems.chapter(it, response.fiction, url) }
+            },
+            advance = {
+                val response = repository.advanceQueue()
+                if (response?.status == QueueStatusPlaying) {
+                    response.item?.let { TtsRoadMediaItems.queueItem(it, serverUrl()) }
+                } else null
+            },
+            allowContinuation = {
+                tickSleepTimer()
+                sleepTimer.state.value.mode != SleepTimerMode.EndOfChapter && player.playWhenReady
+            },
+            saveEndedProgress = { item, position, duration ->
+                saveProgressFor(item, position, duration, queueEnded = true)
+            },
+        ).start()
         startProgressTicker()
         startPlaybackSkipTicker()
         startSleepTimer()
@@ -939,36 +958,6 @@ class TtsRoadMediaService : MediaLibraryService() {
             fictionId = fictionId,
             serverUrl = serverUrl(),
         )
-    }
-
-    /**
-     * At the end of the loaded queue, ask the server what should play next.
-     *
-     * Deliberately the *only* place the server queue touches playback. Everything up to here is the
-     * local per-fiction queue behaving exactly as it always has — tap a chapter, get the whole book
-     * in order, auto-advance within it. This runs once that book is finished, which is the moment
-     * the app previously just stopped.
-     *
-     * The decision is the server's rather than this client's: `advance` pops the queue head, and
-     * when the queue is empty it consults the account's `queue_when_empty` — `continue` gives the
-     * oldest unplayed chapter in the library, `stop` gives nothing. Deciding locally would make the
-     * phone and the browser disagree about what comes after a book.
-     *
-     * Silent on every failure. A server with no queue, an unreachable one, or an empty answer all
-     * mean the same thing here: stop, which is what would have happened anyway.
-     */
-    private suspend fun advanceServerQueue() {
-        val response = runCatching { repository.advanceQueue() }.getOrNull() ?: return
-        if (response.status != QueueStatusPlaying) return
-        val next = response.item ?: return
-        val item = TtsRoadMediaItems.queueItem(next, serverUrl()) ?: return
-
-        player.setMediaItem(item)
-        next.positionSeconds
-            .takeIf { it > 0.0 }
-            ?.let { player.seekTo((it * 1000).toLong()) }
-        player.prepare()
-        player.play()
     }
 
     private suspend fun serverUrl(): String = tokenStore.current().serverUrl
