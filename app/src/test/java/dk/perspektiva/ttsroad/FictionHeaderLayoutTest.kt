@@ -192,6 +192,23 @@ class FictionHeaderLayoutTest {
     }
 
     @Test
+    fun `ebook export appears in the reader band only when offered`() {
+        compose.setContent {
+            TtsRoadTheme {
+                FictionMaintenanceSheet(
+                    fiction = fiction,
+                    isBusy = false,
+                    onDismiss = {},
+                    onExportEbook = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("Download EPUB").assertExists()
+        compose.onNodeWithText("// Admin").assertDoesNotExist()
+    }
+
+    @Test
     fun `a blank feed url does not create an empty reader band`() {
         compose.setContent {
             TtsRoadTheme {

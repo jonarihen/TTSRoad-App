@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import okhttp3.MultipartBody
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
@@ -13,6 +14,7 @@ import retrofit2.http.POST
 import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 /**
  * Marks a request the shared auth interceptor must leave alone. The header never reaches the wire —
@@ -68,6 +70,10 @@ interface TtsRoadApi {
         @Query("scope") scope: String = LibraryScopeFollowed,
         @Query("updated_since") updatedSince: String? = null,
     ): LibraryResponse
+
+    @Streaming
+    @GET("api/fictions/{fiction_id}/export.epub")
+    suspend fun exportEbook(@Path("fiction_id") fictionId: Int): Response<ResponseBody>
 
     @GET("api/mobile/fictions/{fiction_id}/chapters")
     suspend fun chapters(

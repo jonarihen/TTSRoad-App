@@ -175,6 +175,7 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.DefaultMaxEpubBytes
 import dk.perspektiva.ttsroad.data.DeviceSession
 import dk.perspektiva.ttsroad.data.EpubPickerMimeTypes
+import dk.perspektiva.ttsroad.data.EbookExportResult
 import dk.perspektiva.ttsroad.data.FictionAddResult
 import dk.perspektiva.ttsroad.data.FictionEditResult
 import dk.perspektiva.ttsroad.data.FictionMetadataDraft
@@ -1342,6 +1343,34 @@ private fun FictionScreen(
     var isMaintaining by remember(fiction.id) { mutableStateOf(false) }
     var showMaintenance by remember(fiction.id) { mutableStateOf(false) }
     var maintenanceNote by remember(fiction.id) { mutableStateOf<String?>(null) }
+    var exportUri by remember(fiction.id) { mutableStateOf<android.net.Uri?>(null) }
+    val ebookExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/epub+zip"),
+    ) { uri -> exportUri = uri }
+    LaunchedEffect(exportUri) {
+        val uri = exportUri ?: return@LaunchedEffect
+        exportUri = null
+        isMaintaining = true
+        error = null
+        maintenanceNote = null
+        when (val result = runCatching { repository.exportEbook(fiction.id) }
+            .getOrElse { EbookExportResult.Refused(it.message ?: "Could not export EPUB") }) {
+            is EbookExportResult.Ready -> result.body.use { body ->
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri)?.use { output ->
+                            body.byteStream().use { input -> input.copyTo(output) }
+                        } ?: error("Could not open the selected file")
+                    }
+                }.onSuccess {
+                    maintenanceNote = result.filename?.let { "Saved $it." } ?: "EPUB saved."
+                }.onFailure { error = it.message ?: "Could not save EPUB" }
+            }
+            is EbookExportResult.Refused -> error = result.message
+            EbookExportResult.Unsupported -> error = "This server cannot export EPUBs."
+        }
+        isMaintaining = false
+    }
     var confirmReconvert by remember(fiction.id) { mutableStateOf(false) }
     var confirmDeleteChapter by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
     // This book's podcast URL (#115). One small request, only on a server that can answer it, and
@@ -1560,6 +1589,7 @@ private fun FictionScreen(
                             // rows one by one.
                             onMore = if (
                                 capabilities.fictionMaintenance ||
+                                capabilities.ebookExport ||
                                 !feedUrl.isNullOrBlank() ||
                                 (capabilities.fictionManagement && isAdmin)
                             ) {
@@ -1881,6 +1911,14 @@ private fun FictionScreen(
                                     }
                                 },
                             ) { repository.pollFiction(fiction.id) }
+                        }
+                    } else {
+                        null
+                    },
+                    onExportEbook = if (capabilities.ebookExport) {
+                        {
+                            showMaintenance = false
+                            ebookExportLauncher.launch(ebookExportFileName(fiction))
                         }
                     } else {
                         null
@@ -7857,6 +7895,16 @@ private fun shareText(context: Context, text: String, title: String) {
  * Every row states what it will do and what it costs. None of these can be undone, and two are
  * indistinguishable from the outside until they finish.
  */
+internal fun ebookExportFileName(fiction: FictionSummary): String {
+    val base = fiction.slug?.takeIf { it.isNotBlank() } ?: fiction.title
+    val safe = base.trim()
+        .replace(Regex("[^A-Za-z0-9._ -]+"), "-")
+        .replace(Regex("[ .-]+"), "-")
+        .trim('-', '.')
+        .ifBlank { "fiction-${fiction.id}" }
+    return "${safe.removeSuffix(".epub")}.epub"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun FictionMaintenanceSheet(
@@ -7870,6 +7918,7 @@ internal fun FictionMaintenanceSheet(
     onRetryFailed: (() -> Unit)? = null,
     /** Ask the source for new chapters now (#112). Null on a server without the routes. */
     onPoll: (() -> Unit)? = null,
+    onExportEbook: (() -> Unit)? = null,
     /** This fiction's podcast feed URL, or null on a server that cannot report one (#115). */
     feedUrl: String? = null,
     onShareFeed: ((String) -> Unit)? = null,
@@ -7882,7 +7931,8 @@ internal fun FictionMaintenanceSheet(
     isDeleting: Boolean = false,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
-        val hasReaderActions = onPoll != null || (!feedUrl.isNullOrBlank() && onShareFeed != null)
+        val hasReaderActions = onPoll != null || onExportEbook != null ||
+            (!feedUrl.isNullOrBlank() && onShareFeed != null)
         if (hasReaderActions) {
             MetaText(
                 text = "// This book",
@@ -7900,6 +7950,14 @@ internal fun FictionMaintenanceSheet(
                     subtitle = "Asks the source now, instead of waiting for the next poll",
                     enabled = !isBusy,
                     onClick = poll,
+                )
+            }
+            onExportEbook?.let { export ->
+                AarisActionRow(
+                    title = "Download EPUB",
+                    subtitle = "Saves this book as an EPUB file",
+                    enabled = !isBusy,
+                    onClick = export,
                 )
             }
             feedUrl?.takeIf { it.isNotBlank() }?.let { url ->

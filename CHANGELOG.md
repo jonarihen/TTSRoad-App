@@ -2,6 +2,12 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- A fiction can now be downloaded as an EPUB from **More → Download EPUB** and saved directly to a user-chosen folder. The transfer stays inside the app so the bearer token reaches the server, streams into the selected document without holding the whole book in memory, and shows the server's explanation when no chapter text is available. The action appears only when the server advertises EPUB export support. (TTSRoad-App#231, TTSRoad#330)
+
 ## 0.15.7 — 2026-09-16
 
 ### Changed

@@ -49,6 +49,7 @@ class CapabilityCatalogTest {
     fun `known flags get a human label`() {
         assertEquals("Read along", CapabilityCatalog.label("readalong"))
         assertEquals("Up Next queue", CapabilityCatalog.label("queue"))
+        assertEquals("Download EPUBs", CapabilityCatalog.label("ebook_export"))
     }
 
     @Test
@@ -112,7 +113,7 @@ class CapabilityCatalogTest {
     private val advertisedByServer = listOf(
         "account_security", "audio_content_hash", "audiobook_export", "batch_progress",
         "bookmarks", "bulk_unfollow", "chapter_maintenance", "delta_sync", "device_management",
-        "epub_upload", "feed_urls", "fiction_maintenance", "fiction_management", "follows",
+        "ebook_export", "epub_upload", "feed_urls", "fiction_maintenance", "fiction_management", "follows",
         "listening_state_backup", "listening_stats", "live_events", "logs", "notifications",
         "offline_downloads", "player_preferences", "pronunciation_reports", "queue",
         "readalong", "search", "signed_audio_urls", "storage", "voice_catalogue",

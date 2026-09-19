@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.HttpException
 import retrofit2.Retrofit
@@ -105,6 +106,12 @@ sealed interface FictionEditResult {
     data class Refused(val message: String) : FictionEditResult
     /** This server cannot do this at all — no fiction management, or no cover route. */
     data object Unsupported : FictionEditResult
+}
+
+sealed interface EbookExportResult {
+    data class Ready(val body: ResponseBody, val filename: String?) : EbookExportResult
+    data class Refused(val message: String) : EbookExportResult
+    data object Unsupported : EbookExportResult
 }
 
 /** Outcome of a mobile login attempt. */
@@ -387,6 +394,26 @@ class TtsRoadRepository(
         scope: String = LibraryScopeFollowed,
         updatedSince: String? = null,
     ): LibraryResponse = withAuthorizedApi { it.library(scope, updatedSince) }
+
+    suspend fun exportEbook(fictionId: Int): EbookExportResult {
+        if (!_currentCapabilities.value.ebookExport) return EbookExportResult.Unsupported
+        val response = withAuthorizedApi { it.exportEbook(fictionId) }
+        if (response.isSuccessful) {
+            val body = response.body()
+                ?: return EbookExportResult.Refused("The server returned an empty EPUB.")
+            return EbookExportResult.Ready(
+                body = body,
+                filename = response.headers()["Content-Disposition"]?.attachmentFilename(),
+            )
+        }
+        val message = response.errorBody().use { errorBody ->
+            detailMessage(errorBody?.string())
+        } ?: when (response.code()) {
+            404 -> "Fiction not found."
+            else -> "Export failed (HTTP ${response.code()})."
+        }
+        return EbookExportResult.Refused(message)
+    }
 
     /** Ask whether anything moved before spending requests on sparse payloads. */
     suspend fun deltaSync(updatedSince: String): DeltaSyncResponse? {
@@ -1624,6 +1651,20 @@ class TtsRoadRepository(
             }
             throw e
         }
+    }
+
+    private fun String.attachmentFilename(): String? {
+        val encoded = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
+            .find(this)?.groupValues?.get(1)
+        if (encoded != null) {
+            return runCatching { java.net.URLDecoder.decode(encoded, Charsets.UTF_8.name()) }.getOrNull()
+        }
+        return Regex("filename=\\\"([^\\\"]+)\\\"|filename=([^;]+)", RegexOption.IGNORE_CASE)
+            .find(this)
+            ?.groupValues
+            ?.drop(1)
+            ?.firstOrNull { it.isNotBlank() }
+            ?.trim()
     }
 
     private fun api(baseUrl: String): TtsRoadApi {

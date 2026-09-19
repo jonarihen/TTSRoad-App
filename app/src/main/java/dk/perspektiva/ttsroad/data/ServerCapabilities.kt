@@ -106,6 +106,8 @@ data class ServerCapabilities(
      */
     val audiobookExport: Boolean = false,
 
+    val ebookExport: Boolean = false,
+
     /** Multipart EPUB import over the mobile surface (#114). Separate from [fictionManagement]. */
     val epubUpload: Boolean = false,
 
@@ -289,6 +291,7 @@ data class ServerCapabilities(
                 playerPreferences = flags.flag("player_preferences"),
                 fictionManagement = flags.flag("fiction_management"),
                 audiobookExport = flags.flag("audiobook_export"),
+                ebookExport = flags.flag("ebook_export"),
                 epubUpload = flags.flag("epub_upload"),
                 chapterMaintenance = flags.flag("chapter_maintenance"),
                 fictionMaintenance = flags.flag("fiction_maintenance"),
