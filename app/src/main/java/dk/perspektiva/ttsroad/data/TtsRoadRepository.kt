@@ -1378,15 +1378,21 @@ class TtsRoadRepository(
         return withAuthorizedApi { it.deleteChapter(chapterId) }
     }
 
-    /**
-     * Check the source for new chapters now.
-     *
-     * Open to any account, like [retryChapter] — the server rate-limits it and a fresh chapter
-     * benefits every reader. [full] re-ingests the whole chapter list rather than the recent tail.
-     */
-    suspend fun pollFiction(fictionId: Int, full: Boolean = false): MaintenanceResponse? {
+    suspend fun pollFiction(
+        fictionId: Int,
+        scope: PollScope = PollScope.Recent,
+    ): MaintenanceResponse? {
         if (!_currentCapabilities.value.fictionMaintenance) return null
-        return withAuthorizedApi { it.pollFiction(fictionId, full = full) }
+        return when (val validScope = scope.validated()) {
+            PollScope.Recent -> withAuthorizedApi { it.pollFiction(fictionId) }
+            PollScope.All -> withAuthorizedApi { it.pollFiction(fictionId, full = true) }
+            is PollScope.First -> withAuthorizedApi {
+                it.pollFiction(fictionId, firstN = validScope.count)
+            }
+            is PollScope.Last -> withAuthorizedApi {
+                it.pollFiction(fictionId, lastN = validScope.count)
+            }
+        }
     }
 
     suspend fun retryFailedChapters(fictionId: Int): MaintenanceResponse? {

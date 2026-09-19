@@ -236,6 +236,8 @@ import dk.perspektiva.ttsroad.data.listeningStateJson
 import dk.perspektiva.ttsroad.data.parseListeningStateJson
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.MaintenanceResponse
+import dk.perspektiva.ttsroad.data.PollScope
+import dk.perspektiva.ttsroad.data.pollConfirmation
 import dk.perspektiva.ttsroad.data.MobileVoice
 import dk.perspektiva.ttsroad.data.PronunciationReport
 import dk.perspektiva.ttsroad.data.ReadAlongDocument
@@ -1351,6 +1353,7 @@ private fun FictionScreen(
     // running two at once is never what anyone meant.
     var isMaintaining by remember(fiction.id) { mutableStateOf(false) }
     var showMaintenance by remember(fiction.id) { mutableStateOf(false) }
+    var showPollScope by remember(fiction.id) { mutableStateOf(false) }
     var showNotificationSettings by remember(fiction.id) { mutableStateOf(false) }
     var notificationSettings by remember(fiction.id) { mutableStateOf<FictionNotificationSettings?>(null) }
     var maintenanceNote by remember(fiction.id) { mutableStateOf<String?>(null) }
@@ -1848,12 +1851,10 @@ private fun FictionScreen(
                     fiction = fiction,
                     isBusy = isMaintaining,
                     onDismiss = { showMaintenance = false },
-                    onPollFull = if (capabilities.fictionMaintenance && isAdmin) {
+                    onChoosePollScope = if (capabilities.fictionMaintenance) {
                         {
                             showMaintenance = false
-                            maintain(describe = { "Re-reading the whole chapter list." }) {
-                                repository.pollFiction(fiction.id, full = true)
-                            }
+                            showPollScope = true
                         }
                     } else {
                         null
@@ -1913,15 +1914,7 @@ private fun FictionScreen(
                         {
                             showMaintenance = false
                             maintain(
-                                describe = { response ->
-                                    when {
-                                        response.fullIngest -> "Re-reading the whole chapter list."
-                                        (response.partialSync ?: 0) > 0 ->
-                                            "Checking the last ${response.partialSync} chapters."
-
-                                        else -> "Checking the source now."
-                                    }
-                                },
+                                describe = { response -> pollConfirmation(PollScope.Recent, response) },
                             ) { repository.pollFiction(fiction.id) }
                         }
                     } else {
@@ -1977,6 +1970,18 @@ private fun FictionScreen(
                         null
                     },
                     isDeleting = isDeleting,
+                )
+            }
+
+            if (showPollScope) {
+                FictionPollScopeSheet(
+                    onDismiss = { showPollScope = false },
+                    onPoll = { pollScope ->
+                        showPollScope = false
+                        maintain(
+                            describe = { response -> pollConfirmation(pollScope, response) },
+                        ) { repository.pollFiction(fiction.id, pollScope) }
+                    },
                 )
             }
 
@@ -8061,7 +8066,7 @@ internal fun FictionMaintenanceSheet(
     fiction: FictionSummary,
     isBusy: Boolean,
     onDismiss: () -> Unit,
-    onPollFull: (() -> Unit)? = null,
+    onChoosePollScope: (() -> Unit)? = null,
     onApplyFilter: (() -> Unit)? = null,
     onRetag: (() -> Unit)? = null,
     onReconvertAll: (() -> Unit)? = null,
@@ -8083,7 +8088,7 @@ internal fun FictionMaintenanceSheet(
     isDeleting: Boolean = false,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
-        val hasReaderActions = onPoll != null || onExportEbook != null ||
+        val hasReaderActions = onPoll != null || onChoosePollScope != null || onExportEbook != null ||
             onNotificationSettings != null || (!feedUrl.isNullOrBlank() && onShareFeed != null)
         if (hasReaderActions) {
             MetaText(
@@ -8102,6 +8107,14 @@ internal fun FictionMaintenanceSheet(
                     subtitle = "Asks the source now, instead of waiting for the next poll",
                     enabled = !isBusy,
                     onClick = poll,
+                )
+            }
+            onChoosePollScope?.let { chooseScope ->
+                AarisActionRow(
+                    title = "Fetch chapters",
+                    subtitle = "Choose all chapters, or the first or last chapters",
+                    enabled = !isBusy,
+                    onClick = chooseScope,
                 )
             }
             onExportEbook?.let { export ->
@@ -8134,7 +8147,6 @@ internal fun FictionMaintenanceSheet(
         }
 
         val hasAdminActions = listOf(
-            onPollFull,
             onApplyFilter,
             onRetag,
             onReconvertAll,
@@ -8170,14 +8182,6 @@ internal fun FictionMaintenanceSheet(
                     onClick = retry,
                 )
             }
-        }
-        onPollFull?.let { pollFull ->
-            AarisActionRow(
-                title = "Fetch all chapters",
-                subtitle = "Re-reads the whole chapter list, not just the recent tail",
-                enabled = !isBusy,
-                onClick = pollFull,
-            )
         }
         onApplyFilter?.let { applyFilter ->
             AarisActionRow(
@@ -8229,6 +8233,73 @@ internal fun FictionMaintenanceSheet(
             )
         }
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun FictionPollScopeSheet(
+    onDismiss: () -> Unit,
+    onPoll: (PollScope) -> Unit,
+) {
+    var direction by rememberSaveable { mutableStateOf("Last") }
+    var countText by rememberSaveable { mutableStateOf("25") }
+    val count = countText.toIntOrNull()?.takeIf { it > 0 }
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        Column(
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            MetaText(text = "// Fetch chapters", color = AarisColor.Accent)
+            AarisActionRow(
+                title = "All chapters",
+                subtitle = "Re-read the whole chapter list",
+                enabled = true,
+                onClick = { onPoll(PollScope.All) },
+            )
+            MetaText(text = "Choose part of the chapter list", color = AarisColor.Dim)
+            AarisChoiceRow(
+                options = listOf("First", "Last"),
+                selected = direction,
+                label = { it },
+                onSelect = { direction = it },
+            )
+            AarisChoiceRow(
+                options = listOf(10, 25, 50, 100),
+                selected = count ?: 0,
+                label = { it.toString() },
+                onSelect = { countText = it.toString() },
+            )
+            OutlinedTextField(
+                value = countText,
+                onValueChange = { countText = it },
+                label = { Text("Custom chapter count") },
+                supportingText = {
+                    if (count == null) Text("Enter a positive whole number")
+                },
+                isError = count == null,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = {
+                    val validCount = count ?: return@Button
+                    onPoll(
+                        if (direction == "First") PollScope.First(validCount)
+                        else PollScope.Last(validCount),
+                    )
+                },
+                enabled = count != null,
+                shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("FETCH ${direction.uppercase()}")
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
     }
 }
 

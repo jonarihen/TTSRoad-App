@@ -627,6 +627,28 @@ data class AudioHash(
  * `status: "ok"`, and the only thing that distinguishes a no-op from four hundred conversions is a
  * number the user should be shown.
  */
+sealed interface PollScope {
+    data object Recent : PollScope
+    data object All : PollScope
+    data class First(val count: Int) : PollScope
+    data class Last(val count: Int) : PollScope
+}
+
+fun PollScope.validated(): PollScope {
+    require(this !is PollScope.First || count > 0) { "Chapter count must be positive" }
+    require(this !is PollScope.Last || count > 0) { "Chapter count must be positive" }
+    return this
+}
+
+fun pollConfirmation(scope: PollScope, response: MaintenanceResponse): String = when (scope) {
+    PollScope.Recent -> response.partialSync?.takeIf { it > 0 }
+        ?.let { "Checking the last $it chapters." }
+        ?: "Checking the source now."
+    PollScope.All -> "Re-reading the whole chapter list."
+    is PollScope.First -> "Fetching the first ${response.partialSync ?: scope.count} chapters."
+    is PollScope.Last -> "Fetching the last ${response.partialSync ?: scope.count} chapters."
+}
+
 data class MaintenanceResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
     val status: String = "",

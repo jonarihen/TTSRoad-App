@@ -1,13 +1,17 @@
 package dk.perspektiva.ttsroad
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextReplacement
 import dk.perspektiva.ttsroad.data.AudioInfo
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.PlaybackInfo
+import dk.perspektiva.ttsroad.data.PollScope
 import dk.perspektiva.ttsroad.download.FictionDownloadSummary
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import org.junit.Assert.assertEquals
@@ -169,6 +173,7 @@ class FictionHeaderLayoutTest {
                     isBusy = false,
                     onDismiss = {},
                     onPoll = {},
+                    onChoosePollScope = {},
                     feedUrl = "https://example.test/feed/fiction.xml",
                     onShareFeed = {},
                 )
@@ -176,6 +181,7 @@ class FictionHeaderLayoutTest {
         }
 
         compose.onNodeWithText("Check for new chapters").assertIsDisplayed()
+        compose.onNodeWithText("Fetch chapters").assertIsDisplayed()
         compose.onNodeWithText("Share podcast feed").assertIsDisplayed()
         compose.onNodeWithText("// Admin").assertDoesNotExist()
         for (adminOnly in listOf(
@@ -189,6 +195,25 @@ class FictionHeaderLayoutTest {
         )) {
             compose.onNodeWithText(adminOnly).assertDoesNotExist()
         }
+    }
+
+    @Test
+    fun `fetch chapters sheet offers presets and blocks invalid custom count`() {
+        var selected: PollScope? = null
+        compose.setContent {
+            TtsRoadTheme {
+                FictionPollScopeSheet(onDismiss = {}, onPoll = { selected = it })
+            }
+        }
+
+        compose.onNodeWithText("All chapters").assertIsDisplayed()
+        compose.onNodeWithText("100").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Custom chapter count").performScrollTo().performTextReplacement("0")
+        compose.onNodeWithText("FETCH LAST").assertIsNotEnabled()
+        compose.onNodeWithText("Custom chapter count").performTextReplacement("50")
+        compose.onNodeWithText("First").performClick()
+        compose.onNodeWithText("FETCH FIRST").performClick()
+        assertEquals(PollScope.First(50), selected)
     }
 
     @Test
