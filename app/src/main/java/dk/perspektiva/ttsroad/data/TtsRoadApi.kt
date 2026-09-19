@@ -75,6 +75,17 @@ interface TtsRoadApi {
     @GET("api/fictions/{fiction_id}/export.epub")
     suspend fun exportEbook(@Path("fiction_id") fictionId: Int): Response<ResponseBody>
 
+    @GET("api/fictions/{fiction_id}/notification-settings")
+    suspend fun fictionNotificationSettings(
+        @Path("fiction_id") fictionId: Int,
+    ): FictionNotificationSettings
+
+    @PATCH("api/fictions/{fiction_id}/notification-settings")
+    suspend fun updateFictionNotificationSettings(
+        @Path("fiction_id") fictionId: Int,
+        @Body request: FictionNotificationSettingsRequest,
+    ): FictionNotificationSettings
+
     @GET("api/mobile/fictions/{fiction_id}/chapters")
     suspend fun chapters(
         @Path("fiction_id") fictionId: Int,

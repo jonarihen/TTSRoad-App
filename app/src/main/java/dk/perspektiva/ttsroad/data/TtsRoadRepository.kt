@@ -439,6 +439,39 @@ class TtsRoadRepository(
         }
     }
 
+    suspend fun fictionNotificationSettings(fictionId: Int): FictionNotificationSettingsResult {
+        if (!_currentCapabilities.value.backlogNotifications) {
+            return FictionNotificationSettingsResult.Unsupported
+        }
+        return notificationSettingsResult {
+            withAuthorizedApi { it.fictionNotificationSettings(fictionId) }
+        }
+    }
+
+    suspend fun updateFictionNotificationSettings(
+        fictionId: Int,
+        request: FictionNotificationSettingsRequest,
+    ): FictionNotificationSettingsResult {
+        if (!_currentCapabilities.value.backlogNotifications) {
+            return FictionNotificationSettingsResult.Unsupported
+        }
+        return notificationSettingsResult {
+            withAuthorizedApi { it.updateFictionNotificationSettings(fictionId, request) }
+        }
+    }
+
+    private suspend fun notificationSettingsResult(
+        request: suspend () -> FictionNotificationSettings,
+    ): FictionNotificationSettingsResult = try {
+        FictionNotificationSettingsResult.Loaded(request())
+    } catch (e: HttpException) {
+        if (e.code() == 401) throw e
+        FictionNotificationSettingsResult.Refused(
+            detailMessage(e.response()?.errorBody()?.string())
+                ?: "The server would not load chapter notification settings.",
+        )
+    }
+
     /**
      * Empty this account's shelf, answering how many follows went, or null when this server has no
      * such route and the control should not have been offered.
