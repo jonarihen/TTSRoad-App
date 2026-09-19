@@ -111,6 +111,21 @@ class AutoDownloadPlanTest {
     }
 
     @Test
+    fun `switching it off releases everything even with no chapter listing`() {
+        // The service passes an empty listing when the feature is off, so an unreachable server
+        // cannot block the release. The release set comes from autoDownloaded, not the listing.
+        val plan = autoDownloadPlan(
+            emptyList(),
+            currentChapterId = 5,
+            keepAhead = 0,
+            autoDownloaded = setOf(5, 6, 7),
+        )
+
+        assertTrue(plan.download.isEmpty())
+        assertEquals(listOf(5, 6, 7), plan.release)
+    }
+
+    @Test
     fun `switching it off still leaves hand-picked downloads alone`() {
         val plan = autoDownloadPlan(
             fiction,
