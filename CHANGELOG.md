@@ -2,7 +2,7 @@
 
 Notable changes to the TTSRoad Android client.
 
-## Unreleased
+## 0.16.0 — 2026-09-19
 
 ### Added
 
