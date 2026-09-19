@@ -6,6 +6,7 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Fiction maintenance can now fetch all chapters or a validated first/last 10, 25, 50, 100, or custom positive count. Scoped fetches are available to every account when the server advertises fiction maintenance. (TTSRoad-App#233, TTSRoad#333)
 - Followed fictions now offer per-book chapter notification settings under **More → Chapter notifications** when supported by the server. Choose every chapter, off, or wait for a 1h, 2h, 5h, or custom backlog, with the current wait shown while it is active. (TTSRoad-App#232)
 - A fiction can now be downloaded as an EPUB from **More → Download EPUB** and saved directly to a user-chosen folder. The transfer stays inside the app so the bearer token reaches the server, streams into the selected document without holding the whole book in memory, and shows the server's explanation when no chapter text is available. The action appears only when the server advertises EPUB export support. (TTSRoad-App#231, TTSRoad#330)
 

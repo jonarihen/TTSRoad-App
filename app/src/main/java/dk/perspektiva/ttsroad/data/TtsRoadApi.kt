@@ -457,17 +457,12 @@ interface TtsRoadApi {
     @DELETE("api/mobile/chapters/{chapter_id}")
     suspend fun deleteChapter(@Path("chapter_id") chapterId: Int): MaintenanceResponse
 
-    /**
-     * Check the source for new chapters now, rather than waiting for the scheduler.
-     *
-     * The answer to "the author posted an hour ago, where is it". [full] re-ingests the whole
-     * chapter list instead of the recent tail, which is the expensive branch and is why it is a
-     * separate action in the UI rather than a default.
-     */
     @POST("api/mobile/fictions/{fiction_id}/poll")
     suspend fun pollFiction(
         @Path("fiction_id") fictionId: Int,
-        @Query("full") full: Boolean = false,
+        @Query("full") full: Boolean? = null,
+        @Query("last_n") lastN: Int? = null,
+        @Query("first_n") firstN: Int? = null,
     ): MaintenanceResponse
 
     @POST("api/mobile/fictions/{fiction_id}/retry-failed")

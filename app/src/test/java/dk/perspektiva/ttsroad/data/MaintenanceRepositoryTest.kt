@@ -127,23 +127,43 @@ class MaintenanceRepositoryTest {
     }
 
     @Test
-    fun `poll defaults to the recent tail and asks for the lot only when told`() = runTest {
-        // The difference between the two is a whole-serial re-ingest, so a default of `full` would
-        // be an expensive thing to get by pressing the obvious button.
+    fun `poll scopes send exactly one mutually exclusive query`() = runTest {
         val repository = repository()
-        server.enqueue(json("""{"status": "started", "full_ingest": false, "partial_sync": 25}"""))
-        server.enqueue(json("""{"status": "started", "full_ingest": true, "partial_sync": null}"""))
+        repeat(4) {
+            server.enqueue(json("""{"status": "started", "partial_sync": 25}"""))
+        }
 
-        val partial = repository.pollFiction(7)
-        val full = repository.pollFiction(7, full = true)
+        repository.pollFiction(7, PollScope.Recent)
+        repository.pollFiction(7, PollScope.All)
+        repository.pollFiction(7, PollScope.First(10))
+        val last = repository.pollFiction(7, PollScope.Last(25))
 
         server.takeRequest()
-        assertEquals("/api/mobile/fictions/7/poll?full=false", server.takeRequest().path)
+        assertEquals("/api/mobile/fictions/7/poll", server.takeRequest().path)
         assertEquals("/api/mobile/fictions/7/poll?full=true", server.takeRequest().path)
-        assertFalse(partial!!.fullIngest)
-        assertEquals(25, partial.partialSync)
-        assertTrue(full!!.fullIngest)
-        assertNull(full.partialSync)
+        assertEquals("/api/mobile/fictions/7/poll?first_n=10", server.takeRequest().path)
+        assertEquals("/api/mobile/fictions/7/poll?last_n=25", server.takeRequest().path)
+        assertEquals(25, last?.partialSync)
+    }
+
+    @Test
+    fun `invalid partial poll count is blocked before a request`() = runTest {
+        val repository = repository()
+
+        val failure = runCatching { repository.pollFiction(7, PollScope.First(Int.MIN_VALUE)) }
+
+        server.takeRequest()
+        assertTrue(failure.isFailure)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `poll confirmation uses request direction and decoded partial count`() {
+        val response = MaintenanceResponse(partialSync = 10)
+
+        assertEquals("Fetching the first 10 chapters.", pollConfirmation(PollScope.First(25), response))
+        assertEquals("Fetching the last 10 chapters.", pollConfirmation(PollScope.Last(25), response))
+        assertEquals("Re-reading the whole chapter list.", pollConfirmation(PollScope.All, response))
     }
 
     @Test
