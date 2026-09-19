@@ -172,6 +172,21 @@ class ServerCapabilitiesTest {
     }
 
     @Test
+    fun `ebook export requires a literal true`() {
+        assertTrue(
+            ServerCapabilities.from(
+                CapabilitiesResponse(capabilities = mapOf("ebook_export" to true)),
+            ).ebookExport,
+        )
+        assertFalse(ServerCapabilities.Baseline.ebookExport)
+        assertFalse(
+            ServerCapabilities.from(
+                CapabilitiesResponse(capabilities = mapOf("ebook_export" to "yes")),
+            ).ebookExport,
+        )
+    }
+
+    @Test
     fun `a missing limits block leaves the limit unset rather than zero`() {
         val capabilities = ServerCapabilities.from(CapabilitiesResponse())
 
