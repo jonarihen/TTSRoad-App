@@ -77,6 +77,7 @@ data class ServerCapabilities(
      * new-chapter notices for serials nobody picked.
      */
     val bulkUnfollow: Boolean = false,
+    val backlogNotifications: Boolean = false,
 
     /**
      * The shared player/reader preference vocabulary on `/api/me/preferences`.
@@ -288,6 +289,7 @@ data class ServerCapabilities(
                 queue = flags.flag("queue"),
                 follows = flags.flag("follows"),
                 bulkUnfollow = flags.flag("bulk_unfollow"),
+                backlogNotifications = flags.flag("backlog_notifications"),
                 playerPreferences = flags.flag("player_preferences"),
                 fictionManagement = flags.flag("fiction_management"),
                 audiobookExport = flags.flag("audiobook_export"),
