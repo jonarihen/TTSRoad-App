@@ -350,6 +350,7 @@ import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdateState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1357,33 +1358,35 @@ private fun FictionScreen(
     var showNotificationSettings by remember(fiction.id) { mutableStateOf(false) }
     var notificationSettings by remember(fiction.id) { mutableStateOf<FictionNotificationSettings?>(null) }
     var maintenanceNote by remember(fiction.id) { mutableStateOf<String?>(null) }
-    var exportUri by remember(fiction.id) { mutableStateOf<android.net.Uri?>(null) }
     val ebookExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/epub+zip"),
-    ) { uri -> exportUri = uri }
-    LaunchedEffect(exportUri) {
-        val uri = exportUri ?: return@LaunchedEffect
-        exportUri = null
-        isMaintaining = true
-        error = null
-        maintenanceNote = null
-        when (val result = runCatching { repository.exportEbook(fiction.id) }
-            .getOrElse { EbookExportResult.Refused(it.message ?: "Could not export EPUB") }) {
-            is EbookExportResult.Ready -> result.body.use { body ->
-                runCatching {
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openOutputStream(uri)?.use { output ->
-                            body.byteStream().use { input -> input.copyTo(output) }
-                        } ?: error("Could not open the selected file")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            isMaintaining = true
+            error = null
+            maintenanceNote = null
+            try {
+                when (val result = repository.exportEbook(fiction.id)) {
+                    is EbookExportResult.Ready -> result.body.use { body ->
+                        withContext(Dispatchers.IO) {
+                            context.contentResolver.openOutputStream(uri)?.use { output ->
+                                body.byteStream().use { input -> input.copyTo(output) }
+                            } ?: error("Could not open the selected file")
+                        }
+                        maintenanceNote = result.filename?.let { "Saved $it." } ?: "EPUB saved."
                     }
-                }.onSuccess {
-                    maintenanceNote = result.filename?.let { "Saved $it." } ?: "EPUB saved."
-                }.onFailure { error = it.message ?: "Could not save EPUB" }
+                    is EbookExportResult.Refused -> error = result.message
+                    EbookExportResult.Unsupported -> error = "This server cannot export EPUBs."
+                }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                error = exception.message ?: "Could not export EPUB"
+            } finally {
+                isMaintaining = false
             }
-            is EbookExportResult.Refused -> error = result.message
-            EbookExportResult.Unsupported -> error = "This server cannot export EPUBs."
         }
-        isMaintaining = false
     }
     var confirmReconvert by remember(fiction.id) { mutableStateOf(false) }
     var confirmDeleteChapter by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
