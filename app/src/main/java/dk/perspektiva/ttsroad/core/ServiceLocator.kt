@@ -269,11 +269,11 @@ object ServiceLocator {
      * receiver against an `ActivityThread` that no longer exists. The throw surfaces as an
      * `UncaughtExceptionsBeforeTest` blamed on whichever test starts next (#248).
      *
-     * The close is synchronous for the resources it owns, but does not join Media3's blocking
-     * initialisation — doing so can deadlock a full test suite. See [OfflineDownloads.close].
+     * Awaiting startup here is deliberate: registration and release both finish while the sandbox
+     * still exists, rather than racing its teardown. See [OfflineDownloads.closeForTest].
      */
-    fun resetOfflineDownloadsForTest() {
+    suspend fun resetOfflineDownloadsForTest() {
         val existing = synchronized(this) { offlineDownloads.also { offlineDownloads = null } }
-        existing?.close()
+        existing?.closeForTest()
     }
 }

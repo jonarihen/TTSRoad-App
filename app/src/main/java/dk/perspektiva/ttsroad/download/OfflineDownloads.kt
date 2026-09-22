@@ -30,7 +30,6 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -119,9 +118,6 @@ class OfflineDownloads(
     @Volatile
     private var readAlongSupported: Boolean = false
 
-    @Volatile
-    private var wifiOnly: Boolean = DownloadPrefs().wifiOnly
-
     private val _downloads = MutableStateFlow<Map<String, ChapterDownload>>(emptyMap())
 
     /** Every known download, keyed by the chapter's media id. Empty until the index has loaded. */
@@ -177,11 +173,7 @@ class OfflineDownloads(
         },
     )
 
-    // Held as an explicit delegate rather than an anonymous `by lazy` so [close] can ask whether
-    // the manager was ever built. Releasing one that does not exist would construct it purely in
-    // order to shut it down, which is the opposite of the intent.
-    private val downloadExecutor = Executors.newFixedThreadPool(MaxParallelDownloads)
-    private val downloadManagerDelegate = lazy {
+    val downloadManager: DownloadManager by lazy {
         DownloadManager(
             context,
             databaseProvider,
@@ -189,10 +181,9 @@ class OfflineDownloads(
             upstreamFactory,
             // Two at a time: enough to keep a phone's link busy without starving playback of the
             // chapter the user is actually listening to.
-            downloadExecutor,
+            Executors.newFixedThreadPool(MaxParallelDownloads),
         ).apply {
             maxParallelDownloads = MaxParallelDownloads
-            requirements = downloadRequirements(wifiOnly)
             addListener(
                 object : DownloadManager.Listener {
                     override fun onInitialized(downloadManager: DownloadManager) {
@@ -200,7 +191,6 @@ class OfflineDownloads(
                         // download that was in flight when the app died reappear in the UI.
                         publish(downloadManager.currentDownloads)
                         loadIndex()
-                        scope.launch(Dispatchers.IO) { dropStrandedStreamSpans(downloadCache) }
                     }
 
                     override fun onDownloadChanged(
@@ -222,8 +212,6 @@ class OfflineDownloads(
         }
     }
 
-    val downloadManager: DownloadManager by downloadManagerDelegate
-
     init {
         scope.launch {
             tokenStore.session.collectLatest {
@@ -243,15 +231,9 @@ class OfflineDownloads(
             downloadPrefs
                 .map { it.wifiOnly }
                 .distinctUntilChanged()
-                .collect { newWifiOnly ->
-                    wifiOnly = newWifiOnly
-                    // Merely opening Settings must not open the Media3 index. The current value is
-                    // applied in the manager's constructor when a real download path first needs it;
-                    // only update a manager that already exists.
-                    if (downloadManagerDelegate.isInitialized()) {
-                        withContext(Dispatchers.IO) {
-                            downloadManager.requirements = downloadRequirements(newWifiOnly)
-                        }
+                .collect { wifiOnly ->
+                    withContext(Dispatchers.IO) {
+                        downloadManager.requirements = downloadRequirements(wifiOnly)
                     }
                 }
         }
@@ -269,32 +251,31 @@ class OfflineDownloads(
                     }
                 }
         }
+        // Touching the manager is what makes it read the persisted index, which is what makes
+        // yesterday's downloads show up in the chapter rows again. Done off the main thread because
+        // opening the cache scans its directory, and it is not worth janking the first frame.
+        //
+        // The split's one-off sweep goes here, after it, rather than in the cache's own lazy
+        // initialiser: the sweep needs the download index, reaching the index opens the manager, and
+        // opening the manager needs the cache. Hanging that off the cache's initialiser would have
+        // it re-enter the very lazy that is still running.
+        scope.launch(Dispatchers.IO) {
+            downloadManager
+            dropStrandedStreamSpans(downloadCache)
+        }
     }
 
     /**
-     * Stop this instance's background work and let go of its native handles.
+     * Finish startup and release the manager while a JVM test's Robolectric sandbox still exists.
      *
-     * Nothing in the app calls this: the singleton lives as long as the process, and shutting the
-     * download index down while the user is still listening would be actively wrong. It exists for
-     * **tests**, which create the singleton, finish, and tear down their environment underneath it.
-     *
-     * The init block's coroutines open the Media3 `DownloadManager`, whose constructor registers a
-     * broadcast receiver. If that lands after a Robolectric sandbox has gone, `registerReceiver`
-     * dereferences a null `ActivityThread` and throws on a thread nobody is awaiting — which
-     * `runTest` then reports against whichever test happened to start next, as an
-     * `UncaughtExceptionsBeforeTest` naming an innocent party (#248).
-     *
-     * Cancellation is deliberately non-blocking. The manager constructor can be inside Media3's
-     * own blocking initialisation, so waiting for every child to join turns a race into a deadlock.
-     * Cancelling prevents queued collectors from reaching it; `shutdownNow` interrupts queued cache
-     * work; and an already built manager is released best-effort so its receiver is unregistered.
+     * Production never calls this: the singleton lives for the process. A Settings test can finish
+     * while the init block is still constructing Media3 on IO; if its receiver registration lands
+     * after sandbox teardown, runTest blames the next innocent test (#248). Awaiting the same lazy
+     * here cannot create a second manager, and keeps the registration and release inside the owning
+     * sandbox.
      */
-    fun close() {
-        scope.cancel()
-        downloadExecutor.shutdownNow()
-        if (downloadManagerDelegate.isInitialized()) {
-            runCatching { downloadManagerDelegate.value.release() }
-        }
+    suspend fun closeForTest() = withContext(Dispatchers.IO) {
+        runCatching { downloadManager.release() }
     }
 
     /**
