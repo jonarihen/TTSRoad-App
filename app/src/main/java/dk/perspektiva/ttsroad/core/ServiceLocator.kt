@@ -258,4 +258,22 @@ object ServiceLocator {
                 forgetAllAudioHashes = { staleDownloads(context).clear() },
             ).also { offlineDownloads = it }
         }
+
+    /**
+     * Shut down and forget the download singleton. **Tests only.**
+     *
+     * These singletons normally live as long as the process, which is right for an app and wrong
+     * for a JVM test run, where every test shares one process but gets its own Robolectric sandbox.
+     * A test that renders Settings builds [OfflineDownloads]; its init coroutines then keep running
+     * after that sandbox is torn down, and opening the Media3 download index registers a broadcast
+     * receiver against an `ActivityThread` that no longer exists. The throw surfaces as an
+     * `UncaughtExceptionsBeforeTest` blamed on whichever test starts next (#248).
+     *
+     * Suspending rather than fire-and-forget on purpose: a teardown that returned before the work
+     * had actually stopped would leave exactly the race it is meant to remove.
+     */
+    suspend fun resetOfflineDownloadsForTest() {
+        val existing = synchronized(this) { offlineDownloads.also { offlineDownloads = null } }
+        existing?.close()
+    }
 }

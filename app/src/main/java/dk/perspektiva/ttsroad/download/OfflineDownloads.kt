@@ -30,6 +30,8 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -173,7 +175,10 @@ class OfflineDownloads(
         },
     )
 
-    val downloadManager: DownloadManager by lazy {
+    // Held as an explicit delegate rather than an anonymous `by lazy` so [close] can ask whether
+    // the manager was ever built. Releasing one that does not exist would construct it purely in
+    // order to shut it down, which is the opposite of the intent.
+    private val downloadManagerDelegate = lazy {
         DownloadManager(
             context,
             databaseProvider,
@@ -211,6 +216,8 @@ class OfflineDownloads(
             )
         }
     }
+
+    val downloadManager: DownloadManager by downloadManagerDelegate
 
     init {
         scope.launch {
@@ -262,6 +269,31 @@ class OfflineDownloads(
         scope.launch(Dispatchers.IO) {
             downloadManager
             dropStrandedStreamSpans(downloadCache)
+        }
+    }
+
+    /**
+     * Stop this instance's background work and let go of its native handles.
+     *
+     * Nothing in the app calls this: the singleton lives as long as the process, and shutting the
+     * download index down while the user is still listening would be actively wrong. It exists for
+     * **tests**, which create the singleton, finish, and tear down their environment underneath it.
+     *
+     * The init block's coroutines open the Media3 `DownloadManager`, whose constructor registers a
+     * broadcast receiver. If that lands after a Robolectric sandbox has gone, `registerReceiver`
+     * dereferences a null `ActivityThread` and throws on a thread nobody is awaiting — which
+     * `runTest` then reports against whichever test happened to start next, as an
+     * `UncaughtExceptionsBeforeTest` naming an innocent party (#248).
+     *
+     * `cancelAndJoin` rather than `cancel`: the point is to *wait* for that in-flight construction
+     * to finish or unwind, so the caller knows nothing is still running when it returns. Releasing
+     * is best-effort — a half-built manager can throw on the way down, and a failure to close
+     * cleanly must not fail the test that was merely tidying up.
+     */
+    suspend fun close() {
+        scope.coroutineContext.job.cancelAndJoin()
+        if (downloadManagerDelegate.isInitialized()) {
+            runCatching { downloadManagerDelegate.value.release() }
         }
     }
 
