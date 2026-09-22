@@ -96,6 +96,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -6775,45 +6776,59 @@ private fun FictionsScreen(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FictionSortSheet(
+internal fun FictionSortSheet(
     selected: FictionSort,
     onSelect: (FictionSort) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = AarisColor.BgRaise,
+    ) {
         MetaText(
             text = "// Sort by",
             color = AarisColor.Accent,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
         )
-        FictionSort.entries.forEach { option ->
-            val isSelected = option == selected
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onSelect(option) }
-                    .semantics { this.selected = isSelected }
-                    .padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = option.label,
-                        style = MaterialTheme.typography.titleMedium,
-                        // Colour alone would carry this, which is why the row also reports
-                        // `selected` to TalkBack above.
-                        color = if (isSelected) AarisColor.Accent else AarisColor.Ink,
-                    )
-                    fictionSortNote(option)?.let {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        MetaText(text = it, color = AarisColor.Dim)
+        // Ten sentence-sized choices no longer fit a 320×640 viewport. A bounded list keeps the
+        // sheet itself on screen and makes the bottom orders reachable rather than clipping them
+        // below the window (#245).
+        LazyColumn(
+            modifier = Modifier
+                .heightIn(max = 360.dp)
+                .testTag("fiction-sort-options"),
+        ) {
+            items(FictionSort.entries, key = { it.name }) { option ->
+                val isSelected = option == selected
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(option) }
+                        .semantics { this.selected = isSelected }
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = option.label,
+                            style = MaterialTheme.typography.titleMedium,
+                            // Colour alone would carry this, which is why the row also reports
+                            // `selected` to TalkBack above.
+                            color = if (isSelected) AarisColor.Accent else AarisColor.Ink,
+                        )
+                        fictionSortNote(option)?.let {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            MetaText(text = it, color = AarisColor.Dim)
+                        }
+                    }
+                    if (isSelected) {
+                        MetaText(text = "In use", color = AarisColor.Accent)
                     }
                 }
-                if (isSelected) {
-                    MetaText(text = "In use", color = AarisColor.Accent)
-                }
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             }
-            HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
         }
         Spacer(modifier = Modifier.height(16.dp))
     }
