@@ -245,6 +245,13 @@ those entries to the tail; never render or order one as an epoch. The client can
 value from anything else in this payload, so an order that depends on it degrades to the server's
 own order on such a deployment rather than to a wrong one.
 
+Each fiction's caller-scoped `progress` object also carries `last_listened_at`: the newest playback
+clock across this account's chapters in that fiction, ISO-8601 with a trailing `Z`, or `null` when
+this account has never listened. Order **Recently listened** on it with nulls last. It is nested
+under `progress`, not flattened onto the fiction, because another account hearing the same shared
+book must not move this listener's shelf. Servers predating TTSRoad#339 omit it; that is also
+unknown, never an epoch.
+
 Audio object shape:
 
 ```json

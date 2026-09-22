@@ -38,6 +38,15 @@ enum class FictionSort(val label: String) {
      */
     NewChapters("New chapters first"),
 
+    /**
+     * The fictions this caller heard most recently, first.
+     *
+     * Reads [LibraryProgress.lastListenedAt], not any fiction row clock: listening is per-account
+     * state, and another listener hearing the same book must not move this shelf. A never-heard book
+     * and every book on a server predating TTSRoad#339 both carry null and sort to the tail.
+     */
+    RecentlyListened("Recently listened"),
+
     /** Most recently tracked first — the shelf in the order it was built, newest end first. */
     RecentlyAdded("Recently added"),
 
@@ -93,6 +102,7 @@ enum class FictionSort(val label: String) {
 fun List<FictionSummary>.sortedForBrowsing(sort: FictionSort): List<FictionSummary> =
     when (sort) {
         FictionSort.NewChapters -> sortedWith(descendingNullsLast { it.lastChapterAt })
+        FictionSort.RecentlyListened -> sortedWith(descendingNullsLast { it.progress?.lastListenedAt })
         FictionSort.RecentlyAdded -> sortedWith(descendingNullsLast { it.createdAt })
         FictionSort.Title -> sortedWith(
             compareBy(String.CASE_INSENSITIVE_ORDER) { it.title },
