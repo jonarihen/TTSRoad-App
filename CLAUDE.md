@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for AI coding agents working in this repository. `AGENTS.md` is a symlink to this file, so
+Claude Code, opencode, Codex and Cursor all read the same text — edit this one, never a copy.
 
 ## What this is
 
@@ -22,7 +23,7 @@ server. `CHANGELOG.md` records what shipped in each version.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`app/src/test` is a real JVM test source set — 1214 tests as of 0.13.0, JUnit + Robolectric +
+`app/src/test` is a real JVM test source set — 1503 tests as of 0.16.0, JUnit + Robolectric +
 MockWebServer + Compose UI test, all wired in `app/build.gradle.kts`. **Run `./gradlew test` before
 claiming a change works.** `app/src/androidTest` exists but holds only the R8 startup smoke test,
 which needs a device and the keystore — see below.
@@ -185,10 +186,23 @@ calls `updateAll`. Three rules:
   composition — the launcher is handed pixels, not a URL, and that loader is what keeps the bearer
   token off Royal Road/CDN origins.
 
-**UI is one file.** `MainActivity.kt` (~2k lines) holds every screen as a private composable.
-Navigation is a hand-rolled `AppScreen` sealed interface in `remember { mutableStateOf }` — the
-`navigation-compose` dependency is present but unused. Per-screen loading uses the local
-`LoadState<T>` (Loading/Loaded/Error) with a local `refresh()`; there are no ViewModels.
+**Most UI is one very large file.** `MainActivity.kt` is ~9.8k lines and holds ~80 screens and
+components as private composables. **Do not read it whole — it will exhaust your context before you
+have done any work.** Find the composable with `grep -n "fun TheName" MainActivity.kt`, then read
+that range; `docs/MainActivity-map.md` lists every composable with its line number. Line numbers
+drift with edits, so grep to confirm rather than trusting the map's numbers.
+
+Screens that grew their own file live at the package root next to it (`NewChaptersScreen.kt`,
+`ListeningStatsScreen.kt`, `ServerLogsScreen.kt`, `AccountSecuritySettings.kt`,
+`ServerStorageSettings.kt`, `RecentListeningSettings.kt`). Extracting a screen from `MainActivity.kt`
+into one of those is welcome when you are already editing it; keep the composable private unless the
+tests need it, in which case `internal`.
+
+Navigation is a hand-rolled `AppScreen` sealed interface in `nav/AppNavigation.kt`, held in
+`remember { mutableStateOf }` — the `navigation-compose` dependency is declared but genuinely
+unused, so there is no `NavHost` to find. There are no ViewModels and no `LoadState` type: each
+screen keeps its own `mutableStateOf` for data/loading/error and a local `refresh()`, and
+`RefreshablePane` renders the pull-to-refresh, inline error and progress bar around the result.
 
 **Theme.** `ui/TtsRoadTheme` ports the web console's AARIS design language: dark, zero corner
 radius everywhere, orange accent, mono uppercase labels. Use `AarisColor`, `MetaText`, `AarisTag`,
