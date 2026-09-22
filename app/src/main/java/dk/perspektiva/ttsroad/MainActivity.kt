@@ -6439,6 +6439,7 @@ private fun FictionsScreen(
     val scope = rememberCoroutineScope()
     val cache = remember { ServiceLocator.libraryCache(context) }
     val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    val capabilitiesResolved by repository.currentCapabilitiesResolved.collectAsStateWithLifecycle()
     // Browse means *everything on the server* once the server has per-user libraries — that is what
     // makes this the screen a fiction gets followed from. Without them there is only one list, and
     // browsing the shelf is browsing the server.
@@ -6512,13 +6513,15 @@ private fun FictionsScreen(
             // is dormant rather than gone, and the day this shelf gains its first EPUB a filter
             // nobody remembers setting switches itself back on and hides every other book.
             //
-            // Only browse-all is definitive enough to forget a source. Capability discovery begins
-            // at Baseline, so before `follows` arrives this screen temporarily reads the followed
-            // shelf; a saved source represented only by unfollowed books is absent there but still
-            // valid. Mask it from the provisional grid, never destroy it. Once the all-catalogue
-            // cache is selected, even an empty list is real evidence and can prune permanently.
-            LaunchedEffect(settings.sources, sourceKeys, browseAll) {
-                if (browseAll && activeSources != settings.sources) browsePrefs.setSources(activeSources)
+            // Forget a source only after capability discovery has a real answer. Before then,
+            // Baseline is a placeholder and this list may be the followed shelf of a server whose
+            // all-catalogue support simply has not arrived yet. Once resolved, either browse-all is
+            // selected or Baseline definitively means an old shared-library server; both lists are
+            // complete enough to prune, including a successfully loaded empty one.
+            LaunchedEffect(settings.sources, sourceKeys, capabilitiesResolved) {
+                if (capabilitiesResolved && activeSources != settings.sources) {
+                    browsePrefs.setSources(activeSources)
+                }
             }
             // Keys are what gets stored and compared; labels are only ever for reading. Resolved
             // from the shelf so a source the server has started naming differently shows its

@@ -237,6 +237,9 @@ class TtsRoadRepository(
      */
     val currentCapabilities: StateFlow<ServerCapabilities> = _currentCapabilities.asStateFlow()
 
+    private val _currentCapabilitiesResolved = MutableStateFlow(false)
+    val currentCapabilitiesResolved: StateFlow<Boolean> = _currentCapabilitiesResolved.asStateFlow()
+
     private val _sessionEnd = MutableStateFlow<SessionEnd?>(null)
 
     /**
@@ -270,6 +273,7 @@ class TtsRoadRepository(
             )
             tokenStore.saveLogin(normalized, response)
             _sessionEnd.value = null
+            _currentCapabilitiesResolved.value = false
             LoginResult.Success
         } catch (e: HttpException) {
             val body = e.response()?.errorBody()?.string()
@@ -296,6 +300,7 @@ class TtsRoadRepository(
         tokenStore.clearToken()
         invalidateReader()
         onSessionCleared()
+        _currentCapabilitiesResolved.value = false
         _sessionEnd.value = end
     }
 
@@ -313,6 +318,7 @@ class TtsRoadRepository(
         // flags in place would show read-along or device management on a server without them.
         forgetCapabilities(session.serverUrl)
         _currentCapabilities.value = ServerCapabilities.Baseline
+        _currentCapabilitiesResolved.value = false
         // Chapter text is account-visible content, and chapter ids are only unique per server, so a
         // cached read-along must never outlive the session that fetched it.
         invalidateReader()
@@ -373,9 +379,20 @@ class TtsRoadRepository(
         val session = tokenStore.current()
         if (!session.isLoggedIn) {
             _currentCapabilities.value = ServerCapabilities.Baseline
+            _currentCapabilitiesResolved.value = false
             return ServerCapabilities.Baseline
         }
-        return capabilities(session.serverUrl, forceRefresh).also { _currentCapabilities.value = it }
+        return capabilities(session.serverUrl, forceRefresh).also {
+            _currentCapabilities.value = it
+            val normalized = runCatching { normalizeBaseUrl(session.serverUrl) }.getOrNull()
+            // A cache entry exists only after a successful response or a definitive old-server 404.
+            // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
+            // treating that provisional value as proof of a shared catalogue could destroy a saved
+            // filter whose source exists only outside the followed shelf.
+            _currentCapabilitiesResolved.value = normalized != null && synchronized(capabilityCache) {
+                capabilityCache.containsKey(normalized)
+            }
+        }
     }
 
     /** Drop discovered capabilities for [baseUrl], so the next call re-asks. Used on sign-out. */
