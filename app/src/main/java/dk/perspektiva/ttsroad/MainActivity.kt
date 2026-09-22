@@ -1122,8 +1122,11 @@ private fun LibraryScreen(
     val browsePrefs = remember { ServiceLocator.browsePreferences(context) }
     val settings by browsePrefs.settings.collectAsStateWithLifecycle(initialValue = BrowseSettings())
     var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
-    // Hoisted out of the rail so the reorder effect below can reach it.
+    // Hoisted out of the rail so the reorder effect below can reach it. The applied sort is saved
+    // beside the position: opening a fiction removes this screen from composition, and returning
+    // must not mistake that re-entry for a new order and throw away the restored rail position.
     val fictionRailState = rememberLazyListState()
+    var appliedHomeSort by rememberSaveable { mutableStateOf<String?>(null) }
 
     // Loads once; returning to this screen shows what was already there instead of a spinner.
     LaunchedEffect(Unit) { cache.ensureLibrary() }
@@ -1148,11 +1151,14 @@ private fun LibraryScreen(
             val sortedFictions = remember(library.fictions, settings.sort) {
                 library.fictions.sortedForBrowsing(settings.sort)
             }
-            // A new order has to be read from its beginning. The rail keeps its scroll offset
-            // across a reorder, and its item keys carry the old index, so picking "New chapters
-            // first" while scrolled ten tiles in would land in the middle of that order and hide
-            // the very books the choice was made to surface.
-            LaunchedEffect(settings.sort) { fictionRailState.scrollToItem(0) }
+            // A genuinely new order has to be read from its beginning. Re-entering this screen is
+            // not one: SaveableStateProvider restores both this marker and the rail position after
+            // a fiction detail, so returning to HOME does not jump a reader back to the first tile.
+            LaunchedEffect(settings.sort) {
+                val next = settings.sort.name
+                if (appliedHomeSort != null && appliedHomeSort != next) fictionRailState.scrollToItem(0)
+                appliedHomeSort = next
+            }
 
             RefreshablePane(
                 padding = padding,
@@ -6449,8 +6455,16 @@ private fun FictionsScreen(
     var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
     var tagSheetOpen by rememberSaveable { mutableStateOf(false) }
     // Hoisted so the browse position survives the round trip into a fiction, alongside the
-    // SaveableStateProvider keyed per back-stack entry.
+    // SaveableStateProvider keyed per back-stack entry. `appliedBrowseSort` makes a real shared
+    // preference change reset it without treating that round trip as one.
     val gridState = rememberLazyGridState()
+    var appliedBrowseSort by rememberSaveable { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(settings.sort) {
+        val next = settings.sort.name
+        if (appliedBrowseSort != null && appliedBrowseSort != next) gridState.scrollToItem(0)
+        appliedBrowseSort = next
+    }
 
     LaunchedEffect(browseAll) {
         if (browseAll) cache.ensureBrowseAll() else cache.ensureLibrary()
