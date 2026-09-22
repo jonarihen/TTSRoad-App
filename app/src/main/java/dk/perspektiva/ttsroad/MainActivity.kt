@@ -132,6 +132,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -6511,12 +6512,13 @@ private fun FictionsScreen(
             // is dormant rather than gone, and the day this shelf gains its first EPUB a filter
             // nobody remembers setting switches itself back on and hides every other book.
             //
-            // This branch is reached only after `fictions` is non-null, so an empty source-key list
-            // is a successfully loaded empty shelf rather than "nothing yet". It must prune too: if
-            // every book is deleted, leaving the old selection dormant would let it switch itself
-            // back on the day that source returns and hide everything else.
-            LaunchedEffect(settings.sources, sourceKeys) {
-                if (activeSources != settings.sources) browsePrefs.setSources(activeSources)
+            // Only browse-all is definitive enough to forget a source. Capability discovery begins
+            // at Baseline, so before `follows` arrives this screen temporarily reads the followed
+            // shelf; a saved source represented only by unfollowed books is absent there but still
+            // valid. Mask it from the provisional grid, never destroy it. Once the all-catalogue
+            // cache is selected, even an empty list is real evidence and can prune permanently.
+            LaunchedEffect(settings.sources, sourceKeys, browseAll) {
+                if (browseAll && activeSources != settings.sources) browsePrefs.setSources(activeSources)
             }
             // Keys are what gets stored and compared; labels are only ever for reading. Resolved
             // from the shelf so a source the server has started naming differently shows its
@@ -6746,14 +6748,7 @@ private fun FictionsScreen(
                 SourceFilterSheet(
                     sources = sourceChoices,
                     selected = activeSources,
-                    onToggle = { option ->
-                        val next = if (option.key in activeSources) {
-                            activeSources - option.key
-                        } else {
-                            activeSources + option.key
-                        }
-                        scope.launch { browsePrefs.setSources(next) }
-                    },
+                    onToggle = { option -> scope.launch { browsePrefs.toggleSource(option.key) } },
                     onClear = { scope.launch { browsePrefs.setSources(emptySet()) } },
                     onDismiss = { sourceSheetOpen = false },
                 )
@@ -7032,7 +7027,9 @@ internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: (
     ) {
         TextButton(
             onClick = onOpen,
-            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+            modifier = Modifier
+                .heightIn(min = MinTouchTargetSize)
+                .testTag("source-filter-open"),
             shape = RectangleShape,
         ) {
             Text(

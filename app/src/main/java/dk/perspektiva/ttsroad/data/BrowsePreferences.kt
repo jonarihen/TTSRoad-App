@@ -116,16 +116,25 @@ class BrowsePreferences(private val context: Context) {
     }
 
     suspend fun setSources(sources: Set<String>) {
+        context.browseDataStore.edit { preferences -> writeSources(preferences, sources) }
+    }
+
+    suspend fun toggleSource(source: String) {
         context.browseDataStore.edit { preferences ->
-            val normalised = sources.mapTo(mutableSetOf()) { it.trim() }.filterTo(mutableSetOf()) {
-                it.isNotEmpty()
-            }
-            // Removed rather than written empty, for the same reason as the tags above.
-            if (normalised.isEmpty()) {
-                preferences.remove(Keys.Sources)
-            } else {
-                preferences[Keys.Sources] = normalised
-            }
+            val current = preferences[Keys.Sources].orEmpty()
+            val next = if (source in current) current - source else current + source
+            writeSources(preferences, next)
+        }
+    }
+
+    private fun writeSources(preferences: androidx.datastore.preferences.core.MutablePreferences, sources: Set<String>) {
+        val normalised = sources.mapTo(mutableSetOf()) { it.trim() }.filterTo(mutableSetOf()) {
+            it.isNotEmpty()
+        }
+        if (normalised.isEmpty()) {
+            preferences.remove(Keys.Sources)
+        } else {
+            preferences[Keys.Sources] = normalised
         }
     }
 }
