@@ -39,7 +39,9 @@ import dk.perspektiva.ttsroad.nav.navigateTo
 import dk.perspektiva.ttsroad.nav.popScreen
 import dk.perspektiva.ttsroad.nav.saveKey
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,6 +52,16 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34], qualifiers = "w320dp-h640dp", application = Application::class)
 class SettingsNavigationTest {
     @get:Rule val compose = createComposeRule()
+
+    @Before
+    fun keepLayoutTestsOutOfMedia3() {
+        ServiceLocator.disableDownloadManagerForTest()
+    }
+
+    @After
+    fun restoreRealDownloadConstruction() {
+        ServiceLocator.restoreDownloadManagerAfterTest()
+    }
 
     @Test
     fun `all category rows are reachable and accessible on a narrow phone`() {

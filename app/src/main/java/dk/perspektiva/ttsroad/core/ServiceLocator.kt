@@ -75,6 +75,9 @@ object ServiceLocator {
     private var offlineDownloads: OfflineDownloads? = null
 
     @Volatile
+    private var initializeDownloadManager: Boolean = true
+
+    @Volatile
     private var staleDownloads: StaleDownloadScanner? = null
 
     @Volatile
@@ -256,6 +259,31 @@ object ServiceLocator {
                 // that are no longer on disk.
                 forgetAudioHash = { chapterId -> staleDownloads(context).forget(chapterId) },
                 forgetAllAudioHashes = { staleDownloads(context).clear() },
+                initializeManager = initializeDownloadManager,
             ).also { offlineDownloads = it }
         }
+
+    /**
+     * Prevent a settings-layout test from opening Media3's real download index.
+     *
+     * Must be called before [offlineDownloads]. Production never calls it and keeps the default
+     * true. The tests using it assert labels and navigation only; constructing a receiver-owning
+     * DownloadManager there tests nothing and lets its IO startup outlive Robolectric's sandbox
+     * (#248).
+     */
+    fun disableDownloadManagerForTest() {
+        check(offlineDownloads == null || !initializeDownloadManager) { "OfflineDownloads was already created" }
+        initializeDownloadManager = false
+    }
+
+    fun restoreDownloadManagerAfterTest() {
+        val existing = synchronized(this) {
+            check(!initializeDownloadManager) { "The real download manager was not disabled" }
+            offlineDownloads.also {
+                offlineDownloads = null
+                initializeDownloadManager = true
+            }
+        }
+        existing?.closeWithoutManagerForTest()
+    }
 }
