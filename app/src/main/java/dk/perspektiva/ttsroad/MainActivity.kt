@@ -6511,13 +6511,12 @@ private fun FictionsScreen(
             // is dormant rather than gone, and the day this shelf gains its first EPUB a filter
             // nobody remembers setting switches itself back on and hides every other book.
             //
-            // Gated on the shelf having loaded: an empty list is "nothing yet", not "none of your
-            // sources exist any more", and pruning against it would clear the filter on every cold
-            // start before the first payload arrives.
+            // This branch is reached only after `fictions` is non-null, so an empty source-key list
+            // is a successfully loaded empty shelf rather than "nothing yet". It must prune too: if
+            // every book is deleted, leaving the old selection dormant would let it switch itself
+            // back on the day that source returns and hide everything else.
             LaunchedEffect(settings.sources, sourceKeys) {
-                if (sourceKeys.isNotEmpty() && activeSources != settings.sources) {
-                    browsePrefs.setSources(activeSources)
-                }
+                if (activeSources != settings.sources) browsePrefs.setSources(activeSources)
             }
             // Keys are what gets stored and compared; labels are only ever for reading. Resolved
             // from the shelf so a source the server has started naming differently shows its
@@ -7034,6 +7033,7 @@ internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: (
         TextButton(
             onClick = onOpen,
             modifier = Modifier.heightIn(min = MinTouchTargetSize),
+            shape = RectangleShape,
         ) {
             Text(
                 text = if (active.isEmpty()) "SOURCE" else "SOURCE ${active.size}",
@@ -7057,6 +7057,7 @@ internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: (
             TextButton(
                 onClick = onClear,
                 modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                shape = RectangleShape,
             ) {
                 Text(text = "CLEAR", color = AarisColor.Muted, maxLines = 1, softWrap = false)
             }
@@ -7099,6 +7100,7 @@ internal fun SourceFilterSheet(
                 TextButton(
                     onClick = onClear,
                     modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                    shape = RectangleShape,
                 ) {
                     Text(text = "CLEAR", color = AarisColor.Muted)
                 }

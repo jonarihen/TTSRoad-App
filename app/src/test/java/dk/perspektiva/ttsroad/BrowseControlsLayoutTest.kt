@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.data.BrowseScope
+import dk.perspektiva.ttsroad.data.SourceOption
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -188,5 +189,49 @@ class BrowseControlsLayoutTest {
         compose.onNodeWithText("ROMANCE").performClick()
 
         assertEquals("romance", toggled)
+    }
+
+    @Test
+    fun `the source bar exposes the active labels and a way to clear them`() {
+        var cleared = 0
+        compose.setContent {
+            TtsRoadTheme {
+                SourceFilterBar(
+                    active = setOf("Royal Road", "EPUB"),
+                    onOpen = {},
+                    onClear = { cleared++ },
+                )
+            }
+        }
+
+        compose.onNodeWithText("SOURCE 2").assertIsDisplayed().assertHeightIsAtLeast(MinimumTarget)
+        compose.onNodeWithText("ROYAL ROAD").assertIsDisplayed()
+        compose.onNodeWithText("EPUB").assertIsDisplayed()
+        compose.onNodeWithText("CLEAR").performClick()
+
+        assertEquals(1, cleared)
+    }
+
+    @Test
+    fun `a source row reports its key selection and toggles the option it names`() {
+        val royalRoad = SourceOption(key = "royalroad", label = "Royal Road")
+        val epub = SourceOption(key = "epub", label = "EPUB")
+        var toggled: SourceOption? = null
+        compose.setContent {
+            TtsRoadTheme {
+                SourceFilterSheet(
+                    sources = listOf(royalRoad, epub),
+                    selected = setOf(royalRoad.key),
+                    onToggle = { toggled = it },
+                    onClear = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        compose.onNodeWithText("ROYAL ROAD").assertIsOn().assertHeightIsAtLeast(MinimumTarget)
+        compose.onNodeWithText("EPUB").assertIsOff().performClick()
+
+        assertEquals(epub, toggled)
     }
 }
