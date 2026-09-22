@@ -45,6 +45,15 @@ class BrowsePreferencesTest {
     }
 
     @Test
+    fun `a phone still holding RecentlyUpdated lands on the order it was asking for`() {
+        // That option sorted on updated_at, which the poller bumped on every sweep, so it ordered
+        // the shelf by the last poll rather than by news (#189). Whoever chose it meant "show me
+        // what got a new chapter" — falling through to the alphabetical default would answer a
+        // question nobody asked and quietly discard the setting on upgrade.
+        assertEquals(FictionSort.NewChapters, fictionSortFromStored("RecentlyUpdated"))
+    }
+
+    @Test
     fun `the stored name is the enum name, not the label`() {
         // The labels are display text and will get reworded — "% converted" especially. The
         // persisted key must not move with them or everyone's saved order resets on upgrade.

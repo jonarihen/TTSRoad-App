@@ -12,6 +12,7 @@ class FictionSortTest {
         rating: Double? = null,
         createdAt: String? = null,
         updatedAt: String? = null,
+        lastChapterAt: String? = null,
         progress: LibraryProgress? = null,
         totalChapters: Int = 0,
         doneChapters: Int = 0,
@@ -22,22 +23,53 @@ class FictionSortTest {
         rating = rating,
         createdAt = createdAt,
         updatedAt = updatedAt,
+        lastChapterAt = lastChapterAt,
         progress = progress,
         totalChapters = totalChapters,
         doneChapters = doneChapters,
     )
 
     @Test
-    fun `recently updated puts the newest first`() {
+    fun `new chapters first puts the most recently gained chapter at the top`() {
         val rows = listOf(
-            fiction(id = 1, updatedAt = "2026-07-01T09:15:00Z"),
-            fiction(id = 2, updatedAt = "2026-08-26T23:00:00Z"),
-            fiction(id = 3, updatedAt = "2026-08-01T00:00:00Z"),
+            fiction(id = 1, lastChapterAt = "2026-07-01T09:15:00Z"),
+            fiction(id = 2, lastChapterAt = "2026-08-26T23:00:00Z"),
+            fiction(id = 3, lastChapterAt = "2026-08-01T00:00:00Z"),
         )
 
-        val sorted = rows.sortedForBrowsing(FictionSort.RecentlyUpdated)
+        val sorted = rows.sortedForBrowsing(FictionSort.NewChapters)
 
         assertEquals(listOf(2, 3, 1), sorted.map { it.id })
+    }
+
+    @Test
+    fun `new chapters ignores updated_at, which a poll finding nothing still moves`() {
+        // The whole point of #189. Fiction 1 was polled seconds ago and gained nothing; fiction 2
+        // gained a chapter yesterday. Sorting on updated_at would lead with 1 and bury the news.
+        val rows = listOf(
+            fiction(id = 1, updatedAt = "2026-08-27T12:00:00Z", lastChapterAt = "2026-02-01T00:00:00Z"),
+            fiction(id = 2, updatedAt = "2026-08-01T00:00:00Z", lastChapterAt = "2026-08-26T09:00:00Z"),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.NewChapters)
+
+        assertEquals(listOf(2, 1), sorted.map { it.id })
+    }
+
+    @Test
+    fun `a fiction with no chapters yet sorts below one that has some`() {
+        // Null is "unknown", and on this order it covers two cases that look identical from the
+        // payload: a brand new fiction, and a server too old to send last_chapter_at at all.
+        val rows = listOf(
+            fiction(id = 1, lastChapterAt = null),
+            fiction(id = 2, lastChapterAt = "2026-08-01T00:00:00Z"),
+            fiction(id = 3, lastChapterAt = null),
+            fiction(id = 4, lastChapterAt = "2026-08-26T00:00:00Z"),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.NewChapters)
+
+        assertEquals(listOf(4, 2, 1, 3), sorted.map { it.id })
     }
 
     @Test
@@ -77,7 +109,7 @@ class FictionSortTest {
     fun `an entirely undated shelf keeps the order the server sent`() {
         val rows = listOf(fiction(id = 7), fiction(id = 3), fiction(id = 9))
 
-        val sorted = rows.sortedForBrowsing(FictionSort.RecentlyUpdated)
+        val sorted = rows.sortedForBrowsing(FictionSort.NewChapters)
 
         assertEquals(listOf(7, 3, 9), sorted.map { it.id })
     }
@@ -162,12 +194,12 @@ class FictionSortTest {
         // Stability is not a nicety here: an unstable comparator would let the grid reorder itself
         // between recompositions while the user was looking at it.
         val rows = listOf(
-            fiction(id = 1, updatedAt = "2026-08-01T00:00:00Z"),
-            fiction(id = 2, updatedAt = "2026-08-01T00:00:00Z"),
-            fiction(id = 3, updatedAt = "2026-08-01T00:00:00Z"),
+            fiction(id = 1, lastChapterAt = "2026-08-01T00:00:00Z"),
+            fiction(id = 2, lastChapterAt = "2026-08-01T00:00:00Z"),
+            fiction(id = 3, lastChapterAt = "2026-08-01T00:00:00Z"),
         )
 
-        val sorted = rows.sortedForBrowsing(FictionSort.RecentlyUpdated)
+        val sorted = rows.sortedForBrowsing(FictionSort.NewChapters)
 
         assertEquals(listOf(1, 2, 3), sorted.map { it.id })
     }

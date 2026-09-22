@@ -32,14 +32,29 @@ private val Context.browseDataStore: DataStore<Preferences> by preferencesDataSt
 )
 
 /**
+ * Orders that no longer exist, mapped to what the person who chose them was asking for.
+ *
+ * `RecentlyUpdated` sorted on `updated_at`, a row clock the poller bumped on every sweep, so it
+ * ordered the shelf by the last poll rather than by news. Anyone who picked it meant *show me what
+ * got a new chapter*, which is now [FictionSort.NewChapters] — so that is where it lands, rather
+ * than falling through to the alphabetical default and silently discarding the choice. The web
+ * console aliases its own `updated` → `last_chapter` for the same reason (#189).
+ */
+private val RenamedSorts: Map<String, FictionSort> = mapOf(
+    "RecentlyUpdated" to FictionSort.NewChapters,
+)
+
+/**
  * Reads a stored sort name back into a [FictionSort], falling back to [FictionSort.Default].
  *
  * An order this build does not recognise — one renamed in an upgrade, or a corrupt store — must
  * land somewhere sensible rather than throw, because this is read while the first frame of the
- * browse grid is being composed.
+ * browse grid is being composed. A *renamed* one is not unrecognised, though: see [RenamedSorts].
  */
 fun fictionSortFromStored(stored: String?): FictionSort =
-    FictionSort.entries.firstOrNull { it.name == stored } ?: FictionSort.Default
+    FictionSort.entries.firstOrNull { it.name == stored }
+        ?: RenamedSorts[stored]
+        ?: FictionSort.Default
 
 /** The three browse settings, read and written together because they are set from one screen. */
 data class BrowseSettings(

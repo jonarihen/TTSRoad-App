@@ -108,7 +108,8 @@ class FictionDatesRepositoryTest {
             json(
                 """
                 {"fictions": [{"id": 1, "title": "Ashes",
-                               "created_at": null, "updated_at": null}]}
+                               "created_at": null, "updated_at": null,
+                               "last_chapter_at": null}]}
                 """,
             ),
         )
@@ -117,6 +118,19 @@ class FictionDatesRepositoryTest {
 
         assertNull(fiction.createdAt)
         assertNull(fiction.updatedAt)
+        assertNull(fiction.lastChapterAt)
+    }
+
+    @Test
+    fun `a server too old to send last_chapter_at decodes as unknown rather than failing`() = runTest {
+        // TTSRoad#189 added the key. An older deployment omits it entirely, and the shelf still has
+        // to decode — the order puts these last, it does not refuse the payload.
+        val repository = repository()
+        server.enqueue(json("""{"fictions": [{"id": 1, "title": "Ashes"}]}"""))
+
+        val fiction = repository.library().fictions.single()
+
+        assertNull(fiction.lastChapterAt)
     }
 
     @Test
@@ -128,15 +142,15 @@ class FictionDatesRepositoryTest {
             json(
                 """
                 {"fictions": [
-                  {"id": 1, "title": "Ashes",  "updated_at": "2026-07-01T09:15:00Z"},
-                  {"id": 2, "title": "Embers", "updated_at": "2026-08-26T23:00:00Z"},
+                  {"id": 1, "title": "Ashes",  "last_chapter_at": "2026-07-01T09:15:00Z"},
+                  {"id": 2, "title": "Embers", "last_chapter_at": "2026-08-26T23:00:00Z"},
                   {"id": 3, "title": "Cinders"}
                 ]}
                 """,
             ),
         )
 
-        val ordered = repository.library().fictions.sortedForBrowsing(FictionSort.RecentlyUpdated)
+        val ordered = repository.library().fictions.sortedForBrowsing(FictionSort.NewChapters)
 
         assertEquals(listOf(2, 1, 3), ordered.map { it.id })
     }
