@@ -230,6 +230,21 @@ Important fields:
 - `continue_listening[]`: resume/up-next items. Items may include `audio` with an authenticated stream URL.
 - `recent_chapters[]`: recent backend chapters, including status.
 
+**`last_chapter_at` is the one clock on a fiction that means "this book gained a chapter."** It is
+`max(created_at)` over the fiction's non-excluded chapters, ISO-8601 with a trailing `Z` like every
+other timestamp here, and `null` for a fiction that has none yet. Order a "what's new" shelf on it.
+
+Do **not** use `updated_at` for that. It is an `onupdate` row clock: the poller writes
+`last_polled_at` on every cycle before it knows whether anything arrived, which bumps `updated_at`
+on every enabled fiction every sweep. That makes it right for the delta cursors below — a row that
+moved for any reason has to come back down — and wrong as an answer to "which of my books has a new
+chapter".
+
+A server predating TTSRoad#189 omits `last_chapter_at`. Treat an absent key as **unknown** and sort
+those entries to the tail; never render or order one as an epoch. The client cannot reconstruct the
+value from anything else in this payload, so an order that depends on it degrades to the server's
+own order on such a deployment rather than to a wrong one.
+
 Audio object shape:
 
 ```json

@@ -2,6 +2,17 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- Browse can now be ordered by **New chapters first**, which sorts on when a book actually gained a
+  chapter. It replaces "Recently updated", which read a row clock the poller bumped on every sweep
+  and so ordered the shelf by the last poll rather than by news — a book that gained nothing could
+  still lead the grid. A phone still holding the old order is moved to the new one rather than
+  reset. Books with no chapters yet, and every book on a server too old to report this, sort last.
+  (TTSRoad-App#242, TTSRoad#189)
+
 ## 0.16.0 — 2026-09-19
 
 ### Added

@@ -267,11 +267,24 @@ data class FictionSummary(
      *
      * **Not "when a new chapter arrived".** The column is an `onupdate` on the fiction row and the
      * poller writes [lastPolledAt] to that same row, so a poll that found nothing still moves this.
-     * It is the best "recently active" signal the payload carries and it is worth sorting by, but
-     * anything labelling it *new chapters* would be lying: that would need `max(chapters.created_at)`
-     * per fiction, which is a backend change and not one this client can make.
+     * It is a "recently active" signal and nothing more; [lastChapterAt] is the one that answers
+     * *new chapters*, and is what a "what's new" order must sort on.
      */
     @param:Json(name = "updated_at") val updatedAt: String? = null,
+    /**
+     * When this fiction last gained a chapter: `max(created_at)` over its non-excluded chapters.
+     * ISO-8601, or null for a fiction with no chapters yet — and on a server predating TTSRoad#189.
+     *
+     * The one clock in this payload that means a chapter actually arrived, as opposed to the poller
+     * having looked. [updatedAt] moves on every sweep of every enabled fiction because the poller
+     * writes [lastPolledAt] to the same row before it knows whether anything was found, which makes
+     * it right for delta cursors and wrong for "which of my books has something new".
+     *
+     * Null is **unknown**, never "a long time ago": the two are indistinguishable here — a brand new
+     * fiction and an old server both send nothing — so both sort to the tail rather than being
+     * rendered as an epoch (#189).
+     */
+    @param:Json(name = "last_chapter_at") val lastChapterAt: String? = null,
 ) {
     /**
      * This fiction is switched off: the poller skips it and nothing new will be converted.

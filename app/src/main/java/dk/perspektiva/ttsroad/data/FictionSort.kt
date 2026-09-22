@@ -24,14 +24,19 @@ package dk.perspektiva.ttsroad.data
  */
 enum class FictionSort(val label: String) {
     /**
-     * Most recently written fiction row first.
+     * The books that gained a chapter most recently, first — the shelf's "what's new".
      *
-     * Deliberately **not** called "New chapters". [FictionSummary.updatedAt] is an `onupdate` on the
-     * fiction row and the poller touches that row when it records a poll, so this moves even when a
-     * check found nothing. It is the best "recently active" signal the payload carries; a true
-     * last-chapter-added order needs `max(chapters.created_at)` from the backend.
+     * Sorts on [FictionSummary.lastChapterAt], which is `max(created_at)` over the fiction's
+     * chapters and therefore moves only when a chapter actually arrived. This replaces an order
+     * that read [FictionSummary.updatedAt]: an `onupdate` row clock the poller bumps on every sweep
+     * before it knows whether anything was found, which ordered the shelf by the last poll rather
+     * than by news. The web console made the same correction in #189, down to aliasing the stored
+     * value — see [fictionSortFromStored].
+     *
+     * A fiction with no chapters, and every fiction on a server too old to send the field, sorts to
+     * the tail: null here is *unknown*, and the two cases are not distinguishable from the payload.
      */
-    RecentlyUpdated("Recently updated"),
+    NewChapters("New chapters first"),
 
     /** Most recently tracked first — the shelf in the order it was built, newest end first. */
     RecentlyAdded("Recently added"),
@@ -87,7 +92,7 @@ enum class FictionSort(val label: String) {
  */
 fun List<FictionSummary>.sortedForBrowsing(sort: FictionSort): List<FictionSummary> =
     when (sort) {
-        FictionSort.RecentlyUpdated -> sortedWith(descendingNullsLast { it.updatedAt })
+        FictionSort.NewChapters -> sortedWith(descendingNullsLast { it.lastChapterAt })
         FictionSort.RecentlyAdded -> sortedWith(descendingNullsLast { it.createdAt })
         FictionSort.Title -> sortedWith(
             compareBy(String.CASE_INSENSITIVE_ORDER) { it.title },
