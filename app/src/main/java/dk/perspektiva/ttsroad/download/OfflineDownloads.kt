@@ -30,6 +30,7 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -92,6 +93,7 @@ class OfflineDownloads(
      */
     private val forgetAudioHash: (Int) -> Unit = {},
     private val forgetAllAudioHashes: () -> Unit = {},
+    private val initializeManager: Boolean = true,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -232,8 +234,10 @@ class OfflineDownloads(
                 .map { it.wifiOnly }
                 .distinctUntilChanged()
                 .collect { wifiOnly ->
-                    withContext(Dispatchers.IO) {
-                        downloadManager.requirements = downloadRequirements(wifiOnly)
+                    if (initializeManager) {
+                        withContext(Dispatchers.IO) {
+                            downloadManager.requirements = downloadRequirements(wifiOnly)
+                        }
                     }
                 }
         }
@@ -259,23 +263,21 @@ class OfflineDownloads(
         // initialiser: the sweep needs the download index, reaching the index opens the manager, and
         // opening the manager needs the cache. Hanging that off the cache's initialiser would have
         // it re-enter the very lazy that is still running.
-        scope.launch(Dispatchers.IO) {
-            downloadManager
-            dropStrandedStreamSpans(downloadCache)
+        //
+        // The false path is test-only dependency control for settings-layout tests, which need the
+        // cache-size flows but never exercise Media3. Production callers keep the default true.
+        if (initializeManager) {
+            scope.launch(Dispatchers.IO) {
+                downloadManager
+                dropStrandedStreamSpans(downloadCache)
+            }
         }
     }
 
-    /**
-     * Finish startup and release the manager while a JVM test's Robolectric sandbox still exists.
-     *
-     * Production never calls this: the singleton lives for the process. A Settings test can finish
-     * while the init block is still constructing Media3 on IO; if its receiver registration lands
-     * after sandbox teardown, runTest blames the next innocent test (#248). Awaiting the same lazy
-     * here cannot create a second manager, and keeps the registration and release inside the owning
-     * sandbox.
-     */
-    suspend fun closeForTest() = withContext(Dispatchers.IO) {
-        runCatching { downloadManager.release() }
+    /** Cancel the collectors of a test instance that was explicitly forbidden from opening Media3. */
+    fun closeWithoutManagerForTest() {
+        check(!initializeManager) { "This test instance owns a real DownloadManager" }
+        scope.cancel()
     }
 
     /**

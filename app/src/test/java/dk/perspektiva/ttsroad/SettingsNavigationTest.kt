@@ -24,7 +24,6 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import dk.perspektiva.ttsroad.core.ServiceLocator
-import dk.perspektiva.ttsroad.download.OfflineDownloads
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SessionStore
 import dk.perspektiva.ttsroad.data.LoginResponse
@@ -42,6 +41,7 @@ import dk.perspektiva.ttsroad.nav.saveKey
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -53,15 +53,14 @@ import org.robolectric.annotation.Config
 class SettingsNavigationTest {
     @get:Rule val compose = createComposeRule()
 
-    /**
-     * Rendering the Storage category builds the process-wide [OfflineDownloads], whose init
-     * coroutines open the Media3 download index and register a broadcast receiver. Left running,
-     * that lands after this class's Robolectric sandbox is gone and throws on a thread nobody is
-     * awaiting — reported against whichever test starts next, not this one (#248).
-     */
+    @Before
+    fun keepLayoutTestsOutOfMedia3() {
+        ServiceLocator.disableDownloadManagerForTest()
+    }
+
     @After
-    fun stopBackgroundDownloads() = runBlocking {
-        ServiceLocator.resetOfflineDownloadsForTest()
+    fun restoreRealDownloadConstruction() {
+        ServiceLocator.restoreDownloadManagerAfterTest()
     }
 
     @Test
