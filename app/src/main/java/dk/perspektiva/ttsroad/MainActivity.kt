@@ -1120,7 +1120,11 @@ private fun LibraryScreen(
     // "New chapters first" has chosen it for their books, not for one screen, and two independent
     // orders would mean picking it twice and being surprised on whichever was set first (#243).
     val browsePrefs = remember { ServiceLocator.browsePreferences(context) }
-    val settings by browsePrefs.settings.collectAsStateWithLifecycle(initialValue = BrowseSettings())
+    // Null is the DataStore-loading placeholder. It must stay distinguishable from the genuine
+    // default (`Title`): after process restoration, briefly treating it as a real change would
+    // reset a saved rail position before the persisted order arrives.
+    val loadedSettings by browsePrefs.settings.collectAsStateWithLifecycle(initialValue = null)
+    val settings = loadedSettings ?: BrowseSettings()
     var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
     // Hoisted out of the rail so the reorder effect below can reach it. The applied sort is saved
     // beside the position: opening a fiction removes this screen from composition, and returning
@@ -1154,8 +1158,8 @@ private fun LibraryScreen(
             // A genuinely new order has to be read from its beginning. Re-entering this screen is
             // not one: SaveableStateProvider restores both this marker and the rail position after
             // a fiction detail, so returning to HOME does not jump a reader back to the first tile.
-            LaunchedEffect(settings.sort) {
-                val next = settings.sort.name
+            LaunchedEffect(loadedSettings?.sort) {
+                val next = loadedSettings?.sort?.name ?: return@LaunchedEffect
                 if (appliedHomeSort != null && appliedHomeSort != next) fictionRailState.scrollToItem(0)
                 appliedHomeSort = next
             }
@@ -6450,8 +6454,9 @@ private fun FictionsScreen(
     // always done with the same three (localStorage, `ttsroadInitLibraryControls`). See
     // BrowsePreferences for why rememberSaveable was not enough.
     val browsePrefs = remember { ServiceLocator.browsePreferences(context) }
-    val settings by browsePrefs.settings
-        .collectAsStateWithLifecycle(initialValue = BrowseSettings())
+    val loadedSettings by browsePrefs.settings
+        .collectAsStateWithLifecycle(initialValue = null)
+    val settings = loadedSettings ?: BrowseSettings()
     var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
     var tagSheetOpen by rememberSaveable { mutableStateOf(false) }
     // Hoisted so the browse position survives the round trip into a fiction, alongside the
@@ -6460,8 +6465,8 @@ private fun FictionsScreen(
     val gridState = rememberLazyGridState()
     var appliedBrowseSort by rememberSaveable { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(settings.sort) {
-        val next = settings.sort.name
+    LaunchedEffect(loadedSettings?.sort) {
+        val next = loadedSettings?.sort?.name ?: return@LaunchedEffect
         if (appliedBrowseSort != null && appliedBrowseSort != next) gridState.scrollToItem(0)
         appliedBrowseSort = next
     }
