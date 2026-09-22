@@ -89,6 +89,36 @@ class FictionSortTest {
     }
 
     @Test
+    fun `recently listened uses this callers newest fiction clock`() {
+        val rows = listOf(
+            fiction(id = 1, progress = LibraryProgress(lastListenedAt = "2026-07-01T09:15:00Z")),
+            fiction(id = 2, progress = LibraryProgress(lastListenedAt = "2026-09-22T18:30:00Z")),
+            fiction(id = 3, progress = LibraryProgress(lastListenedAt = "2026-08-01T00:00:00Z")),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.RecentlyListened)
+
+        assertEquals(listOf(2, 3, 1), sorted.map { it.id })
+    }
+
+    @Test
+    fun `recently listened puts never heard and old-server rows last without disturbing them`() {
+        // Null covers two wire-identical cases: this account never heard the fiction, and a server
+        // predating TTSRoad#339 that never sent the key. Neither is an epoch, and stable sorting
+        // keeps their server order rather than shuffling the tail.
+        val rows = listOf(
+            fiction(id = 1, progress = LibraryProgress(lastListenedAt = null)),
+            fiction(id = 2, progress = LibraryProgress(lastListenedAt = "2026-09-22T18:30:00Z")),
+            fiction(id = 3, progress = null),
+            fiction(id = 4, progress = LibraryProgress(lastListenedAt = "2026-08-01T00:00:00Z")),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.RecentlyListened)
+
+        assertEquals(listOf(2, 4, 1, 3), sorted.map { it.id })
+    }
+
+    @Test
     fun `the fixed-width ISO format orders correctly across a year and a month boundary`() {
         // The whole reason these compare as strings. A format that padded differently — or dropped
         // the leading zero on a month — would sort "2026-9-01" above "2026-10-01" and this test is

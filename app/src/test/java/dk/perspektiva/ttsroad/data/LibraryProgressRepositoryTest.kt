@@ -43,7 +43,7 @@ class LibraryProgressRepositoryTest {
                   "chapters_total":75,"chapters_ready":73,"chapters_played":12,
                   "chapters_unplayed":61,"duration_seconds":196692.0,
                   "duration_label":"54h 39m","remaining_seconds":150031.0,
-                  "remaining_label":"41h 41m"}}]}
+                  "remaining_label":"41h 41m","last_listened_at":"2026-09-22T18:30:00Z"}}]}
                 """.trimIndent(),
             ),
         )
@@ -58,6 +58,20 @@ class LibraryProgressRepositoryTest {
         assertEquals("54h 39m", progress?.durationLabel)
         assertEquals(150_031.0, progress?.remainingSeconds ?: -1.0, 0.001)
         assertEquals("41h 41m", progress?.remainingLabel)
+        assertEquals("2026-09-22T18:30:00Z", progress?.lastListenedAt)
+    }
+
+    @Test
+    fun `an older aggregate without last_listened_at decodes the clock as unknown`() = runTest {
+        server.enqueue(
+            json(
+                """{"fictions":[{"id":1,"title":"Ashes","progress":{"chapters_total":4}}]}""",
+            ),
+        )
+
+        val progress = repository().library().fictions.single().progress
+
+        assertNull(progress?.lastListenedAt)
     }
 
     @Test

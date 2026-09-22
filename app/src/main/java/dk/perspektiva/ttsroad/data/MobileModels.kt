@@ -164,6 +164,15 @@ data class LibraryProgress(
     @param:Json(name = "duration_label") val durationLabel: String? = null,
     @param:Json(name = "remaining_seconds") val remainingSeconds: Double = 0.0,
     @param:Json(name = "remaining_label") val remainingLabel: String? = null,
+    /**
+     * When this caller last listened to any chapter in the fiction. ISO-8601, or null when they
+     * never have — and on a server predating TTSRoad#339.
+     *
+     * Nested here rather than on [FictionSummary] because it belongs to the listener: two accounts
+     * can last hear the same shared fiction at different times. The server computes it in the same
+     * grouped query as the totals, so ordering a shelf by it does not fetch every chapter list.
+     */
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
 ) {
     /**
      * The share of known listening time still unheard, or null when there is no duration to divide.

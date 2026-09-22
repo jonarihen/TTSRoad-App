@@ -7146,6 +7146,7 @@ internal fun SourceFilterSheet(
 /** The half of an order that its two-word label cannot carry. Null where the label is the whole. */
 private fun fictionSortNote(sort: FictionSort): String? = when (sort) {
     FictionSort.NewChapters -> "When a chapter last arrived; books with none yet last"
+    FictionSort.RecentlyListened -> "Your listening, newest first; never heard last"
     FictionSort.RecentlyAdded -> "When the server started tracking it"
     FictionSort.Author -> "Books with no author last"
     FictionSort.MostLeft -> "Absolute listening time remaining; unavailable totals last"
