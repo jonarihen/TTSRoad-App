@@ -324,6 +324,17 @@ data class FictionSummary(
         }
 
     /**
+     * The stable identity of where this fiction came from, for storing a filter selection by.
+     *
+     * [sourceType] rather than any label: the backend picks it from the adapter and does not
+     * reword it, while a label is presentation and can change under a saved preference at any
+     * upgrade. A fiction the server said nothing about takes [UnknownSourceKey] so that the bucket
+     * has a key like every other choice.
+     */
+    val sourceFilterKey: String
+        get() = sourceType?.trim()?.takeIf(String::isNotEmpty) ?: UnknownSourceKey
+
+    /**
      * What a *source filter* calls this fiction: the same name as the badge, except that the
      * ordinary case is named rather than left blank.
      *

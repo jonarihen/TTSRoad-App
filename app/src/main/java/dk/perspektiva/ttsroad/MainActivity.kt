@@ -201,6 +201,7 @@ import dk.perspektiva.ttsroad.data.retainingKnownTags
 import dk.perspektiva.ttsroad.data.browseView
 import dk.perspektiva.ttsroad.data.browseEmptyMessage
 import dk.perspektiva.ttsroad.data.browseScopeCount
+import dk.perspektiva.ttsroad.data.SourceOption
 import dk.perspektiva.ttsroad.data.availableSources
 import dk.perspektiva.ttsroad.data.availableTags
 import dk.perspektiva.ttsroad.data.BrowseSettings
@@ -6500,16 +6501,35 @@ private fun FictionsScreen(
             // the scope to ALL here keeps a value stored on a previous server from hiding rows.
             val browseScope = if (browseAll) settings.scope else BrowseScope.All
             val sourceChoices = remember(fictions) { fictions.availableSources() }
+            val sourceKeys = remember(sourceChoices) { sourceChoices.map { it.key } }
             // Same guard as the tags, and needed more sharply: a stored source survives signing
             // into a different server, where "Patreon" may name nothing at all.
-            val activeSources = remember(settings.sources, sourceChoices) {
-                settings.sources.retainingKnownSources(sourceChoices)
+            val activeSources = remember(settings.sources, sourceKeys) {
+                settings.sources.retainingKnownSources(sourceKeys)
+            }
+            // Masking the stale value is not enough — it has to be forgotten. Left in the store it
+            // is dormant rather than gone, and the day this shelf gains its first EPUB a filter
+            // nobody remembers setting switches itself back on and hides every other book.
+            //
+            // Gated on the shelf having loaded: an empty list is "nothing yet", not "none of your
+            // sources exist any more", and pruning against it would clear the filter on every cold
+            // start before the first payload arrives.
+            LaunchedEffect(settings.sources, sourceKeys) {
+                if (sourceKeys.isNotEmpty() && activeSources != settings.sources) {
+                    browsePrefs.setSources(activeSources)
+                }
+            }
+            // Keys are what gets stored and compared; labels are only ever for reading. Resolved
+            // from the shelf so a source the server has started naming differently shows its
+            // current name rather than whatever it was called when the box was ticked.
+            val activeSourceLabels = remember(activeSources, sourceChoices) {
+                sourceChoices.filter { it.key in activeSources }.mapTo(mutableSetOf()) { it.label }
             }
             val filtered = remember(fictions, query, activeTags, activeSources, browseScope, settings.sort) {
                 fictions.browseView(
                     scope = browseScope,
                     tags = activeTags,
-                    sources = activeSources,
+                    sourceKeys = activeSources,
                     query = query,
                     sort = settings.sort,
                 )
@@ -6671,7 +6691,7 @@ private fun FictionsScreen(
                     if (sourceChoices.size > 1) {
                         fullWidthItem(key = "sources") {
                             SourceFilterBar(
-                                active = activeSources,
+                                active = activeSourceLabels,
                                 onOpen = { sourceSheetOpen = true },
                                 onClear = { scope.launch { browsePrefs.setSources(emptySet()) } },
                             )
@@ -6679,7 +6699,7 @@ private fun FictionsScreen(
                     }
                     if (filtered.isEmpty()) {
                         fullWidthItem(key = "empty") {
-                            EmptyCard(browseEmptyMessage(query, activeTags, browseScope, activeSources))
+                            EmptyCard(browseEmptyMessage(query, activeTags, browseScope, activeSourceLabels))
                         }
                     } else {
                         items(filtered, key = { it.id }) { fiction ->
@@ -6727,9 +6747,12 @@ private fun FictionsScreen(
                 SourceFilterSheet(
                     sources = sourceChoices,
                     selected = activeSources,
-                    onToggle = { source ->
-                        val existing = activeSources.firstOrNull { it.equals(source, ignoreCase = true) }
-                        val next = if (existing != null) activeSources - existing else activeSources + source
+                    onToggle = { option ->
+                        val next = if (option.key in activeSources) {
+                            activeSources - option.key
+                        } else {
+                            activeSources + option.key
+                        }
                         scope.launch { browsePrefs.setSources(next) }
                     },
                     onClear = { scope.launch { browsePrefs.setSources(emptySet()) } },
@@ -7054,9 +7077,9 @@ internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: (
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SourceFilterSheet(
-    sources: List<String>,
+    sources: List<SourceOption>,
     selected: Set<String>,
-    onToggle: (String) -> Unit,
+    onToggle: (SourceOption) -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -7087,8 +7110,8 @@ internal fun SourceFilterSheet(
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
         )
         LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-            items(sources, key = { it }) { source ->
-                val isChecked = selected.any { it.equals(source, ignoreCase = true) }
+            items(sources, key = { it.key }) { source ->
+                val isChecked = source.key in selected
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -7104,7 +7127,7 @@ internal fun SourceFilterSheet(
                     Checkbox(checked = isChecked, onCheckedChange = null)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = source.uppercase(),
+                        text = source.label.uppercase(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isChecked) AarisColor.Accent else AarisColor.Ink,
                         maxLines = 1,
