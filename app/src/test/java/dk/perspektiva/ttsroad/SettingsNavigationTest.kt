@@ -60,7 +60,7 @@ class SettingsNavigationTest {
      * awaiting — reported against whichever test starts next, not this one (#248).
      */
     @After
-    fun stopBackgroundDownloads() = runBlocking {
+    fun stopBackgroundDownloads() {
         ServiceLocator.resetOfflineDownloadsForTest()
     }
 

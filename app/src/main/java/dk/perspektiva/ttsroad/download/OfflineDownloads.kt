@@ -30,8 +30,7 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -120,6 +119,9 @@ class OfflineDownloads(
     @Volatile
     private var readAlongSupported: Boolean = false
 
+    @Volatile
+    private var wifiOnly: Boolean = DownloadPrefs().wifiOnly
+
     private val _downloads = MutableStateFlow<Map<String, ChapterDownload>>(emptyMap())
 
     /** Every known download, keyed by the chapter's media id. Empty until the index has loaded. */
@@ -178,6 +180,7 @@ class OfflineDownloads(
     // Held as an explicit delegate rather than an anonymous `by lazy` so [close] can ask whether
     // the manager was ever built. Releasing one that does not exist would construct it purely in
     // order to shut it down, which is the opposite of the intent.
+    private val downloadExecutor = Executors.newFixedThreadPool(MaxParallelDownloads)
     private val downloadManagerDelegate = lazy {
         DownloadManager(
             context,
@@ -186,9 +189,10 @@ class OfflineDownloads(
             upstreamFactory,
             // Two at a time: enough to keep a phone's link busy without starving playback of the
             // chapter the user is actually listening to.
-            Executors.newFixedThreadPool(MaxParallelDownloads),
+            downloadExecutor,
         ).apply {
             maxParallelDownloads = MaxParallelDownloads
+            requirements = downloadRequirements(wifiOnly)
             addListener(
                 object : DownloadManager.Listener {
                     override fun onInitialized(downloadManager: DownloadManager) {
@@ -196,6 +200,7 @@ class OfflineDownloads(
                         // download that was in flight when the app died reappear in the UI.
                         publish(downloadManager.currentDownloads)
                         loadIndex()
+                        scope.launch(Dispatchers.IO) { dropStrandedStreamSpans(downloadCache) }
                     }
 
                     override fun onDownloadChanged(
@@ -238,9 +243,15 @@ class OfflineDownloads(
             downloadPrefs
                 .map { it.wifiOnly }
                 .distinctUntilChanged()
-                .collect { wifiOnly ->
-                    withContext(Dispatchers.IO) {
-                        downloadManager.requirements = downloadRequirements(wifiOnly)
+                .collect { newWifiOnly ->
+                    wifiOnly = newWifiOnly
+                    // Merely opening Settings must not open the Media3 index. The current value is
+                    // applied in the manager's constructor when a real download path first needs it;
+                    // only update a manager that already exists.
+                    if (downloadManagerDelegate.isInitialized()) {
+                        withContext(Dispatchers.IO) {
+                            downloadManager.requirements = downloadRequirements(newWifiOnly)
+                        }
                     }
                 }
         }
@@ -258,18 +269,6 @@ class OfflineDownloads(
                     }
                 }
         }
-        // Touching the manager is what makes it read the persisted index, which is what makes
-        // yesterday's downloads show up in the chapter rows again. Done off the main thread because
-        // opening the cache scans its directory, and it is not worth janking the first frame.
-        //
-        // The split's one-off sweep goes here, after it, rather than in the cache's own lazy
-        // initialiser: the sweep needs the download index, reaching the index opens the manager, and
-        // opening the manager needs the cache. Hanging that off the cache's initialiser would have
-        // it re-enter the very lazy that is still running.
-        scope.launch(Dispatchers.IO) {
-            downloadManager
-            dropStrandedStreamSpans(downloadCache)
-        }
     }
 
     /**
@@ -285,13 +284,14 @@ class OfflineDownloads(
      * `runTest` then reports against whichever test happened to start next, as an
      * `UncaughtExceptionsBeforeTest` naming an innocent party (#248).
      *
-     * `cancelAndJoin` rather than `cancel`: the point is to *wait* for that in-flight construction
-     * to finish or unwind, so the caller knows nothing is still running when it returns. Releasing
-     * is best-effort — a half-built manager can throw on the way down, and a failure to close
-     * cleanly must not fail the test that was merely tidying up.
+     * Cancellation is deliberately non-blocking. The manager constructor can be inside Media3's
+     * own blocking initialisation, so waiting for every child to join turns a race into a deadlock.
+     * Cancelling prevents queued collectors from reaching it; `shutdownNow` interrupts queued cache
+     * work; and an already built manager is released best-effort so its receiver is unregistered.
      */
-    suspend fun close() {
-        scope.coroutineContext.job.cancelAndJoin()
+    fun close() {
+        scope.cancel()
+        downloadExecutor.shutdownNow()
         if (downloadManagerDelegate.isInitialized()) {
             runCatching { downloadManagerDelegate.value.release() }
         }

@@ -269,10 +269,10 @@ object ServiceLocator {
      * receiver against an `ActivityThread` that no longer exists. The throw surfaces as an
      * `UncaughtExceptionsBeforeTest` blamed on whichever test starts next (#248).
      *
-     * Suspending rather than fire-and-forget on purpose: a teardown that returned before the work
-     * had actually stopped would leave exactly the race it is meant to remove.
+     * The close is synchronous for the resources it owns, but does not join Media3's blocking
+     * initialisation — doing so can deadlock a full test suite. See [OfflineDownloads.close].
      */
-    suspend fun resetOfflineDownloadsForTest() {
+    fun resetOfflineDownloadsForTest() {
         val existing = synchronized(this) { offlineDownloads.also { offlineDownloads = null } }
         existing?.close()
     }
