@@ -1116,6 +1116,13 @@ private fun LibraryScreen(
         }
     }
 
+    // The shelf's order, shared with browse rather than stored separately. Someone who has chosen
+    // "New chapters first" has chosen it for their books, not for one screen, and two independent
+    // orders would mean picking it twice and being surprised on whichever was set first (#243).
+    val browsePrefs = remember { ServiceLocator.browsePreferences(context) }
+    val settings by browsePrefs.settings.collectAsStateWithLifecycle(initialValue = BrowseSettings())
+    var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
+
     // Loads once; returning to this screen shows what was already there instead of a spinner.
     LaunchedEffect(Unit) { cache.ensureLibrary() }
 
@@ -1131,6 +1138,13 @@ private fun LibraryScreen(
         else -> {
             val fictionForChapter: (ChapterSummary) -> FictionSummary? = { chapter ->
                 chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
+            }
+            // Ordered only. Browse's tag, source and scope filters deliberately do not come with
+            // it: this rail is the shelf, and a home screen that can hide most of itself behind a
+            // filter set last week — with the control two taps away in a sheet — is how a library
+            // comes to look like it lost books. Narrowing stays where it can be seen.
+            val sortedFictions = remember(library.fictions, settings.sort) {
+                library.fictions.sortedForBrowsing(settings.sort)
             }
 
             RefreshablePane(
@@ -1197,17 +1211,21 @@ private fun LibraryScreen(
 
                     item {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            // The order, not "Browse all", is the action here. Browse is already a
+                            // root in the navigation bar, so spending this slot on a second way to
+                            // reach it buys nothing; ordering the shelf could not be done from this
+                            // screen at all, which is the complaint (#243).
                             SectionHeader(
                                 kicker = "02",
                                 title = "Fictions",
-                                actionLabel = if (library.fictions.isEmpty()) null else "Browse all",
-                                onAction = onBrowseFictions.takeIf { library.fictions.isNotEmpty() },
+                                actionLabel = settings.sort.label.takeIf { library.fictions.isNotEmpty() },
+                                onAction = { sortSheetOpen = true }.takeIf { library.fictions.isNotEmpty() },
                             )
                             if (library.fictions.isEmpty()) {
                                 EmptyCard("No fictions found")
                             } else {
                                 HorizontalFictionRail(
-                                    fictions = library.fictions,
+                                    fictions = sortedFictions,
                                     onOpenFiction = onOpenFiction,
                                 )
                             }
@@ -1231,6 +1249,16 @@ private fun LibraryScreen(
                         }
                     }
                 }
+            }
+            if (sortSheetOpen) {
+                FictionSortSheet(
+                    selected = settings.sort,
+                    onSelect = { option ->
+                        scope.launch { browsePrefs.setSort(option) }
+                        sortSheetOpen = false
+                    },
+                    onDismiss = { sortSheetOpen = false },
+                )
             }
         }
     }
