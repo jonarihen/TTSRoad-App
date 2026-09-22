@@ -73,6 +73,22 @@ class FictionSortTest {
     }
 
     @Test
+    fun `a whole shelf from a server too old to send the field keeps the server's order`() {
+        // The degradation this order has on a deployment predating TTSRoad#189: every value is
+        // null, so the grid falls back to the order the payload arrived in rather than to some
+        // arbitrary one. Documented in build.md under the library payload.
+        val rows = listOf(
+            fiction(id = 7, updatedAt = "2026-08-26T00:00:00Z"),
+            fiction(id = 3, updatedAt = "2026-07-01T00:00:00Z"),
+            fiction(id = 9, updatedAt = "2026-08-01T00:00:00Z"),
+        )
+
+        val sorted = rows.sortedForBrowsing(FictionSort.NewChapters)
+
+        assertEquals(listOf(7, 3, 9), sorted.map { it.id })
+    }
+
+    @Test
     fun `the fixed-width ISO format orders correctly across a year and a month boundary`() {
         // The whole reason these compare as strings. A format that padded differently — or dropped
         // the leading zero on a month — would sort "2026-9-01" above "2026-10-01" and this test is
