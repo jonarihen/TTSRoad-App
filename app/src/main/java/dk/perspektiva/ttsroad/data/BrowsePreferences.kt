@@ -56,11 +56,12 @@ fun fictionSortFromStored(stored: String?): FictionSort =
         ?: RenamedSorts[stored]
         ?: FictionSort.Default
 
-/** The three browse settings, read and written together because they are set from one screen. */
+/** The browse settings, read and written together because they are set from one screen. */
 data class BrowseSettings(
     val sort: FictionSort = FictionSort.Default,
     val tags: Set<String> = emptySet(),
     val scope: BrowseScope = BrowseScope.Default,
+    val sources: Set<String> = emptySet(),
 )
 
 class BrowsePreferences(private val context: Context) {
@@ -68,6 +69,7 @@ class BrowsePreferences(private val context: Context) {
         val Sort = stringPreferencesKey("browse_sort")
         val Tags = stringSetPreferencesKey("browse_tags")
         val Scope = stringPreferencesKey("browse_scope")
+        val Sources = stringSetPreferencesKey("browse_sources")
     }
 
     val settings: Flow<BrowseSettings> = context.browseDataStore.data
@@ -82,6 +84,11 @@ class BrowsePreferences(private val context: Context) {
                 // no guarantee of having been normalised.
                 tags = stored[Keys.Tags].orEmpty().mapTo(mutableSetOf()) { it.lowercase() },
                 scope = browseScopeFromStored(stored[Keys.Scope]),
+                // Stored with their casing intact, unlike tags: these are display names from the
+                // server ("Royal Road", "EPUB") rather than free-text labels, and `hasAnySource`
+                // compares case-insensitively, so there is nothing to gain by flattening them and
+                // a readable filter chip to lose.
+                sources = stored[Keys.Sources].orEmpty().toSet(),
             )
         }
 
@@ -106,5 +113,19 @@ class BrowsePreferences(private val context: Context) {
 
     suspend fun setScope(scope: BrowseScope) {
         context.browseDataStore.edit { it[Keys.Scope] = scope.name }
+    }
+
+    suspend fun setSources(sources: Set<String>) {
+        context.browseDataStore.edit { preferences ->
+            val normalised = sources.mapTo(mutableSetOf()) { it.trim() }.filterTo(mutableSetOf()) {
+                it.isNotEmpty()
+            }
+            // Removed rather than written empty, for the same reason as the tags above.
+            if (normalised.isEmpty()) {
+                preferences.remove(Keys.Sources)
+            } else {
+                preferences[Keys.Sources] = normalised
+            }
+        }
     }
 }

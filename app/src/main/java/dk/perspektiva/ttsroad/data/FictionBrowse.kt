@@ -65,6 +65,59 @@ fun List<FictionSummary>.availableTags(): List<String> =
         .sorted()
 
 /**
+ * What the shelf calls the place its books came from: the choices a source filter can offer.
+ *
+ * A fiction the server said nothing about is counted as [UnknownSourceLabel] rather than dropped.
+ * Silently omitting those would make the filter lie by subtraction — tick every box and the grid
+ * would still be missing rows, with no box on screen accounting for them.
+ *
+ * Alphabetical, with the unknown group last wherever it appears: it is not a source, it is the
+ * absence of one, and sorting it under "U" would put it in the middle of real names.
+ */
+fun List<FictionSummary>.availableSources(): List<String> {
+    val named = mapNotNull { it.sourceFilterLabel?.trim()?.takeIf(String::isNotEmpty) }
+        .distinct()
+        .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    val hasUnknown = any { it.sourceFilterLabel.isNullOrBlank() }
+    return if (hasUnknown) named + UnknownSourceLabel else named
+}
+
+/**
+ * The bucket for a fiction whose source the server never reported.
+ *
+ * A visible name rather than a null: see [availableSources] for why the group has to exist at all.
+ */
+const val UnknownSourceLabel: String = "Unknown"
+
+/**
+ * Whether [this] came from any of [sources].
+ *
+ * **OR, unlike the tag filter's AND** — and the difference is not an inconsistency. A book carries
+ * many tags at once, so "both of these" is a meaningful narrowing; it has exactly one source, so
+ * ANDing two sources would always match nothing. Ticking two boxes here means "either", which is
+ * the only reading that leaves the control usable. The web console's source filter behaves the
+ * same way for the same reason.
+ */
+fun FictionSummary.hasAnySource(sources: Set<String>): Boolean {
+    if (sources.isEmpty()) return true
+    val own = sourceFilterLabel?.trim()?.takeIf(String::isNotEmpty) ?: UnknownSourceLabel
+    return sources.any { it.equals(own, ignoreCase = true) }
+}
+
+/**
+ * Drop source selections that nothing on the shelf carries any more.
+ *
+ * The counterpart to [retainingKnownTags], and needed for a sharper reason: a stored source
+ * survives signing into a *different server*, where "Patreon" may name nothing at all. Without
+ * this the grid would open empty against a perfectly good shelf.
+ */
+fun Set<String>.retainingKnownSources(available: Collection<String>): Set<String> {
+    if (isEmpty()) return this
+    val known = available.toSet()
+    return filterTo(mutableSetOf()) { stored -> known.any { it.equals(stored, ignoreCase = true) } }
+}
+
+/**
  * Whether [this] carries every one of [tags].
  *
  * AND, not OR, matching the web console. Two tags selected means "books that are both", which is
@@ -107,10 +160,14 @@ fun FictionSummary.inScope(scope: BrowseScope): Boolean = when (scope) {
 fun List<FictionSummary>.browseView(
     scope: BrowseScope = BrowseScope.All,
     tags: Set<String> = emptySet(),
+    sources: Set<String> = emptySet(),
     query: String = "",
     sort: FictionSort = FictionSort.Default,
 ): List<FictionSummary> = filter { fiction ->
-    fiction.inScope(scope) && fiction.hasAllTags(tags) && fiction.matchesBrowseQuery(query)
+    fiction.inScope(scope) &&
+        fiction.hasAllTags(tags) &&
+        fiction.hasAnySource(sources) &&
+        fiction.matchesBrowseQuery(query)
 }.sortedForBrowsing(sort)
 
 /**
@@ -151,6 +208,7 @@ fun browseEmptyMessage(
     query: String,
     tags: Set<String>,
     scope: BrowseScope,
+    sources: Set<String> = emptySet(),
 ): String {
     val trimmed = query.trim()
     // Most specific cause first: with both a search and a tag on, the search is the one just
@@ -159,6 +217,11 @@ fun browseEmptyMessage(
         trimmed.isNotEmpty() -> "No matches for \"$trimmed\""
         tags.size == 1 -> "Nothing tagged ${tags.first()}"
         tags.size > 1 -> "Nothing carries all ${tags.size} tags"
+        // Below tags, because a tag filter is the likelier of the two to have just been touched,
+        // and above scope for the same reason the others are: a filter the user set beats a
+        // standing condition of the shelf.
+        sources.size == 1 -> "Nothing from ${sources.first()}"
+        sources.size > 1 -> "Nothing from the ${sources.size} selected sources"
         scope == BrowseScope.Following -> "You are not following anything yet"
         else -> "No fictions found"
     }

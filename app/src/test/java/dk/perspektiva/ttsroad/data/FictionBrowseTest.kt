@@ -20,12 +20,16 @@ class FictionBrowseTest {
         author: String? = null,
         tags: List<String> = emptyList(),
         following: Boolean = true,
+        sourceType: String? = null,
+        sourceLabel: String? = null,
     ) = FictionSummary(
         id = id,
         title = title,
         author = author,
         tags = tags,
         following = following,
+        sourceType = sourceType,
+        sourceLabel = sourceLabel,
     )
 
     // ── tags ──────────────────────────────────────────────────────────────────
@@ -82,6 +86,115 @@ class FictionBrowseTest {
 
         assertEquals(setOf("litrpg"), setOf("litrpg", "xianxia").retainingKnownTags(available))
         assertEquals(emptySet<String>(), setOf("xianxia").retainingKnownTags(available))
+    }
+
+    // ── sources ───────────────────────────────────────────────────────────────
+
+    @Test
+    fun `the ordinary source is named here even though the badge leaves it blank`() {
+        // sourceTypeLabel returns null for Royal Road on purpose: a badge on every row saying so
+        // distinguishes nothing. A filter is the opposite case — the source most of the shelf comes
+        // from is the one worth excluding, and an unnamed blank box cannot be ticked meaningfully.
+        val royalRoad = fiction(id = 1, sourceType = SourceType.RoyalRoad)
+
+        assertEquals(null, royalRoad.sourceTypeLabel)
+        assertEquals("Royal Road", royalRoad.sourceFilterLabel)
+    }
+
+    @Test
+    fun `the source list is alphabetical with the unknown group last`() {
+        val rows = listOf(
+            fiction(id = 1, sourceType = SourceType.RoyalRoad),
+            fiction(id = 2, sourceType = SourceType.Epub),
+            fiction(id = 3, sourceType = null),
+            fiction(id = 4, sourceType = SourceType.RoyalRoad),
+        )
+
+        // "Unknown" is not a source, it is the absence of one, so it sits at the end rather than
+        // sorting under U between real names.
+        assertEquals(listOf("EPUB", "Royal Road", UnknownSourceLabel), rows.availableSources())
+    }
+
+    @Test
+    fun `a shelf that all came from one place offers no unknown group`() {
+        val rows = listOf(
+            fiction(id = 1, sourceType = SourceType.RoyalRoad),
+            fiction(id = 2, sourceType = SourceType.RoyalRoad),
+        )
+
+        assertEquals(listOf("Royal Road"), rows.availableSources())
+    }
+
+    @Test
+    fun `two sources mean either, unlike two tags which mean both`() {
+        // The asymmetry that matters: a book carries many tags but exactly one source, so ANDing
+        // two sources would always answer with nothing and make the second tick unusable.
+        val rows = listOf(
+            fiction(id = 1, sourceType = SourceType.RoyalRoad),
+            fiction(id = 2, sourceType = SourceType.Epub),
+            fiction(id = 3, sourceType = SourceType.Patreon),
+        )
+
+        val both = rows.browseView(sources = setOf("Royal Road", "EPUB"))
+
+        assertEquals(listOf(1, 2), both.map { it.id })
+    }
+
+    @Test
+    fun `a fiction the server said nothing about is filterable rather than invisible`() {
+        // Dropping it from the choices would make the filter lie by subtraction: tick every box and
+        // the grid would still be missing rows, with nothing on screen accounting for them.
+        val rows = listOf(
+            fiction(id = 1, sourceType = null),
+            fiction(id = 2, sourceType = SourceType.Epub),
+        )
+
+        assertEquals(listOf(1), rows.browseView(sources = setOf(UnknownSourceLabel)).map { it.id })
+    }
+
+    @Test
+    fun `an unknown adapter key groups under itself rather than splitting in two`() {
+        // A newer server's source this build has never heard of. Two books from it must land under
+        // one entry, so the raw key is used when there is no label to prefer.
+        val rows = listOf(
+            fiction(id = 1, sourceType = "scribblehub"),
+            fiction(id = 2, sourceType = "scribblehub"),
+        )
+
+        assertEquals(listOf("scribblehub"), rows.availableSources())
+        assertEquals(listOf(1, 2), rows.browseView(sources = setOf("scribblehub")).map { it.id })
+    }
+
+    @Test
+    fun `the server's label wins over the raw key when it sends one`() {
+        val row = fiction(id = 1, sourceType = "ao3", sourceLabel = "Archive of Our Own")
+
+        assertEquals("Archive of Our Own", row.sourceFilterLabel)
+    }
+
+    @Test
+    fun `an empty source selection is not a filter`() {
+        val rows = listOf(fiction(id = 1, sourceType = SourceType.Epub), fiction(id = 2))
+
+        assertEquals(listOf(1, 2), rows.browseView(sources = emptySet()).map { it.id })
+    }
+
+    @Test
+    fun `a stored source from a different server is dropped rather than emptying the grid`() {
+        // Sharper than the tag case: a source selection survives signing into another server, where
+        // "Patreon" may name nothing at all.
+        val available = listOf("Royal Road", "EPUB")
+
+        assertEquals(setOf("EPUB"), setOf("EPUB", "Patreon").retainingKnownSources(available))
+        assertEquals(emptySet<String>(), setOf("Patreon").retainingKnownSources(available))
+    }
+
+    @Test
+    fun `a stored source matches its choice regardless of casing`() {
+        // The set is stored with its display casing intact, so nothing guarantees a value written by
+        // one build matches the exact casing a later server sends.
+        assertEquals(setOf("royal road"), setOf("royal road").retainingKnownSources(listOf("Royal Road")))
+        assertTrue(fiction(id = 1, sourceType = SourceType.Epub).hasAnySource(setOf("epub")))
     }
 
     // ── scope ─────────────────────────────────────────────────────────────────
@@ -214,6 +327,32 @@ class FictionBrowseTest {
         assertEquals(
             "No matches for \"zzz\"",
             browseEmptyMessage("zzz", setOf("litrpg"), BrowseScope.Following),
+        )
+    }
+
+    @Test
+    fun `an empty grid names a source filter as readily as a tag one`() {
+        assertEquals(
+            "Nothing from EPUB",
+            browseEmptyMessage("", emptySet(), BrowseScope.All, setOf("EPUB")),
+        )
+        assertEquals(
+            "Nothing from the 2 selected sources",
+            browseEmptyMessage("", emptySet(), BrowseScope.All, setOf("EPUB", "Patreon")),
+        )
+    }
+
+    @Test
+    fun `a tag is named ahead of a source, and a filter ahead of the scope`() {
+        // Order of blame: the tag sheet is the likelier of the two to have just been touched, and
+        // either beats "you follow nothing", which is a standing condition rather than an action.
+        assertEquals(
+            "Nothing tagged litrpg",
+            browseEmptyMessage("", setOf("litrpg"), BrowseScope.All, setOf("EPUB")),
+        )
+        assertEquals(
+            "Nothing from EPUB",
+            browseEmptyMessage("", emptySet(), BrowseScope.Following, setOf("EPUB")),
         )
     }
 
