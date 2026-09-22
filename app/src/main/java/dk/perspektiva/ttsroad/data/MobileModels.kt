@@ -324,6 +324,41 @@ data class FictionSummary(
         }
 
     /**
+     * The stable identity of where this fiction came from, for storing a filter selection by.
+     *
+     * [sourceType] rather than any label: the backend picks it from the adapter and does not
+     * reword it, while a label is presentation and can change under a saved preference at any
+     * upgrade. A fiction the server said nothing about takes [UnknownSourceKey] so that the bucket
+     * has a key like every other choice.
+     */
+    val sourceFilterKey: String
+        get() = sourceType?.trim()?.takeIf(String::isNotEmpty) ?: UnknownSourceKey
+
+    /**
+     * What a *source filter* calls this fiction: the same name as the badge, except that the
+     * ordinary case is named rather than left blank.
+     *
+     * [sourceTypeLabel] returns null for Royal Road because a badge on every row saying so would
+     * distinguish nothing. A filter is the opposite situation — it exists precisely to tell sources
+     * apart, and the one source most of the shelf comes from is the one a reader most wants to
+     * exclude. A control offering "EPUB" and an unnamed blank would be unusable.
+     *
+     * Falls back to [sourceLabel] and then to the raw [sourceType] for a site this build has never
+     * heard of, so a newer server's adapter key groups correctly here even without a label — two
+     * books from the same unknown source must land under one entry rather than two.
+     *
+     * Null only when the server said nothing at all about where the book came from; those are
+     * grouped under [UnknownSourceLabel] by [availableSources] rather than silently dropped.
+     */
+    val sourceFilterLabel: String?
+        get() {
+            if (sourceType == SourceType.RoyalRoad) return "Royal Road"
+            sourceTypeLabel?.let { return it }
+            sourceLabel?.takeIf { it.isNotBlank() }?.let { return it }
+            return sourceType?.takeIf { it.isNotBlank() }
+        }
+
+    /**
      * "polled 20m ago", or null when the server never said.
      *
      * [now] is a parameter so this is testable without freezing the clock. Coarse on purpose: the

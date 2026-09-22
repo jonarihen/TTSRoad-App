@@ -233,6 +233,7 @@ class CapabilityDiscoveryTest {
         val repository = TtsRoadRepository(FakeDiscoverySessionStore())
 
         assertEquals(ServerCapabilities.Baseline, repository.currentCapabilities.value)
+        assertFalse(repository.currentCapabilitiesResolved.value)
     }
 
     @Test
@@ -247,6 +248,35 @@ class CapabilityDiscoveryTest {
 
         assertTrue(repository.currentCapabilities.value.readAlong)
         assertTrue(repository.currentCapabilities.value.deviceManagement)
+        assertTrue(repository.currentCapabilitiesResolved.value)
+    }
+
+    @Test
+    fun `a definitive old-server 404 resolves the baseline`() = runTest {
+        val store = FakeDiscoverySessionStore(
+            SessionState(serverUrl = baseUrl(), token = "t", username = "admin"),
+        )
+        val repository = TtsRoadRepository(store)
+        server.enqueue(MockResponse().setResponseCode(404))
+
+        repository.refreshCurrentCapabilities()
+
+        assertEquals(ServerCapabilities.Baseline, repository.currentCapabilities.value)
+        assertTrue(repository.currentCapabilitiesResolved.value)
+    }
+
+    @Test
+    fun `a transient discovery failure leaves the baseline provisional`() = runTest {
+        val store = FakeDiscoverySessionStore(
+            SessionState(serverUrl = baseUrl(), token = "t", username = "admin"),
+        )
+        val repository = TtsRoadRepository(store)
+        server.enqueue(MockResponse().setResponseCode(500))
+
+        repository.refreshCurrentCapabilities()
+
+        assertEquals(ServerCapabilities.Baseline, repository.currentCapabilities.value)
+        assertFalse(repository.currentCapabilitiesResolved.value)
     }
 
     @Test
@@ -256,6 +286,7 @@ class CapabilityDiscoveryTest {
         repository.refreshCurrentCapabilities()
 
         assertEquals(ServerCapabilities.Baseline, repository.currentCapabilities.value)
+        assertFalse(repository.currentCapabilitiesResolved.value)
         assertEquals(0, server.requestCount)
     }
 
@@ -277,6 +308,7 @@ class CapabilityDiscoveryTest {
             ServerCapabilities.Baseline,
             repository.currentCapabilities.value,
         )
+        assertFalse(repository.currentCapabilitiesResolved.value)
     }
 
     @Test

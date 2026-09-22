@@ -9,6 +9,11 @@ Notable changes to the TTSRoad Android client.
 - The home screen's Fictions rail can now be ordered. The section header shows the current order and
   opens the same sort sheet browse uses, and the choice is shared between the two screens rather than
   set twice. (TTSRoad-App#243)
+- Browse can now be filtered by source, matching the web library's own source filter. The row
+  appears only when the shelf actually holds more than one source, so an all-Royal-Road library is
+  unchanged. Ticking two sources shows either, since a book comes from exactly one place. Books the
+  server reported no source for are grouped under **Unknown** rather than being quietly
+  unfilterable. (TTSRoad-App#244)
 
 ### Fixed
 

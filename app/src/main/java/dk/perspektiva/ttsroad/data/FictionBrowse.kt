@@ -65,6 +65,90 @@ fun List<FictionSummary>.availableTags(): List<String> =
         .sorted()
 
 /**
+ * One source the shelf actually holds: the stable key it is filtered and stored by, and the name
+ * to put on the checkbox.
+ *
+ * The two are separate on purpose. [key] comes from `source_type`, which the backend picks from the
+ * adapter and does not reword; [label] is presentation, and the server can start sending a nicer
+ * one for the same source at any upgrade. Storing the label would mean an upgrade that renames
+ * `ao3` to "Archive of Our Own" silently drops a saved filter, because the stored text would no
+ * longer match anything on offer.
+ */
+data class SourceOption(val key: String, val label: String)
+
+/**
+ * The sources the shelf holds, as filter choices.
+ *
+ * A fiction the server said nothing about is counted under [UnknownSourceKey] rather than dropped.
+ * Silently omitting those would make the filter lie by subtraction — tick every box and the grid
+ * would still be missing rows, with no box on screen accounting for them.
+ *
+ * Where a key appears with a label on one row and without on another — a server labelling only
+ * what it has an adapter name for — the label wins, so the group is named rather than showing a
+ * raw key next to a friendly one.
+ *
+ * Alphabetical by label, with the unknown group last wherever it falls: it is not a source, it is
+ * the absence of one, and sorting it under "U" would bury it among real names.
+ */
+fun List<FictionSummary>.availableSources(): List<SourceOption> {
+    val labels = LinkedHashMap<String, String>()
+    forEach { fiction ->
+        val key = fiction.sourceFilterKey
+        val label = fiction.sourceFilterLabel?.trim()?.takeIf(String::isNotEmpty)
+            ?: if (key == UnknownSourceKey) UnknownSourceLabel else key
+        val existing = labels[key]
+        // A label equal to the key is `sourceFilterLabel` having fallen back to the raw adapter
+        // name because this row carried none. It is a placeholder, so any real name beats it —
+        // otherwise whichever row happened to come first would decide, and a shelf where only some
+        // rows are labelled would show "ao3" purely because of payload order.
+        if (existing == null || (existing == key && label != key)) labels[key] = label
+    }
+    val options = labels.map { (key, label) -> SourceOption(key = key, label = label) }
+    return options.filter { it.key != UnknownSourceKey }
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label }) +
+        options.filter { it.key == UnknownSourceKey }
+}
+
+/**
+ * The stored key for a fiction whose source the server never reported.
+ *
+ * Deliberately not a plausible `source_type`: a server that one day ships an adapter literally
+ * called "unknown" must not collide with the bucket for books it said nothing about.
+ */
+const val UnknownSourceKey: String = "__unknown__"
+
+/** What the unknown bucket is called on screen. See [availableSources] for why it exists. */
+const val UnknownSourceLabel: String = "Unknown"
+
+/**
+ * Whether [this] came from any of [sourceKeys].
+ *
+ * **OR, unlike the tag filter's AND** — and the difference is not an inconsistency. A book carries
+ * many tags at once, so "both of these" is a meaningful narrowing; it has exactly one source, so
+ * ANDing two sources would always match nothing. Ticking two boxes here means "either", which is
+ * the only reading that leaves the control usable. The web console's source filter behaves the
+ * same way for the same reason.
+ */
+fun FictionSummary.hasAnySource(sourceKeys: Set<String>): Boolean {
+    if (sourceKeys.isEmpty()) return true
+    return sourceFilterKey in sourceKeys
+}
+
+/**
+ * Drop source selections that nothing on the shelf carries any more.
+ *
+ * The counterpart to [retainingKnownTags]. **The caller has to persist what this returns**, not
+ * merely filter the grid with it: a masked-but-stored selection is dormant rather than gone, and
+ * the day the shelf gains its first EPUB a filter nobody remembers setting would switch itself on
+ * and hide everything else. See the write-back in the browse screen.
+ */
+fun Set<String>.retainingKnownSources(available: Collection<String>): Set<String> {
+    if (isEmpty()) return this
+    val known = available.toSet()
+    return filterTo(mutableSetOf()) { it in known }
+}
+
+/**
  * Whether [this] carries every one of [tags].
  *
  * AND, not OR, matching the web console. Two tags selected means "books that are both", which is
@@ -107,10 +191,14 @@ fun FictionSummary.inScope(scope: BrowseScope): Boolean = when (scope) {
 fun List<FictionSummary>.browseView(
     scope: BrowseScope = BrowseScope.All,
     tags: Set<String> = emptySet(),
+    sourceKeys: Set<String> = emptySet(),
     query: String = "",
     sort: FictionSort = FictionSort.Default,
 ): List<FictionSummary> = filter { fiction ->
-    fiction.inScope(scope) && fiction.hasAllTags(tags) && fiction.matchesBrowseQuery(query)
+    fiction.inScope(scope) &&
+        fiction.hasAllTags(tags) &&
+        fiction.hasAnySource(sourceKeys) &&
+        fiction.matchesBrowseQuery(query)
 }.sortedForBrowsing(sort)
 
 /**
@@ -151,6 +239,7 @@ fun browseEmptyMessage(
     query: String,
     tags: Set<String>,
     scope: BrowseScope,
+    sources: Set<String> = emptySet(),
 ): String {
     val trimmed = query.trim()
     // Most specific cause first: with both a search and a tag on, the search is the one just
@@ -159,6 +248,11 @@ fun browseEmptyMessage(
         trimmed.isNotEmpty() -> "No matches for \"$trimmed\""
         tags.size == 1 -> "Nothing tagged ${tags.first()}"
         tags.size > 1 -> "Nothing carries all ${tags.size} tags"
+        // Below tags, because a tag filter is the likelier of the two to have just been touched,
+        // and above scope for the same reason the others are: a filter the user set beats a
+        // standing condition of the shelf.
+        sources.size == 1 -> "Nothing from ${sources.first()}"
+        sources.size > 1 -> "Nothing from the ${sources.size} selected sources"
         scope == BrowseScope.Following -> "You are not following anything yet"
         else -> "No fictions found"
     }

@@ -132,6 +132,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -196,10 +197,13 @@ import dk.perspektiva.ttsroad.data.parseSyncLimit
 import dk.perspektiva.ttsroad.data.SyncDirection
 import dk.perspektiva.ttsroad.data.InitialSync
 import dk.perspektiva.ttsroad.data.AddFictionOptions
+import dk.perspektiva.ttsroad.data.retainingKnownSources
 import dk.perspektiva.ttsroad.data.retainingKnownTags
 import dk.perspektiva.ttsroad.data.browseView
 import dk.perspektiva.ttsroad.data.browseEmptyMessage
 import dk.perspektiva.ttsroad.data.browseScopeCount
+import dk.perspektiva.ttsroad.data.SourceOption
+import dk.perspektiva.ttsroad.data.availableSources
 import dk.perspektiva.ttsroad.data.availableTags
 import dk.perspektiva.ttsroad.data.BrowseSettings
 import dk.perspektiva.ttsroad.data.BrowseScope
@@ -6435,6 +6439,7 @@ private fun FictionsScreen(
     val scope = rememberCoroutineScope()
     val cache = remember { ServiceLocator.libraryCache(context) }
     val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    val capabilitiesResolved by repository.currentCapabilitiesResolved.collectAsStateWithLifecycle()
     // Browse means *everything on the server* once the server has per-user libraries — that is what
     // makes this the screen a fiction gets followed from. Without them there is only one list, and
     // browsing the shelf is browsing the server.
@@ -6459,6 +6464,7 @@ private fun FictionsScreen(
     val settings = loadedSettings ?: BrowseSettings()
     var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
     var tagSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var sourceSheetOpen by rememberSaveable { mutableStateOf(false) }
     // Hoisted so the browse position survives the round trip into a fiction, alongside the
     // SaveableStateProvider keyed per back-stack entry. `appliedBrowseSort` makes a real shared
     // preference change reset it without treating that round trip as one.
@@ -6496,10 +6502,38 @@ private fun FictionsScreen(
             // list *is* the shelf, both tabs would hold it, and the tabs are not drawn — so pinning
             // the scope to ALL here keeps a value stored on a previous server from hiding rows.
             val browseScope = if (browseAll) settings.scope else BrowseScope.All
-            val filtered = remember(fictions, query, activeTags, browseScope, settings.sort) {
+            val sourceChoices = remember(fictions) { fictions.availableSources() }
+            val sourceKeys = remember(sourceChoices) { sourceChoices.map { it.key } }
+            // Same guard as the tags, and needed more sharply: a stored source survives signing
+            // into a different server, where "Patreon" may name nothing at all.
+            val activeSources = remember(settings.sources, sourceKeys) {
+                settings.sources.retainingKnownSources(sourceKeys)
+            }
+            // Masking the stale value is not enough — it has to be forgotten. Left in the store it
+            // is dormant rather than gone, and the day this shelf gains its first EPUB a filter
+            // nobody remembers setting switches itself back on and hides every other book.
+            //
+            // Forget a source only after capability discovery has a real answer. Before then,
+            // Baseline is a placeholder and this list may be the followed shelf of a server whose
+            // all-catalogue support simply has not arrived yet. Once resolved, either browse-all is
+            // selected or Baseline definitively means an old shared-library server; both lists are
+            // complete enough to prune, including a successfully loaded empty one.
+            LaunchedEffect(settings.sources, sourceKeys, capabilitiesResolved) {
+                if (capabilitiesResolved && activeSources != settings.sources) {
+                    browsePrefs.setSources(activeSources)
+                }
+            }
+            // Keys are what gets stored and compared; labels are only ever for reading. Resolved
+            // from the shelf so a source the server has started naming differently shows its
+            // current name rather than whatever it was called when the box was ticked.
+            val activeSourceLabels = remember(activeSources, sourceChoices) {
+                sourceChoices.filter { it.key in activeSources }.mapTo(mutableSetOf()) { it.label }
+            }
+            val filtered = remember(fictions, query, activeTags, activeSources, browseScope, settings.sort) {
                 fictions.browseView(
                     scope = browseScope,
                     tags = activeTags,
+                    sourceKeys = activeSources,
                     query = query,
                     sort = settings.sort,
                 )
@@ -6655,9 +6689,21 @@ private fun FictionsScreen(
                             )
                         }
                     }
+                    // Only worth drawing when there is a choice to make. A shelf entirely from one
+                    // site would get a control that cannot narrow anything, which is how the web
+                    // console treats it too (`all_sources | length > 1`).
+                    if (sourceChoices.size > 1) {
+                        fullWidthItem(key = "sources") {
+                            SourceFilterBar(
+                                active = activeSourceLabels,
+                                onOpen = { sourceSheetOpen = true },
+                                onClear = { scope.launch { browsePrefs.setSources(emptySet()) } },
+                            )
+                        }
+                    }
                     if (filtered.isEmpty()) {
                         fullWidthItem(key = "empty") {
-                            EmptyCard(browseEmptyMessage(query, activeTags, browseScope))
+                            EmptyCard(browseEmptyMessage(query, activeTags, browseScope, activeSourceLabels))
                         }
                     } else {
                         items(filtered, key = { it.id }) { fiction ->
@@ -6701,6 +6747,15 @@ private fun FictionsScreen(
                     onDismiss = { tagSheetOpen = false },
                 )
             }
+            if (sourceSheetOpen) {
+                SourceFilterSheet(
+                    sources = sourceChoices,
+                    selected = activeSources,
+                    onToggle = { option -> scope.launch { browsePrefs.toggleSource(option.key) } },
+                    onClear = { scope.launch { browsePrefs.setSources(emptySet()) } },
+                    onDismiss = { sourceSheetOpen = false },
+                )
+            }
         }
     }
 }
@@ -6708,15 +6763,15 @@ private fun FictionsScreen(
 /**
  * Pick the browse order (#164).
  *
- * A sheet rather than a row of chips, because the labels are sentences — "Recently updated" does
+ * A sheet rather than a row of chips, because the labels are sentences — "New chapters first" does
  * not shorten to something a chip can hold without becoming a riddle — and because the choice is
  * made rarely and then lived with. The current order is already on the header that opens this, so
  * arriving here is a deliberate act rather than a thing to be scanned past.
  *
- * The consequence line under each option is the part worth keeping. "Recently updated" is the
- * order most people want and the one most likely to be misread: it follows the fiction row, which
- * the poller touches whether or not it found anything, so it means *recently active* rather than
- * *has new chapters*. Saying that once, here, is cheaper than a support question later.
+ * The consequence line under each option is the part worth keeping. "New chapters first" is the
+ * order most people want, and the thing it has to say is what it does with a book that has no
+ * chapters yet — those sort last, because the payload cannot tell them apart from a book on a
+ * server too old to report the date. Saying that once, here, is cheaper than a support question.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -6943,6 +6998,138 @@ internal fun TagFilterSheet(
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = tag.uppercase(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isChecked) AarisColor.Accent else AarisColor.Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+/**
+ * The row that opens the source filter and says whether one is on.
+ *
+ * Deliberately a near-twin of [TagFilterBar] rather than a merged "filters" control: the two answer
+ * different questions — what a book is *about* against where it came *from* — and a reader narrowing
+ * by one is rarely narrowing by the other. Sharing the shape means the second one needs no learning.
+ *
+ * It is drawn only when the shelf has more than one source, so on the ordinary all-Royal-Road
+ * library this row does not exist at all.
+ */
+@Composable
+internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        TextButton(
+            onClick = onOpen,
+            modifier = Modifier
+                .heightIn(min = MinTouchTargetSize)
+                .testTag("source-filter-open"),
+            shape = RectangleShape,
+        ) {
+            Text(
+                text = if (active.isEmpty()) "SOURCE" else "SOURCE ${active.size}",
+                color = if (active.isEmpty()) AarisColor.Muted else AarisColor.Accent,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        if (active.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                active.sorted().forEach { source ->
+                    AarisTag(text = source, color = AarisColor.Accent)
+                }
+            }
+            TextButton(
+                onClick = onClear,
+                modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                shape = RectangleShape,
+            ) {
+                Text(text = "CLEAR", color = AarisColor.Muted, maxLines = 1, softWrap = false)
+            }
+        } else {
+            Spacer(modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * Pick the sources the grid is narrowed to (multi-select, ORed).
+ *
+ * The one place this deliberately differs from [TagFilterSheet] is the sentence under the title. A
+ * book carries many tags but exactly one source, so ticking two tags means "both" and ticking two
+ * sources has to mean "either" — ANDing them would always answer with nothing. The subtitle says so
+ * rather than leaving the user to discover it by emptying their grid.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun SourceFilterSheet(
+    sources: List<SourceOption>,
+    selected: Set<String>,
+    onToggle: (SourceOption) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetaText(
+                text = "// Filter by source",
+                color = AarisColor.Accent,
+                modifier = Modifier.weight(1f),
+            )
+            if (selected.isNotEmpty()) {
+                TextButton(
+                    onClick = onClear,
+                    modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                    shape = RectangleShape,
+                ) {
+                    Text(text = "CLEAR", color = AarisColor.Muted)
+                }
+            }
+        }
+        MetaText(
+            text = "// A book comes from one place, so ticking two shows either",
+            color = AarisColor.Muted,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+        )
+        LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+            items(sources, key = { it.key }) { source ->
+                val isChecked = source.key in selected
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = MinTouchTargetSize)
+                        .toggleable(
+                            value = isChecked,
+                            role = Role.Checkbox,
+                            onValueChange = { onToggle(source) },
+                        )
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = isChecked, onCheckedChange = null)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = source.label.uppercase(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isChecked) AarisColor.Accent else AarisColor.Ink,
                         maxLines = 1,
