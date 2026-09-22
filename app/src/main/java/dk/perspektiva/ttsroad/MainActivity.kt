@@ -1122,6 +1122,8 @@ private fun LibraryScreen(
     val browsePrefs = remember { ServiceLocator.browsePreferences(context) }
     val settings by browsePrefs.settings.collectAsStateWithLifecycle(initialValue = BrowseSettings())
     var sortSheetOpen by rememberSaveable { mutableStateOf(false) }
+    // Hoisted out of the rail so the reorder effect below can reach it.
+    val fictionRailState = rememberLazyListState()
 
     // Loads once; returning to this screen shows what was already there instead of a spinner.
     LaunchedEffect(Unit) { cache.ensureLibrary() }
@@ -1146,6 +1148,11 @@ private fun LibraryScreen(
             val sortedFictions = remember(library.fictions, settings.sort) {
                 library.fictions.sortedForBrowsing(settings.sort)
             }
+            // A new order has to be read from its beginning. The rail keeps its scroll offset
+            // across a reorder, and its item keys carry the old index, so picking "New chapters
+            // first" while scrolled ten tiles in would land in the middle of that order and hide
+            // the very books the choice was made to surface.
+            LaunchedEffect(settings.sort) { fictionRailState.scrollToItem(0) }
 
             RefreshablePane(
                 padding = padding,
@@ -1227,6 +1234,7 @@ private fun LibraryScreen(
                                 HorizontalFictionRail(
                                     fictions = sortedFictions,
                                     onOpenFiction = onOpenFiction,
+                                    state = fictionRailState,
                                 )
                             }
                         }
@@ -6004,8 +6012,10 @@ private fun HorizontalChapterRail(
 private fun HorizontalFictionRail(
     fictions: List<FictionSummary>,
     onOpenFiction: (FictionSummary) -> Unit,
+    state: LazyListState = rememberLazyListState(),
 ) {
     LazyRow(
+        state = state,
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
