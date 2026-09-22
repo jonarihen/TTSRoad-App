@@ -4,6 +4,12 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+### Added
+
+- The home screen's Fictions rail can now be ordered. The section header shows the current order and
+  opens the same sort sheet browse uses, and the choice is shared between the two screens rather than
+  set twice. (TTSRoad-App#243)
+
 ### Fixed
 
 - Browse can now be ordered by **New chapters first**, which sorts on when a book actually gained a
