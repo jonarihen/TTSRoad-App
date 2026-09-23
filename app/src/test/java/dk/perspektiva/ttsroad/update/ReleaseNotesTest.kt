@@ -87,6 +87,31 @@ class ReleaseNotesTest {
         assertTrue(rendered.spanStyles.isEmpty())
     }
 
+    @Test
+    fun `a literal bracket does not hide valid markup after it`() {
+        val rendered = renderReleaseNotes("[draft] **Fixed** the player")
+
+        assertEquals("[draft] Fixed the player", rendered.text)
+        assertEquals("Fixed", rendered.text.substring(
+            rendered.spanStyles.single().start,
+            rendered.spanStyles.single().end,
+        ))
+    }
+
+    @Test
+    fun `a complete backtick run requires an equal closing run`() {
+        val rendered = renderReleaseNotes("Use ``a `literal` tick`` here")
+
+        assertEquals("Use a `literal` tick here", rendered.text)
+    }
+
+    @Test
+    fun `an unclosed backtick run is preserved whole`() {
+        val rendered = renderReleaseNotes("Use ``unfinished")
+
+        assertEquals("Use ``unfinished", rendered.text)
+    }
+
     @Test(timeout = 1_000)
     fun `many unmatched link openers stay linear and readable`() {
         // The old regex retried its whole suffix at every `[`, taking seconds for a release body an
@@ -94,6 +119,16 @@ class ReleaseNotesTest {
         val body = "[".repeat(50_000)
 
         assertEquals(body, renderReleaseNotes(body).text)
+    }
+
+    @Test(timeout = 1_000)
+    fun `thousands of headings stay linear`() {
+        val body = (1..5_000).joinToString("\n") { "## Heading $it" }
+
+        val rendered = renderReleaseNotes(body)
+
+        assertTrue(rendered.text.startsWith("Heading 1"))
+        assertTrue(rendered.text.endsWith("Heading 5000"))
     }
 
     @Test

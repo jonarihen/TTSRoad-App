@@ -527,9 +527,15 @@ internal fun UpdateOverlay(
     onDismiss: () -> Unit,
 ) {
     when (state) {
-        is UpdateState.Available -> AlertDialog(
-            onDismissRequest = onDismiss,
-            containerColor = AarisColor.BgRaise,
+        is UpdateState.Available -> {
+            // The note region takes a share of the actual window, capped for ordinary portrait
+            // phones. A fixed 320 dp cap still clipped the actions in landscape and short split
+            // screen windows once the title and dialog padding were counted.
+            val notesMaxHeight = (LocalConfiguration.current.screenHeightDp.dp * 0.42f)
+                .coerceIn(96.dp, 320.dp)
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                containerColor = AarisColor.BgRaise,
             title = { Text("UPDATE AVAILABLE", style = MaterialTheme.typography.titleLarge) },
             text = {
                 // Bounded and scrollable rather than truncated. Release notes are the only thing
@@ -539,7 +545,7 @@ internal fun UpdateOverlay(
                 Column(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
-                        .heightIn(max = 320.dp)
+                        .heightIn(max = notesMaxHeight)
                         .verticalScroll(rememberScrollState())
                         .testTag("update-notes"),
                 ) {
@@ -566,6 +572,7 @@ internal fun UpdateOverlay(
                 TextButton(onClick = onDismiss) { Text("LATER") }
             },
         )
+        }
 
         is UpdateState.Downloading -> AlertDialog(
             onDismissRequest = {},

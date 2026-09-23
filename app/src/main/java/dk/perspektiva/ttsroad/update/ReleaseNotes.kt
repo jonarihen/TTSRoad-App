@@ -76,7 +76,27 @@ private val BulletPrefix = Regex("""^(\s*)[-*+]\s+""")
  * cannot turn composition into quadratic work.
  */
 private fun AnnotatedString.Builder.appendInline(body: String, boldRanges: List<IntRange>) {
-    fun headingAt(index: Int) = boldRanges.any { index in it }
+    // O(1) lookup per scanner position. Walking every accumulated range for every character made a
+    // valid body containing thousands of short headings quadratic before inline parsing even began.
+    val headingStyle = BooleanArray(body.length)
+    boldRanges.forEach { range ->
+        for (index in range) if (index in headingStyle.indices) headingStyle[index] = true
+    }
+    fun headingAt(index: Int) = headingStyle.getOrElse(index) { false }
+
+    // The next `](` and `)` at or after every position, built once from right to left. An unmatched
+    // `[` can now be emitted as one literal character and parsing resumes immediately — no suffix
+    // rescan, and no 2K window that accidentally swallows valid **markup** after `[draft]`.
+    val nextLabelEnd = IntArray(body.length + 1) { -1 }
+    val nextParen = IntArray(body.length + 1) { -1 }
+    var label = -1
+    var paren = -1
+    for (index in body.lastIndex downTo 0) {
+        if (body[index] == ')') paren = index
+        if (body.startsWith("](", index)) label = index
+        nextLabelEnd[index] = label
+        nextParen[index] = paren
+    }
 
     fun appendStyled(text: String, bold: Boolean) {
         if (bold) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(text) } else append(text)
@@ -105,28 +125,45 @@ private fun AnnotatedString.Builder.appendInline(body: String, boldRanges: List<
             }
 
             if (body[index] == '`') {
-                val close = body.boundedIndexOf("`", index + 1, minOf(until, index + MaxInlineSpan))
-                if (close != null && '\n' !in body.substring(index + 1, close)) {
-                    appendStyled(body.substring(index + 1, close), bold)
-                    index = close + 1
+                var delimiterEnd = index
+                while (delimiterEnd < until && body[delimiterEnd] == '`') delimiterEnd++
+                val delimiter = body.substring(index, delimiterEnd)
+                val close = body.boundedIndexOf(
+                    delimiter,
+                    delimiterEnd,
+                    minOf(until, index + MaxInlineSpan),
+                )
+                if (close != null && '\n' !in body.substring(delimiterEnd, close)) {
+                    appendStyled(body.substring(delimiterEnd, close), bold)
+                    index = close + delimiter.length
                     continue
                 }
+                // Unsupported/unclosed runs stay intact. Advancing past the whole run avoids
+                // pairing the first two backticks of a valid double-backtick delimiter as an empty
+                // single-backtick span and then deleting a literal backtick from its contents.
+                appendStyled(delimiter, bold)
+                index = delimiterEnd
+                continue
             }
 
             if (body[index] == '[') {
-                val limit = minOf(until, index + MaxLinkSpan)
-                val labelEnd = body.boundedIndexOf("](", index + 1, limit)
-                val urlEnd = labelEnd?.let { body.boundedIndexOf(")", it + 2, limit) }
-                if (labelEnd != null && urlEnd != null && '\n' !in body.substring(index, urlEnd)) {
+                val labelEnd = nextLabelEnd.getOrElse(index + 1) { -1 }
+                val urlEnd = if (labelEnd >= 0) nextParen.getOrElse(labelEnd + 2) { -1 } else -1
+                val complete = labelEnd > index &&
+                    urlEnd > labelEnd &&
+                    urlEnd < until &&
+                    urlEnd - index <= MaxLinkSpan &&
+                    '\n' !in body.substring(index, urlEnd)
+                if (complete) {
                     scan(index + 1, labelEnd, forceBold = bold)
                     index = urlEnd + 1
                     continue
                 }
-                // This window was already proved not to contain a complete link. Emit it whole and
-                // skip it; retrying from every `[` inside would turn a bounded 2K probe into 2K×N
-                // overlapping work on a body made entirely of open brackets.
-                appendStyled(body.substring(index, limit), bold)
-                index = limit
+                // Literal opener only; resume at the next character so `[draft] **Fixed**` keeps
+                // the bracketed prose and still parses the valid emphasis after it. The precomputed
+                // delimiter tables make this constant time rather than a fresh suffix scan.
+                appendStyled("[", bold)
+                index++
                 continue
             }
 
