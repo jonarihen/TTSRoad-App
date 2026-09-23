@@ -58,6 +58,45 @@ class ReleaseNotesTest {
     }
 
     @Test
+    fun `nested code inside bold loses both kinds of marker`() {
+        val rendered = renderReleaseNotes("The **shared `OkHttpClient`** stays shared")
+
+        assertEquals("The shared OkHttpClient stays shared", rendered.text)
+        assertTrue(rendered.spanStyles.any { span ->
+            rendered.text.substring(span.start, span.end).contains("OkHttpClient") &&
+                span.item.fontWeight == FontWeight.Bold
+        })
+    }
+
+    @Test
+    fun `nested link inside bold keeps the label and the emphasis`() {
+        val rendered = renderReleaseNotes("Read **[the notes](https://x.test)** first")
+
+        assertEquals("Read the notes first", rendered.text)
+        assertTrue(rendered.spanStyles.any { span ->
+            rendered.text.substring(span.start, span.end) == "the notes" &&
+                span.item.fontWeight == FontWeight.Bold
+        })
+    }
+
+    @Test
+    fun `double underscores inside an identifier are preserved literally`() {
+        val rendered = renderReleaseNotes("Rename field__value__suffix carefully")
+
+        assertEquals("Rename field__value__suffix carefully", rendered.text)
+        assertTrue(rendered.spanStyles.isEmpty())
+    }
+
+    @Test(timeout = 1_000)
+    fun `many unmatched link openers stay linear and readable`() {
+        // The old regex retried its whole suffix at every `[`, taking seconds for a release body an
+        // attacker with compromised GitHub credentials could make the app show on every launch.
+        val body = "[".repeat(50_000)
+
+        assertEquals(body, renderReleaseNotes(body).text)
+    }
+
+    @Test
     fun `a heading keeps its words, loses its hashes, and is emphasised`() {
         val rendered = renderReleaseNotes("## What's new")
 

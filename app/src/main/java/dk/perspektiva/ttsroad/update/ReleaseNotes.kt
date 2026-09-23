@@ -67,63 +67,112 @@ private val HeadingPrefix = Regex("""^\s{0,3}#{1,6}\s+""")
 private val BulletPrefix = Regex("""^(\s*)[-*+]\s+""")
 
 /**
- * `**bold**`, `__bold__`, `` `code` `` and `[label](url)`, matched left to right.
+ * Append inline Markdown with a bounded, left-to-right scanner.
  *
- * The two emphasis forms may contain a single newline, because hard-wrapped prose routinely opens
- * on one line and closes on the next. They may not contain a *blank* line: that is a paragraph
- * break, and an unclosed marker would otherwise reach across the rest of the notes and emphasise
- * everything after it. Code spans and links stay single-line, which is what Markdown itself says.
- */
-private val Inline = Regex(
-    """\*\*((?:(?!\*\*)(?!\n\n)[\s\S])+?)\*\*""" +
-        """|__((?:(?!__)(?!\n\n)[\s\S])+?)__""" +
-        """|`([^`\n]+)`""" +
-        """|\[([^\]\n]+)]\(([^)\n]*)\)""",
-)
-
-/**
- * Append one line, converting the inline markers it carries.
- *
- * Single `*` is deliberately not treated as emphasis. It is the one marker that appears in ordinary
- * prose — a footnote, a wildcard, a literal asterisk — and eating it would silently rewrite a
- * sentence rather than fail to decorate one.
+ * Regex was tempting here and wrong in three ways: nested code inside bold stayed raw, intraword
+ * `__` silently rewrote identifiers, and many unmatched `[` characters made the link alternative
+ * rescan the remaining suffix over and over. This scanner advances at least one character on every
+ * pass and looks no more than [MaxLinkSpan] characters ahead for a link, so malformed release text
+ * cannot turn composition into quadratic work.
  */
 private fun AnnotatedString.Builder.appendInline(body: String, boldRanges: List<IntRange>) {
-    // Emphasis from a line prefix is carried as source offsets rather than as text, because the
-    // inline pass below rewrites the string as it goes and the two would otherwise disagree about
-    // where a heading ends.
-    fun emphasisedAt(index: Int) = boldRanges.any { index in it }
+    fun headingAt(index: Int) = boldRanges.any { index in it }
 
-    fun appendPlain(text: String, from: Int) {
-        // Emitted as contiguous runs rather than per character: one span per letter would be the
-        // same picture built from hundreds of styles, and a heading is a single emphasised range.
-        var runStart = 0
-        while (runStart < text.length) {
-            val emphasised = emphasisedAt(from + runStart)
-            var runEnd = runStart
-            while (runEnd < text.length && emphasisedAt(from + runEnd) == emphasised) runEnd++
-            val run = text.substring(runStart, runEnd)
-            if (emphasised) {
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(run) }
-            } else {
-                append(run)
+    fun appendStyled(text: String, bold: Boolean) {
+        if (bold) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(text) } else append(text)
+    }
+
+    fun scan(from: Int, until: Int, forceBold: Boolean) {
+        var index = from
+        while (index < until) {
+            val headingBold = headingAt(index)
+            val bold = forceBold || headingBold
+
+            val marker = when {
+                body.startsWith("**", index) -> "**"
+                body.startsWith("__", index) && underscoreDelimiter(body, index, until) -> "__"
+                else -> null
             }
-            runStart = runEnd
+            if (marker != null) {
+                val close = body.boundedIndexOf(marker, index + 2, minOf(until, index + MaxInlineSpan))
+                    ?.takeIf { "\n\n" !in body.substring(index + 2, it) }
+                if (close != null) {
+                    // Recurse so **the `client`** loses its backticks as well as its outer markers.
+                    scan(index + 2, close, forceBold = true)
+                    index = close + 2
+                    continue
+                }
+            }
+
+            if (body[index] == '`') {
+                val close = body.boundedIndexOf("`", index + 1, minOf(until, index + MaxInlineSpan))
+                if (close != null && '\n' !in body.substring(index + 1, close)) {
+                    appendStyled(body.substring(index + 1, close), bold)
+                    index = close + 1
+                    continue
+                }
+            }
+
+            if (body[index] == '[') {
+                val limit = minOf(until, index + MaxLinkSpan)
+                val labelEnd = body.boundedIndexOf("](", index + 1, limit)
+                val urlEnd = labelEnd?.let { body.boundedIndexOf(")", it + 2, limit) }
+                if (labelEnd != null && urlEnd != null && '\n' !in body.substring(index, urlEnd)) {
+                    scan(index + 1, labelEnd, forceBold = bold)
+                    index = urlEnd + 1
+                    continue
+                }
+                // This window was already proved not to contain a complete link. Emit it whole and
+                // skip it; retrying from every `[` inside would turn a bounded 2K probe into 2K×N
+                // overlapping work on a body made entirely of open brackets.
+                appendStyled(body.substring(index, limit), bold)
+                index = limit
+                continue
+            }
+
+            // Grow a plain run until the next character that *might* begin markup or the heading
+            // style changes. Grouping avoids one AnnotatedString span per character.
+            var end = index + 1
+            while (
+                end < until &&
+                body[end] !in "*_`[" &&
+                headingAt(end) == headingBold
+            ) end++
+            appendStyled(body.substring(index, end), bold)
+            index = end
         }
     }
 
-    var cursor = 0
-    Inline.findAll(body).forEach { match ->
-        appendPlain(body.substring(cursor, match.range.first), cursor)
-        val bold = match.groupValues[1].ifEmpty { match.groupValues[2] }
-        val code = match.groupValues[3]
-        val link = match.groupValues[4]
-        when {
-            bold.isNotEmpty() -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(bold) }
-            code.isNotEmpty() -> append(code)
-            else -> append(link)
-        }
-        cursor = match.range.last + 1
-    }
-    appendPlain(body.substring(cursor), cursor)
+    scan(0, body.length, forceBold = false)
 }
+
+/** `__` inside an identifier is punctuation, not emphasis, in GitHub Markdown. */
+private fun underscoreDelimiter(body: String, start: Int, until: Int): Boolean {
+    val close = body.boundedIndexOf("__", start + 2, minOf(until, start + MaxInlineSpan)) ?: return false
+    val beforeOpen = body.getOrNull(start - 1)
+    val afterOpen = body.getOrNull(start + 2)
+    val beforeClose = body.getOrNull(close - 1)
+    val afterClose = body.getOrNull(close + 2)
+    return beforeOpen?.isLetterOrDigit() != true &&
+        afterOpen?.isWhitespace() != true &&
+        beforeClose?.isWhitespace() != true &&
+        afterClose?.isLetterOrDigit() != true
+}
+
+/** Search only [from, until), returning null without scanning the rest of an attacker-controlled body. */
+private fun String.boundedIndexOf(needle: String, from: Int, until: Int): Int? {
+    if (needle.isEmpty() || from >= until) return null
+    val lastStart = until - needle.length
+    var index = from
+    while (index <= lastStart) {
+        if (regionMatches(index, needle, 0, needle.length)) return index
+        index++
+    }
+    return null
+}
+
+/** Enough for human emphasis and code, while bounding an unclosed marker's UI-thread work. */
+private const val MaxInlineSpan = 8_192
+
+/** Enough for any human link label and URL, while bounding malformed-input work on the UI thread. */
+private const val MaxLinkSpan = 2_048
