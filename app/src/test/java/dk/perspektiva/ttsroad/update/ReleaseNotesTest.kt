@@ -112,6 +112,42 @@ class ReleaseNotesTest {
         assertEquals("Use ``unfinished", rendered.text)
     }
 
+    @Test
+    fun `fenced code contents are preserved literally`() {
+        val rendered = renderReleaseNotes("```yaml\n- name: **literal**\n## not a heading\n```")
+
+        assertEquals("- name: **literal**\n## not a heading", rendered.text)
+        assertTrue(rendered.spanStyles.isEmpty())
+    }
+
+    @Test
+    fun `balanced parentheses in a link destination leave no stray delimiter`() {
+        val rendered = renderReleaseNotes("Read [docs](https://example.test/Foo_(bar))")
+
+        assertEquals("Read docs", rendered.text)
+    }
+
+    @Test
+    fun `literal brackets before a real link stay separate`() {
+        val rendered = renderReleaseNotes("[draft] See [notes](https://x.test)")
+
+        assertEquals("[draft] See notes", rendered.text)
+    }
+
+    @Test
+    fun `asterisk operators with whitespace stay literal`() {
+        val rendered = renderReleaseNotes("Compute 2 ** 3 ** 4")
+
+        assertEquals("Compute 2 ** 3 ** 4", rendered.text)
+    }
+
+    @Test
+    fun `a longer closing backtick run does not close a shorter opener`() {
+        val rendered = renderReleaseNotes("Use ``value``` here")
+
+        assertEquals("Use ``value``` here", rendered.text)
+    }
+
     @Test(timeout = 1_000)
     fun `many unmatched link openers stay linear and readable`() {
         // The old regex retried its whole suffix at every `[`, taking seconds for a release body an
@@ -119,6 +155,13 @@ class ReleaseNotesTest {
         val body = "[".repeat(50_000)
 
         assertEquals(body, renderReleaseNotes(body).text)
+    }
+
+    @Test(timeout = 1_000)
+    fun `malformed link candidates do not rescan or copy their suffixes`() {
+        val body = ("[".repeat(2_045) + "](\n)").repeat(50)
+
+        assertTrue(renderReleaseNotes(body).text.isNotEmpty())
     }
 
     @Test(timeout = 1_000)
