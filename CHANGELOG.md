@@ -20,6 +20,10 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- The update dialog now renders release notes as text rather than raw Markdown, so headings and
+  emphasis no longer arrive on screen as `##` and `**`. Long notes scroll instead of being cut off
+  at 400 characters mid-sentence, the Download and Later buttons stay reachable while they do, and
+  the text is left-aligned rather than inheriting a centred layout.
 - Browse can now be ordered by **New chapters first**, which sorts on when a book actually gained a
   chapter. It replaces "Recently updated", which read a row clock the poller bumped on every sweep
   and so ordered the shelf by the last poll rather than by news — a book that gained nothing could
