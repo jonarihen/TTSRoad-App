@@ -67,6 +67,34 @@ class ReadAlongFileStoreTest {
     }
 
     @Test
+    fun `cached code point offsets are converted once when rebuilding the document`() {
+        val response = ReadAlongResponse(
+            chapter = ReadAlongChapter(id = 10),
+            text = "𝄞 Prelude.\n\nA 𝄞𠀀 tone.",
+            paragraphs = listOf(listOf(0.0, 10.0), listOf(12.0, 22.0)),
+            cues = listOf(listOf(0.0, 1.0, 0.0), listOf(14.0, 16.0, 1.5001), listOf(17.0, 21.0, 2.0)),
+        )
+        val online = ReadAlongDocument.from(response)
+        store().write(chapterId = 10, entry = CachedReadAlong(etag = "\"unicode\"", response = response))
+
+        repeat(2) {
+            val restored = requireNotNull(store().read(chapterId = 10))
+            val document = ReadAlongDocument.from(restored.response)
+            assertEquals(response, restored.response)
+            assertEquals(online, document)
+            assertEquals(listOf(TextSpan(0, 11), TextSpan(13, 25)), document.paragraphs)
+            assertEquals(listOf("𝄞 Prelude.", "A 𝄞𠀀 tone."), document.paragraphs.map(document::textIn))
+            val highlight = document.highlightAtMillis(1501L)
+            assertEquals(TextSpan(15, 19), highlight.word)
+            assertEquals("𝄞𠀀", document.textIn(requireNotNull(highlight.word)))
+            assertEquals("A 𝄞𠀀 tone.", document.textIn(requireNotNull(highlight.sentence)))
+            assertEquals(1501L, document.seekMillisForOffset(17)!!)
+            assertEquals(highlight, document.highlightAtMillis(document.seekMillisForOffset(17)!!))
+            store().write(chapterId = 10, entry = restored)
+        }
+    }
+
+    @Test
     fun `writing the same chapter twice replaces it rather than accumulating`() {
         val store = store()
         store.write(chapterId = 10, entry = entry("First."))

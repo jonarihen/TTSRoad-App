@@ -482,22 +482,44 @@ Response:
     "timing_version": 1
   },
   "text": "The knight rode north.\n\nSnow fell on the pass.",
-  "paragraphs": [[0, 22], [24, 45]],
+  "paragraphs": [[0, 22], [24, 46]],
   "cues": [[0, 3, 0.0], [4, 10, 0.42], [11, 15, 0.98]]
 }
 ```
 
 `paragraphs` are `[char_start, char_end]` and `cues` are `[char_start, char_end, start_seconds]`,
-both indexing into the same `text` string. Ranges are half-open. They are bare arrays rather than
-objects because a chapter runs to tens of thousands of cues and object keys would roughly triple the
-payload.
+both indexing into the same `text` string. Ranges are half-open **Unicode code-point offsets**,
+matching Python string indexing, not UTF-16 code units, UTF-8 bytes, or grapheme clusters. The example
+text above has exactly **46 code points**: its paragraphs are `[0, 22)` and `[24, 46)`.
+They are bare arrays rather than objects because a chapter runs to tens of thousands of cues and
+object keys would roughly triple the payload.
+
+Android converts both kinds of wire spans to UTF-16 once when constructing `ReadAlongDocument`,
+using a shared O(n) code-point-boundary map. All document spans and tap offsets then use UTF-16,
+matching Kotlin strings and Compose. The disk cache keeps the unmodified response in code-point
+units; rebuilding a cached document uses the same conversion, never a second conversion of spans
+already in UTF-16.
 
 Rules the client depends on:
 
+- Offsets must be finite integers with `0 <= char_start < char_end <= code_point_length(text)`.
+  Invalid cue rows are dropped, not rounded or clamped into unrelated words.
+- Paragraphs must be ordered, disjoint, and cover all non-whitespace text. Whitespace gaps and padding
+  are allowed. Any malformed row, overlap, backward span, or uncovered prose makes Android replace
+  the entire paragraph list with text-derived paragraphs, rather than hide or duplicate prose.
+  Coverage and order validation is linear in text length plus paragraph count.
 - A cue's **end time is the next cue's start time**; the last cue runs to `audio_duration`.
-- Cues are **sorted by start time and non-overlapping**, so lookup is a binary search. Validate this
-  on load anyway — one mis-ordered row otherwise makes the highlight jump for the rest of the chapter.
-- Times are in **media time**, so a listener at 2x needs no adjustment.
+- Cues are **sorted by start time**, so lookup is a binary search. Android sorts on load and then
+  drops spatially backward or overlapping ranges. Consecutive **identical** ranges are valid:
+  pronunciation expansion can map several spoken units to the same original term. A tap on that
+  term seeks to the first retained cue of the expansion.
+- Cue start times must be **finite and nonnegative**, in **media seconds**, so a listener at 2x
+  needs no adjustment. Android rejects starts above `Long.MAX_VALUE / 1000.0`, which no supported
+  millisecond position can reach. `seekMillisForOffset` selects the **first nonnegative integer
+  millisecond** whose `ms / 1000.0 >= start_seconds`, using the same floating-point conversion as
+  highlight lookup. It checks and corrects the rounded-up product in both directions, with a bounded
+  binary-search fallback for large timestamps. This avoids both seeking before a fractional start
+  and unnecessarily delaying an exactly reachable start. The seconds API retains the original precision.
 - `cues` is `[]`, never absent, for a chapter with no timings. Still show the text; there is just
   nothing to follow.
 - Where a pronunciation rule applies, cues point at the **original** term, not what was spoken: the

@@ -2,6 +2,9 @@ package dk.perspektiva.ttsroad.player
 
 import android.content.ComponentName
 import android.content.Context
+import android.os.Looper
+import androidx.annotation.MainThread
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
@@ -103,6 +106,7 @@ class PlaybackController internal constructor(
     private var controller: MediaController? = null
     private var connecting: Deferred<MediaController?>? = null
     private var connectionGeneration = 0L
+    private var readAlongDiscontinuityGeneration = 0L
     private var inFlightFuture: ListenableFuture<MediaController>? = null
     private var tickerJob: Job? = null
 
@@ -112,6 +116,22 @@ class PlaybackController internal constructor(
     private var cachedQueueKey: String? = null
 
     private val listener = object : Player.Listener {
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            readAlongDiscontinuityGeneration++
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            readAlongDiscontinuityGeneration++
+        }
+
+        override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+            readAlongDiscontinuityGeneration++
+        }
+
         override fun onEvents(player: Player, events: Player.Events) {
             updateTicker(player)
             publishState(player)
@@ -176,6 +196,7 @@ class PlaybackController internal constructor(
                 if (created != null) {
                     if (generation == connectionGeneration && isActive && created.isConnected) {
                         controller = created
+                        readAlongDiscontinuityGeneration++
                         created.addListener(listener)
                         updateTicker(created)
                         publishState(created)
@@ -257,18 +278,21 @@ class PlaybackController internal constructor(
         publishState(controller)
     }
 
-    /**
-     * The position the player reports *right now*, or null when nothing is connected.
-     *
-     * [state] only republishes on a one-second ticker, which is far too coarse to highlight words
-     * with. The read-along reader samples this per frame instead.
-     *
-     * It deliberately reads the player rather than any clock of ours. Skip-silence removes real
-     * time from the media timeline, so a highlight advanced by elapsed wall time would drift
-     * further out of step for the whole length of a chapter; re-reading the reported position means
-     * any error is corrected on the very next frame.
-     */
     fun reportedPositionMs(): Long? = controller?.currentPosition?.coerceAtLeast(0L)
+
+    @MainThread
+    internal fun readAlongSample(): ReadAlongPlaybackSample? {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        val controller = controller?.takeIf { it.isConnected } ?: return null
+        val mediaId = controller.currentMediaItem?.mediaId ?: return null
+        return ReadAlongPlaybackSample(
+            mediaId = mediaId,
+            positionMs = controller.currentPosition.coerceAtLeast(0L),
+            isPlaying = controller.isPlaying,
+            speed = controller.playbackParameters.speed,
+            discontinuityGeneration = readAlongDiscontinuityGeneration,
+        )
+    }
 
     fun clearTransientFeedback() {
         _transientFeedback.value = null
