@@ -169,6 +169,7 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.coil.compose)
+    implementation(libs.commonmark)
     implementation(libs.coroutines.android)
     implementation(libs.coroutines.guava)
     implementation(libs.moshi)

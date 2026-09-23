@@ -354,6 +354,7 @@ import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
+import dk.perspektiva.ttsroad.update.renderReleaseNotes
 import dk.perspektiva.ttsroad.update.UpdateState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -520,24 +521,44 @@ private fun TtsRoadApp(
 }
 
 @Composable
-private fun UpdateOverlay(
+internal fun UpdateOverlay(
     state: UpdateState,
     onDownload: (ReleaseInfo) -> Unit,
     onDismiss: () -> Unit,
 ) {
     when (state) {
-        is UpdateState.Available -> AlertDialog(
-            onDismissRequest = onDismiss,
-            containerColor = AarisColor.BgRaise,
+        is UpdateState.Available -> {
+            // The note region takes a share of the actual window, capped for ordinary portrait
+            // phones. A fixed 320 dp cap still clipped the actions in landscape and short split
+            // screen windows once the title and dialog padding were counted.
+            val notesMaxHeight = (LocalConfiguration.current.screenHeightDp.dp * 0.42f)
+                .coerceIn(96.dp, 320.dp)
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                containerColor = AarisColor.BgRaise,
             title = { Text("UPDATE AVAILABLE", style = MaterialTheme.typography.titleLarge) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Bounded and scrollable rather than truncated. Release notes are the only thing
+                // in this dialog that says what the install actually changes, and `take(400)` cut
+                // them mid-sentence with nothing on screen admitting anything was missing — so a
+                // long entry ended in a severed word and the rest was simply unreachable.
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .heightIn(max = notesMaxHeight)
+                        .verticalScroll(rememberScrollState())
+                        .testTag("update-notes"),
+                ) {
                     MetaText(text = "Version ${state.release.versionName}", color = AarisColor.Accent)
                     if (state.release.notes.isNotBlank()) {
                         Text(
-                            text = state.release.notes.take(400),
+                            text = renderReleaseNotes(state.release.notes),
                             style = MaterialTheme.typography.bodyMedium,
                             color = AarisColor.Muted,
+                            // Left, explicitly. Prose and bullet lists are read down a common left
+                            // edge; centring ragged lines costs the eye that edge on every line.
+                            textAlign = TextAlign.Start,
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }
@@ -551,6 +572,7 @@ private fun UpdateOverlay(
                 TextButton(onClick = onDismiss) { Text("LATER") }
             },
         )
+        }
 
         is UpdateState.Downloading -> AlertDialog(
             onDismissRequest = {},
