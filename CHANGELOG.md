@@ -2,7 +2,7 @@
 
 Notable changes to the TTSRoad Android client.
 
-## Unreleased
+## 0.17.0 — 2026-09-23
 
 ### Added
 
@@ -30,6 +30,9 @@ Notable changes to the TTSRoad Android client.
   still lead the grid. A phone still holding the old order is moved to the new one rather than
   reset. Books with no chapters yet, and every book on a server too old to report this, sort last.
   (TTSRoad-App#242, TTSRoad#189)
+- Downloading a fiction as an EPUB no longer writes a zero-byte file. The transfer ran in an effect
+  that was cancelled as soon as the file picker's result was consumed, so the document was created
+  and then left empty; it now runs in the screen's own scope and survives long enough to finish.
 
 ## 0.16.0 — 2026-09-19
 
