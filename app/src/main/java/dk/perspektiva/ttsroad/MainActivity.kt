@@ -112,7 +112,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -120,6 +119,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -9442,38 +9442,7 @@ private fun ReaderScreen(
         }
     }
 
-    var highlight by remember(screen.chapterId) { mutableStateOf(ReadAlongHighlight.None) }
-
-    // Frame-paced, and driven purely by the position the player reports — never by elapsed wall
-    // time. Skip-silence is on by default and removes real time from the media timeline, so a
-    // highlight advanced by a clock would drift further out of step for the whole chapter. Only the
-    // cue actually changing writes to state, so this is a handful of recompositions a second rather
-    // than one per frame.
-    //
-    // Paused, there is no position left to re-read, so the loop is dropped rather than left
-    // spinning a frame callback over a number that cannot change; the highlight is placed once from
-    // whatever the player last reported. [pausedPositionMs] is what re-runs that single placement
-    // after a seek made while paused, and is pinned to zero while playing so the controller's
-    // once-a-second tick cannot restart the loop out from under the highlight.
-    val pausedPositionMs = if (playerState.isPlaying) 0L else playerState.positionMs
-    LaunchedEffect(document, isPlayingThisChapter, playerState.isPlaying, pausedPositionMs) {
-        val loaded = document
-        if (loaded == null || !isPlayingThisChapter || !loaded.hasTimings) {
-            highlight = ReadAlongHighlight.None
-            return@LaunchedEffect
-        }
-        if (!playerState.isPlaying) {
-            playbackController.reportedPositionMs()
-                ?.let { highlight = loaded.highlightAtMillis(it) }
-            return@LaunchedEffect
-        }
-        while (true) {
-            withFrameMillis { it }
-            val reported = playbackController.reportedPositionMs() ?: continue
-            val next = loaded.highlightAtMillis(reported)
-            if (next != highlight) highlight = next
-        }
-    }
+    val highlight = rememberReaderHighlight(document, screen.chapterId, playbackController::readAlongSample)
 
     val listState = rememberLazyListState()
     var followPlayback by remember(screen.chapterId) { mutableStateOf(true) }
@@ -9565,9 +9534,10 @@ private fun ReaderScreen(
     }
 
     fun seekToOffset(charOffset: Int) {
-        val seconds = document?.seekSecondsForOffset(charOffset) ?: return
-        if (!isPlayingThisChapter) return
-        playbackController.seekTo((seconds * 1000).roundToLong())
+        val loaded = document?.takeIf { it.chapterId == screen.chapterId } ?: return
+        val positionMs = loaded.seekMillisForOffset(charOffset) ?: return
+        if (playbackController.readAlongSample()?.mediaId != "chapter:${screen.chapterId}") return
+        playbackController.seekTo(positionMs)
         followPlayback = true
     }
 
@@ -9735,7 +9705,7 @@ private fun ReaderPage(
 }
 
 @Composable
-private fun ReaderParagraph(
+internal fun ReaderParagraph(
     document: ReadAlongDocument,
     span: TextSpan,
     highlight: ReadAlongHighlight,
@@ -9750,15 +9720,10 @@ private fun ReaderParagraph(
     // paragraphs are skipped on every cue change.
     val sentence = highlight.sentence?.takeIf { granularity.showsSentence && it.overlaps(span) }
     val word = highlight.word?.takeIf { granularity.showsWord && it.overlaps(span) }
-    val annotated = remember(span, sentence, word, palette) {
-        buildAnnotatedString {
-            append(document.textIn(span))
-            sentence?.let { addStyle(SpanStyle(background = palette.band), span, it) }
-            word?.let {
-                addStyle(readerWordStyle(granularity, palette), span, it)
-            }
-        }
+    val annotated = remember(document.text, span, sentence, word, granularity, palette) {
+        readerParagraphText(document, span, sentence, word, granularity, palette)
     }
+    val currentOnSeekToOffset by rememberUpdatedState(onSeekToOffset)
 
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     // Auto-scroll follows the spoken line, and the line only exists once this paragraph has been
@@ -9778,10 +9743,27 @@ private fun ReaderParagraph(
             .pointerInput(span) {
                 detectTapGestures { position ->
                     val local = layout?.getOffsetForPosition(position) ?: return@detectTapGestures
-                    onSeekToOffset(span.start + local)
+                    currentOnSeekToOffset(span.start + local)
                 }
             },
     )
+}
+
+internal fun readerParagraphText(
+    document: ReadAlongDocument,
+    span: TextSpan,
+    sentence: TextSpan?,
+    word: TextSpan?,
+    granularity: HighlightGranularity,
+    palette: ReaderPalette,
+): AnnotatedString = buildAnnotatedString {
+    append(document.textIn(span))
+    if (granularity.showsSentence) {
+        sentence?.let { addStyle(SpanStyle(background = palette.band), span, it) }
+    }
+    if (granularity.showsWord) {
+        word?.let { addStyle(readerWordStyle(granularity, palette), span, it) }
+    }
 }
 
 /** Apply [style] to the part of [highlight] that falls inside [paragraph], in paragraph coordinates. */
