@@ -1,13 +1,15 @@
 package dk.perspektiva.ttsroad
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdateState
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,12 +43,31 @@ class UpdateDialogLayoutTest {
     }
 
     @Test
-    fun `the end of a long release note is reachable`() {
+    fun `long notes are bounded, so they scroll instead of pushing the dialog open`() {
+        // Codex's point, and it was right: the notes are a single Text node, so asserting that a
+        // substring of them "is displayed" selects that whole node — whose top stays on screen even
+        // when its end is clipped. That assertion would survive the bound being removed.
+        //
+        // What actually distinguishes the fix is the geometry: the scrolling container is capped,
+        // and the text inside it is taller than the cap. Both are measured here, against the real
+        // dialog rather than a hand-built stand-in that could pass without the production code.
         show((1..60).joinToString("\n") { "- change number $it" })
 
-        compose.onNodeWithText("• change number 60", substring = true)
-            .performScrollTo()
-            .assertIsDisplayed()
+        val container = compose.onNodeWithTag("update-notes").getUnclippedBoundsInRoot()
+        val containerHeight = container.bottom - container.top
+        val notes = compose.onNodeWithText("change number 1", substring = true)
+            .getUnclippedBoundsInRoot()
+        val notesHeight = notes.bottom - notes.top
+
+        assertTrue(
+            "the notes container is ${containerHeight.value} dp, past its 320 dp cap",
+            containerHeight <= 320.dp + 1.dp,
+        )
+        assertTrue(
+            "notes (${notesHeight.value} dp) should overflow the capped container " +
+                "(${containerHeight.value} dp), or there is nothing for scrolling to reach",
+            notesHeight > containerHeight,
+        )
     }
 
     @Test

@@ -28,26 +28,36 @@ import androidx.compose.ui.text.withStyle
  */
 fun renderReleaseNotes(markdown: String): AnnotatedString = buildAnnotatedString {
     val lines = markdown.replace("\r\n", "\n").trim().lines()
+    // Line prefixes are per line, but inline spans are not: Markdown lets `**bold**` open on one
+    // line and close on the next, and release prose is routinely hard-wrapped that way. Stripping
+    // the prefixes first and then parsing the joined result is what lets a wrapped emphasis close
+    // — parsing line by line leaves both halves of its markers on screen, which is the exact fault
+    // this renderer exists to remove.
+    val body = StringBuilder()
+    val boldRanges = mutableListOf<IntRange>()
     lines.forEachIndexed { index, rawLine ->
-        if (index > 0) append('\n')
+        if (index > 0) body.append('\n')
         val line = rawLine.trimEnd()
         val heading = HeadingPrefix.find(line)
         val bullet = BulletPrefix.find(line)
         when {
-            heading != null -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                appendInline(line.removeRange(heading.range))
+            heading != null -> {
+                val start = body.length
+                body.append(line.removeRange(heading.range))
+                // A heading is emphasised as a whole line, so it is recorded rather than matched:
+                // its text carries no markers of its own to find.
+                boldRanges += start until body.length
             }
 
             bullet != null -> {
                 // The indent is preserved so nested lists keep their shape; only the marker moves.
-                append(bullet.groupValues[1])
-                append("• ")
-                appendInline(line.removeRange(bullet.range))
+                body.append(bullet.groupValues[1]).append("• ").append(line.removeRange(bullet.range))
             }
 
-            else -> appendInline(line)
+            else -> body.append(line)
         }
     }
+    appendInline(body.toString(), boldRanges)
 }
 
 /** `##` and friends, with the space after them, so the text starts where the author meant. */
@@ -56,8 +66,20 @@ private val HeadingPrefix = Regex("""^\s{0,3}#{1,6}\s+""")
 /** A list marker, capturing the indent before it so nesting survives. */
 private val BulletPrefix = Regex("""^(\s*)[-*+]\s+""")
 
-/** `**bold**`, `__bold__`, `` `code` `` and `[label](url)`, matched left to right. */
-private val Inline = Regex("""\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`|\[([^\]]+)]\(([^)]*)\)""")
+/**
+ * `**bold**`, `__bold__`, `` `code` `` and `[label](url)`, matched left to right.
+ *
+ * The two emphasis forms may contain a single newline, because hard-wrapped prose routinely opens
+ * on one line and closes on the next. They may not contain a *blank* line: that is a paragraph
+ * break, and an unclosed marker would otherwise reach across the rest of the notes and emphasise
+ * everything after it. Code spans and links stay single-line, which is what Markdown itself says.
+ */
+private val Inline = Regex(
+    """\*\*((?:(?!\*\*)(?!\n\n)[\s\S])+?)\*\*""" +
+        """|__((?:(?!__)(?!\n\n)[\s\S])+?)__""" +
+        """|`([^`\n]+)`""" +
+        """|\[([^\]\n]+)]\(([^)\n]*)\)""",
+)
 
 /**
  * Append one line, converting the inline markers it carries.
@@ -66,10 +88,33 @@ private val Inline = Regex("""\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`|\[([^\]]+)]\(([^
  * prose — a footnote, a wildcard, a literal asterisk — and eating it would silently rewrite a
  * sentence rather than fail to decorate one.
  */
-private fun AnnotatedString.Builder.appendInline(line: String) {
+private fun AnnotatedString.Builder.appendInline(body: String, boldRanges: List<IntRange>) {
+    // Emphasis from a line prefix is carried as source offsets rather than as text, because the
+    // inline pass below rewrites the string as it goes and the two would otherwise disagree about
+    // where a heading ends.
+    fun emphasisedAt(index: Int) = boldRanges.any { index in it }
+
+    fun appendPlain(text: String, from: Int) {
+        // Emitted as contiguous runs rather than per character: one span per letter would be the
+        // same picture built from hundreds of styles, and a heading is a single emphasised range.
+        var runStart = 0
+        while (runStart < text.length) {
+            val emphasised = emphasisedAt(from + runStart)
+            var runEnd = runStart
+            while (runEnd < text.length && emphasisedAt(from + runEnd) == emphasised) runEnd++
+            val run = text.substring(runStart, runEnd)
+            if (emphasised) {
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(run) }
+            } else {
+                append(run)
+            }
+            runStart = runEnd
+        }
+    }
+
     var cursor = 0
-    Inline.findAll(line).forEach { match ->
-        append(line.substring(cursor, match.range.first))
+    Inline.findAll(body).forEach { match ->
+        appendPlain(body.substring(cursor, match.range.first), cursor)
         val bold = match.groupValues[1].ifEmpty { match.groupValues[2] }
         val code = match.groupValues[3]
         val link = match.groupValues[4]
@@ -80,5 +125,5 @@ private fun AnnotatedString.Builder.appendInline(line: String) {
         }
         cursor = match.range.last + 1
     }
-    append(line.substring(cursor))
+    appendPlain(body.substring(cursor), cursor)
 }

@@ -36,6 +36,28 @@ class ReleaseNotesTest {
     }
 
     @Test
+    fun `emphasis closing on the next line still resolves`() {
+        // Hard-wrapped release prose routinely opens a span on one line and closes it on the next.
+        // Parsing line by line left both halves of the markers on screen — the exact fault this
+        // renderer exists to remove.
+        val rendered = renderReleaseNotes("Playback is **fixed\nat last** now")
+
+        assertEquals("Playback is fixed\nat last now", rendered.text)
+        val bold = rendered.spanStyles.single()
+        assertEquals("fixed\nat last", rendered.text.substring(bold.start, bold.end))
+    }
+
+    @Test
+    fun `an unclosed marker cannot emphasise the rest of the notes`() {
+        // A blank line is a paragraph break. Without that limit, one stray marker would reach
+        // across everything after it and bold the remainder of the release body.
+        val rendered = renderReleaseNotes("Opens **here\n\nA new paragraph** entirely")
+
+        assertEquals("Opens **here\n\nA new paragraph** entirely", rendered.text)
+        assertTrue(rendered.spanStyles.isEmpty())
+    }
+
+    @Test
     fun `a heading keeps its words, loses its hashes, and is emphasised`() {
         val rendered = renderReleaseNotes("## What's new")
 
