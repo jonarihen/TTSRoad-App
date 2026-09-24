@@ -1225,12 +1225,14 @@ private fun LibraryScreen(
                                 EmptyCard("No active chapters")
                             } else {
                                 val hero = library.continueListening.first()
+                                val heroFiction = fictionForChapter(hero)
                                 ContinueHero(
                                     chapter = hero,
-                                    fiction = fictionForChapter(hero),
+                                    fiction = heroFiction,
+                                    onOpenFiction = { heroFiction?.let(onOpenFiction) },
                                     onResume = {
                                         scope.launch {
-                                            playbackController.play(hero, fictionForChapter(hero))
+                                            playbackController.play(hero, heroFiction)
                                             onOpenPlayer()
                                         }
                                     },
@@ -1240,8 +1242,7 @@ private fun LibraryScreen(
                                         chapters = library.continueListening.drop(1),
                                         fictionForChapter = fictionForChapter,
                                         keyPrefix = "continue",
-                                        playbackController = playbackController,
-                                        onOpenPlayer = onOpenPlayer,
+                                        onOpenFiction = onOpenFiction,
                                     )
                                 }
                             }
@@ -1282,8 +1283,7 @@ private fun LibraryScreen(
                                     chapters = library.recentChapters,
                                     fictionForChapter = fictionForChapter,
                                     keyPrefix = "recent",
-                                    playbackController = playbackController,
-                                    onOpenPlayer = onOpenPlayer,
+                                    onOpenFiction = onOpenFiction,
                                 )
                             }
                         }
@@ -5969,9 +5969,10 @@ private fun listenedFraction(chapter: ChapterSummary): Float {
  * one prominent resume action.
  */
 @Composable
-private fun ContinueHero(
+internal fun ContinueHero(
     chapter: ChapterSummary,
     fiction: FictionSummary?,
+    onOpenFiction: () -> Unit,
     onResume: () -> Unit,
 ) {
     Row(
@@ -5979,7 +5980,8 @@ private fun ContinueHero(
             .fillMaxWidth()
             .height(196.dp)
             .border(1.dp, AarisColor.Line)
-            .background(Brush.horizontalGradient(listOf(AarisColor.BgHover, AarisColor.Bg))),
+            .background(Brush.horizontalGradient(listOf(AarisColor.BgHover, AarisColor.Bg)))
+            .clickable(enabled = fiction != null, onClick = onOpenFiction),
     ) {
         CoverFill(
             imageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
@@ -6035,8 +6037,7 @@ private fun HorizontalChapterRail(
     chapters: List<ChapterSummary>,
     fictionForChapter: (ChapterSummary) -> FictionSummary?,
     keyPrefix: String,
-    playbackController: PlaybackController,
-    onOpenPlayer: () -> Unit,
+    onOpenFiction: (FictionSummary) -> Unit,
 ) {
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
@@ -6046,11 +6047,11 @@ private fun HorizontalChapterRail(
             chapters,
             key = { index, chapter -> "$keyPrefix-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" },
         ) { _, chapter ->
+            val fiction = fictionForChapter(chapter)
             ChapterTile(
                 chapter = chapter,
-                fiction = fictionForChapter(chapter),
-                playbackController = playbackController,
-                onOpenPlayer = onOpenPlayer,
+                fiction = fiction,
+                onOpenFiction = { fiction?.let(onOpenFiction) },
             )
         }
     }
@@ -6078,22 +6079,15 @@ private fun HorizontalFictionRail(
  * directly on it, and the whole tile is the tap target — no inline PLAY button.
  */
 @Composable
-private fun ChapterTile(
+internal fun ChapterTile(
     chapter: ChapterSummary,
     fiction: FictionSummary?,
-    playbackController: PlaybackController,
-    onOpenPlayer: () -> Unit,
+    onOpenFiction: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     Column(
         modifier = Modifier
             .width(148.dp)
-            .clickable(enabled = chapter.audio != null) {
-                scope.launch {
-                    playbackController.play(chapter, fiction)
-                    onOpenPlayer()
-                }
-            },
+            .clickable(enabled = fiction != null, onClick = onOpenFiction),
     ) {
         Box(
             modifier = Modifier
