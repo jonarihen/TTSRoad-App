@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.data
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,6 +67,39 @@ class ChapterNotificationsTest {
     }
 
     @Test
+    fun `a ready backlog alert on the first poll stays silent`() {
+        val backlog = notice(1, "ready").copy(kind = "backlog", message = "2 hours ready to listen")
+        val first = newlyReady(listOf(backlog), alreadySeen = null)
+
+        assertTrue(first.first.isEmpty())
+        assertEquals(setOf(backlog.id), first.second)
+        assertTrue(newlyReady(listOf(backlog), alreadySeen = first.second).first.isEmpty())
+    }
+
+    @Test
+    fun `a backlog alert arriving directly ready after an empty poll is announced once`() {
+        val first = newlyReady(emptyList(), alreadySeen = null)
+        val backlog = notice(1, "ready").copy(kind = "backlog", message = "2 hours ready to listen")
+
+        val second = newlyReady(listOf(backlog), alreadySeen = first.second)
+        assertEquals(listOf(backlog), second.first)
+        assertEquals(setOf(backlog.id), second.second)
+        assertTrue(newlyReady(listOf(backlog), alreadySeen = second.second).first.isEmpty())
+    }
+
+    @Test
+    fun `a new ready backlog alert is announced alongside previously seen ready chapters`() {
+        val chapter = notice(1, "ready")
+        val first = newlyReady(listOf(chapter), alreadySeen = null)
+        val backlog = chapter.copy(id = 2, kind = "backlog", message = "2 hours ready to listen")
+
+        val second = newlyReady(listOf(chapter, backlog), alreadySeen = first.second)
+        assertEquals(listOf(backlog), second.first)
+        assertEquals(setOf(chapter.id, backlog.id), second.second)
+        assertTrue(newlyReady(listOf(chapter, backlog), alreadySeen = second.second).first.isEmpty())
+    }
+
+    @Test
     fun `an unknown state reads as still converting, never as ready`() {
         // Guessing Ready would offer Play for audio that may not exist.
         assertEquals(ChapterNotificationState.Pulled, ChapterNotificationState.fromWire("something-new"))
@@ -79,7 +113,7 @@ class ChapterNotificationsTest {
         // A serial converting a backlog would otherwise post a dozen at once, burying the shade.
         val single = readyNotificationText(listOf(notice(1, "ready")))
         assertEquals("A Test Serial", single?.first)
-        assertEquals("Chapter 1 is ready to listen", single?.second)
+        assertEquals("Chapter 1", single?.second)
 
         val many = readyNotificationText(
             listOf(notice(1, "ready"), notice(2, "ready", fictionTitle = "Another Serial")),
@@ -91,6 +125,44 @@ class ChapterNotificationsTest {
         assertEquals("New audio in A Test Serial", sameSerial?.second)
 
         assertNull(readyNotificationText(emptyList()))
+    }
+
+    @Test
+    fun `server wording is shared by the inbox and single system notification`() {
+        for (kind in listOf("chapter", "backlog")) {
+            val entry = notice(1, "ready").copy(
+                kind = kind,
+                backlogSeconds = 7200.5,
+                message = "2 hours ready to listen",
+            )
+
+            assertEquals("2 hours ready to listen", entry.notificationBody())
+            assertEquals("A Test Serial" to entry.notificationBody(), readyNotificationText(listOf(entry)))
+        }
+    }
+
+    @Test
+    fun `missing or blank server wording falls back to the chapter title`() {
+        for (kind in listOf("chapter", "backlog")) {
+            for (message in listOf(null, "", " \n\t")) {
+                val entry = notice(1, "ready").copy(
+                    kind = kind,
+                    backlogSeconds = 7200.5,
+                    message = message,
+                )
+
+                assertEquals("Chapter 1", entry.notificationBody())
+                assertEquals("A Test Serial" to "Chapter 1", readyNotificationText(listOf(entry)))
+            }
+        }
+    }
+
+    @Test
+    fun `nonblank server wording is preserved verbatim`() {
+        val entry = notice(1, "ready").copy(message = "  Ready for you  ")
+
+        assertEquals("  Ready for you  ", entry.notificationBody())
+        assertEquals("  Ready for you  ", readyNotificationText(listOf(entry))?.second)
     }
 
     @Test
@@ -128,6 +200,81 @@ class ChapterNotificationsTest {
             chapterNotificationsEmptyNote(followsAnything = true),
         )
         assertTrue(chapterNotificationsEmptyNote(followsAnything = false).contains("Follow a serial"))
+    }
+
+    @Test
+    fun `old servers default to chapter notices with no backlog snapshot or message`() {
+        val entry = decode(
+            """
+            {
+              "notifications": [{
+                "id": 1,
+                "state": "ready",
+                "dismissible": true,
+                "playable": true,
+                "fiction": {"id": 7, "title": "A Test Serial"},
+                "chapter": {"id": 101, "title": "Chapter 1"}
+              }]
+            }
+            """.trimIndent(),
+        ).notifications.single()
+
+        assertEquals("chapter", entry.kind)
+        assertNull(entry.backlogSeconds)
+        assertNull(entry.message)
+        assertEquals("Chapter 1", entry.notificationBody())
+        assertTrue(entry.playable)
+        assertTrue(entry.dismissible)
+    }
+
+    @Test
+    fun `backlog payload decodes its fractional snapshot and server wording without deriving actions`() {
+        val entry = decode(
+            """
+            {
+              "notifications": [{
+                "id": 2,
+                "kind": "backlog",
+                "state": "ready",
+                "backlog_seconds": 7200.5,
+                "message": "2 hours ready to listen",
+                "dismissible": false,
+                "playable": false,
+                "fiction": {"id": 7, "title": "A Test Serial"},
+                "chapter": {"id": 101, "title": "Chapter 1"}
+              }]
+            }
+            """.trimIndent(),
+        ).notifications.single()
+
+        assertEquals("backlog", entry.kind)
+        assertEquals(7200.5, entry.backlogSeconds)
+        assertEquals("2 hours ready to listen", entry.message)
+        assertEquals("A Test Serial" to "2 hours ready to listen", readyNotificationText(listOf(entry)))
+        assertFalse(entry.playable)
+        assertFalse(entry.dismissible)
+    }
+
+    @Test
+    fun `optional notification fields accept null or omission for either kind`() {
+        for (kind in listOf("chapter", "backlog")) {
+            val entries = decode(
+                """
+                {
+                  "notifications": [
+                    {"id": 1, "kind": "$kind", "backlog_seconds": null, "message": null},
+                    {"id": 2, "kind": "$kind"}
+                  ]
+                }
+                """.trimIndent(),
+            ).notifications
+
+            for (entry in entries) {
+                assertEquals(kind, entry.kind)
+                assertNull(entry.backlogSeconds)
+                assertNull(entry.message)
+            }
+        }
     }
 
     @Test

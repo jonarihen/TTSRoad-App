@@ -487,6 +487,10 @@ class TtsRoadRepository(
             detailMessage(e.response()?.errorBody()?.string())
                 ?: "The server would not load chapter notification settings.",
         )
+    } catch (_: IOException) {
+        FictionNotificationSettingsResult.Refused(
+            "Could not reach the server. Check your connection and try again.",
+        )
     }
 
     /**

@@ -2,6 +2,30 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.18.0 — 2026-09-24
+
+### Added
+
+- Followed books now show their notification mode beside **Following**: a red **Armed** backlog
+  alarm, a gray **Waiting** alarm, **Off**, or **Every chapter**. Waiting means listening must take
+  the backlog below the threshold to re-arm; it does not claim an alert was sent. Servers without
+  the new status field show **Status unavailable** instead of a guessed state. (TTSRoad#342)
+- Notification settings refresh on opening, returning to the foreground, chapter updates and every
+  minute while the book is visible. Saved status stays separate from unsaved edits, failed refreshes
+  identify the last known state, and the scrollable settings sheet keeps retry and save reachable.
+- Backlog notices are labelled **Backlog alert** in New chapters and use the server's ready-to-listen
+  message in both the inbox and Android notifications. Existing alerts remain silent on cold start.
+
+### Fixed
+
+- The backlog amount now correctly says **Ready to listen**, including an empty backlog. It is the
+  amount of ready, unplayed audio at 1×, not a countdown until a notification.
+- Failed initial settings loads no longer allow saving invented defaults. Refreshes cannot overwrite
+  unsaved edits or a newer save, and invalid hidden hours do not block switching notifications off.
+- Read-along highlights stay stable between timing cues and correctly map Unicode ranges, including
+  emoji and combining characters. Playback position follows a stable clock between controller
+  updates. (TTSRoad-App#255)
+
 ## 0.17.0 — 2026-09-23
 
 ### Added

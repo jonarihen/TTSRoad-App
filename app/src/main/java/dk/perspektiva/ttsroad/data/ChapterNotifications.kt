@@ -34,6 +34,9 @@ enum class ChapterNotificationState(val wire: String) {
 val ChapterNotificationEntry.presentation: ChapterNotificationState
     get() = ChapterNotificationState.fromWire(state)
 
+fun ChapterNotificationEntry.notificationBody(): String =
+    message?.takeIf { it.isNotBlank() } ?: chapter.title
+
 /** "Chapter 412 · converting 62%", or what happened instead. */
 fun ChapterNotificationEntry.detailLabel(): String {
     val chapterLabel = chapter.chapterNumber?.let { "Chapter ${chapterNumberText(it)}" } ?: chapter.title
@@ -77,7 +80,7 @@ fun readyNotificationText(fresh: List<ChapterNotificationEntry>): Pair<String, S
     fresh.isEmpty() -> null
     fresh.size == 1 -> {
         val item = fresh.single()
-        item.fiction.title to "${item.chapter.title} is ready to listen"
+        item.fiction.title to item.notificationBody()
     }
     else -> {
         val serials = fresh.map { it.fiction.title }.distinct()
