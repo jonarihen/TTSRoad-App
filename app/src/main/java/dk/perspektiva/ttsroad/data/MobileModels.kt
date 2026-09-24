@@ -1645,6 +1645,9 @@ data class ChapterNotificationEntry(
     @param:Json(name = "ready_at") val readyAt: String? = null,
     val fiction: ChapterNotificationFiction = ChapterNotificationFiction(),
     val chapter: ChapterNotificationChapter = ChapterNotificationChapter(),
+    val kind: String = "chapter",
+    @param:Json(name = "backlog_seconds") val backlogSeconds: Double? = null,
+    val message: String? = null,
 )
 
 data class ChapterNotificationFiction(

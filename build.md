@@ -617,6 +617,42 @@ Revokes every **other** mobile session, deliberately keeping the token used for 
 one server-side call rather than a client-side loop of deletes precisely so the client cannot get
 the "which one am I" question wrong.
 
+### Per-fiction notification settings and backlog alarms
+
+Gate these bearer-authenticated routes on `backlog_notifications` and following the fiction:
+
+```http
+GET /api/fictions/{fiction_id}/notification-settings
+PATCH /api/fictions/{fiction_id}/notification-settings
+```
+
+PATCH accepts only `mode` (`every`, `off`, or `backlog`) and `backlog_hours` (finite, greater than
+zero and at most 1000). Send both fields; omitted hours default to 2 rather than preserving the old
+threshold. GET and PATCH return the saved settings:
+
+```json
+{
+  "mode": "backlog",
+  "backlog_hours": 2.0,
+  "remaining_seconds": 3600.0,
+  "backlog_armed": true
+}
+```
+
+`remaining_seconds` is ready, unplayed audio after saved progress, measured at 1× — never a countdown.
+`backlog_armed` is read-only and authoritative: true means armed, false in backlog mode means waiting
+until listening takes the backlog strictly below the threshold. Waiting does not prove an alert fired:
+changing settings while enough audio already exists establishes that state silently. Dismissing a
+notice does not re-arm the alarm. Changing mode or threshold clears outstanding notices for the book.
+
+Servers predating TTSRoad#342 omit `backlog_armed`; decode it as nullable and show status unavailable,
+not false or a duration-derived guess. Missing follows return 404; expired sessions return 401.
+
+`GET /api/mobile/notifications` adds `kind` (`chapter` or `backlog`), nullable `backlog_seconds` (the
+amount when an alert fired), and nullable `message`. Prefer a nonblank message over the chapter title.
+Backlog alerts arrive directly in `ready` state; announce newly seen ready IDs only after the first
+successful poll. Keep using the server's `playable` and `dismissible` flags for actions.
+
 ## Existing API Access
 
 Bearer tokens are also accepted by the existing protected `/api/...` endpoints through backend middleware. That means the Android app can optionally use existing endpoints such as:

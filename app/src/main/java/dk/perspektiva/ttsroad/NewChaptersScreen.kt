@@ -29,9 +29,11 @@ import dk.perspektiva.ttsroad.data.ChapterNotificationState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.chapterNotificationsEmptyNote
 import dk.perspektiva.ttsroad.data.detailLabel
+import dk.perspektiva.ttsroad.data.notificationBody
 import dk.perspektiva.ttsroad.data.presentation
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
+import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
@@ -179,6 +181,22 @@ private fun NewChapterRow(
                 style = MaterialTheme.typography.titleSmall,
                 color = AarisColor.Ink,
             )
+            if (entry.kind == "backlog") {
+                AarisTag("Backlog alert", color = AarisColor.Accent)
+            }
+            val body = entry.notificationBody()
+            Text(
+                body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AarisColor.Ink,
+            )
+            if (body != entry.chapter.title) {
+                Text(
+                    entry.chapter.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AarisColor.Muted,
+                )
+            }
             MetaText(
                 entry.detailLabel(),
                 color = when (entry.presentation) {

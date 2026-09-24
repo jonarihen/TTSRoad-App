@@ -97,6 +97,133 @@ class NewChaptersUiTest {
     }
 
     @Test
+    fun `backlog row shows server wording and alert tag while retaining chapter context and actions`() {
+        val entry = ChapterNotificationEntry(
+            id = 10,
+            kind = "backlog",
+            backlogSeconds = 7200.5,
+            message = "2 hours ready to listen",
+            state = "ready",
+            playable = true,
+            dismissible = true,
+            fiction = ChapterNotificationFiction(id = 7, title = "Test Serial"),
+            chapter = ChapterNotificationChapter(id = 101, title = "The Arrival", chapterNumber = 1.0),
+        )
+        var played: ChapterNotificationEntry? = null
+        var opened: ChapterNotificationEntry? = null
+        showEntry(entry, onPlay = { played = it }, onOpenFiction = { opened = it })
+
+        compose.onNodeWithText("Test Serial").assertIsDisplayed()
+        compose.onNodeWithText("BACKLOG ALERT").assertIsDisplayed()
+        compose.onNodeWithText("2 hours ready to listen").assertIsDisplayed()
+        compose.onNodeWithText("The Arrival").assertIsDisplayed()
+        compose.onNodeWithText("CHAPTER 1  ·  READY TO LISTEN").assertIsDisplayed()
+        compose.onNodeWithText("PLAY").assertIsDisplayed().assertIsEnabled().performClick()
+        assertEquals(entry, played)
+        compose.onNodeWithText("DISMISS").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("Test Serial").performClick()
+        assertEquals(entry, opened)
+    }
+
+    @Test
+    fun `chapter row also prefers server wording without a backlog tag`() {
+        val entry = ChapterNotificationEntry(
+            id = 10,
+            message = "A new chapter is ready",
+            state = "ready",
+            fiction = ChapterNotificationFiction(title = "Test Serial"),
+            chapter = ChapterNotificationChapter(title = "The Arrival", chapterNumber = 1.0),
+        )
+        showEntry(entry)
+
+        compose.onNodeWithText("A new chapter is ready").assertIsDisplayed()
+        compose.onNodeWithText("The Arrival").assertIsDisplayed()
+        compose.onNodeWithText("BACKLOG ALERT").assertDoesNotExist()
+    }
+
+    @Test
+    fun `rows fall back to chapter title when server wording is absent or blank`() {
+        val entry = ChapterNotificationEntry(
+            id = 10,
+            state = "ready",
+            fiction = ChapterNotificationFiction(title = "Test Serial"),
+            chapter = ChapterNotificationChapter(title = "The Arrival", chapterNumber = 1.0),
+        )
+        val state = showEntry(entry)
+
+        for (kind in listOf("chapter", "backlog")) {
+            for (message in listOf(null, "", " \n\t")) {
+                compose.runOnIdle {
+                    state.notifications = listOf(entry.copy(kind = kind, message = message))
+                }
+                compose.onNodeWithText("Test Serial").assertIsDisplayed()
+                compose.onNodeWithText("The Arrival").assertIsDisplayed()
+                compose.onNodeWithText("CHAPTER 1  ·  READY TO LISTEN").assertIsDisplayed()
+                if (kind == "backlog") {
+                    compose.onNodeWithText("BACKLOG ALERT").assertIsDisplayed()
+                } else {
+                    compose.onNodeWithText("BACKLOG ALERT").assertDoesNotExist()
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `backlog actions follow server flags independently of ready state`() {
+        val entry = ChapterNotificationEntry(
+            id = 10,
+            kind = "backlog",
+            message = "2 hours ready to listen",
+            state = "ready",
+            playable = false,
+            dismissible = false,
+            fiction = ChapterNotificationFiction(title = "Test Serial"),
+            chapter = ChapterNotificationChapter(title = "The Arrival"),
+        )
+        val state = showEntry(entry)
+
+        compose.onNodeWithText("2 hours ready to listen").assertIsDisplayed()
+        compose.onNodeWithText("PLAY").assertDoesNotExist()
+        compose.onNodeWithText("DISMISS").assertDoesNotExist()
+
+        compose.runOnIdle {
+            state.notifications = listOf(entry.copy(playable = true))
+        }
+        compose.onNodeWithText("PLAY").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("DISMISS").assertDoesNotExist()
+
+        compose.runOnIdle {
+            state.notifications = listOf(entry.copy(dismissible = true))
+        }
+        compose.onNodeWithText("PLAY").assertDoesNotExist()
+        compose.onNodeWithText("DISMISS").assertIsDisplayed().assertIsEnabled()
+    }
+
+    private fun showEntry(
+        entry: ChapterNotificationEntry,
+        onPlay: (ChapterNotificationEntry) -> Unit = {},
+        onOpenFiction: (ChapterNotificationEntry) -> Unit = {},
+    ): NewChaptersState {
+        val state = NewChaptersState().apply {
+            isLoading = false
+            loadedOnce = true
+            notifications = listOf(entry)
+        }
+        compose.setContent {
+            TtsRoadTheme {
+                NewChaptersScreen(
+                    padding = PaddingValues(0.dp),
+                    state = state,
+                    repository = fakeRepo,
+                    onPlay = onPlay,
+                    onOpenFiction = onOpenFiction,
+                )
+            }
+        }
+        return state
+    }
+
+    @Test
     fun `play and dismiss buttons are 48dp targets and honour busy state`() {
         var played = 0
         val entry = ChapterNotificationEntry(

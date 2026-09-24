@@ -182,14 +182,7 @@ import dk.perspektiva.ttsroad.data.FictionAddResult
 import dk.perspektiva.ttsroad.data.FictionEditResult
 import dk.perspektiva.ttsroad.data.FictionMetadataDraft
 import dk.perspektiva.ttsroad.data.FictionNotificationSettings
-import dk.perspektiva.ttsroad.data.FictionNotificationSettingsRequest
-import dk.perspektiva.ttsroad.data.FictionNotificationSettingsResult
-import dk.perspektiva.ttsroad.data.NotificationModeBacklog
-import dk.perspektiva.ttsroad.data.NotificationModeEvery
-import dk.perspektiva.ttsroad.data.NotificationModeOff
 import dk.perspektiva.ttsroad.data.notificationModeSummary
-import dk.perspektiva.ttsroad.data.remainingBacklogLabel
-import dk.perspektiva.ttsroad.data.validBacklogHours
 import dk.perspektiva.ttsroad.data.FictionSort
 import dk.perspektiva.ttsroad.data.changedFieldLabels
 import dk.perspektiva.ttsroad.data.formatDiscardBody
@@ -981,6 +974,8 @@ private fun MainScaffold(
                 is AppScreen.Fiction -> FictionScreen(
                     padding = padding,
                     fiction = screen.fiction,
+                    session = session,
+                    onNotificationSettingsSaved = { newChapters.refreshRequest++ },
                     repository = repository,
                     playbackController = playbackController,
                     isAdmin = session.isAdmin,
@@ -1354,6 +1349,8 @@ private fun RefreshablePane(
 private fun FictionScreen(
     padding: PaddingValues,
     fiction: FictionSummary,
+    session: SessionState,
+    onNotificationSettingsSaved: () -> Unit,
     repository: TtsRoadRepository,
     playbackController: PlaybackController,
     isAdmin: Boolean = false,
@@ -1428,8 +1425,15 @@ private fun FictionScreen(
     var isMaintaining by remember(fiction.id) { mutableStateOf(false) }
     var showMaintenance by remember(fiction.id) { mutableStateOf(false) }
     var showPollScope by remember(fiction.id) { mutableStateOf(false) }
-    var showNotificationSettings by remember(fiction.id) { mutableStateOf(false) }
-    var notificationSettings by remember(fiction.id) { mutableStateOf<FictionNotificationSettings?>(null) }
+    val notificationsAvailable = capabilities.backlogNotifications && isFollowing
+    val notificationState = rememberFictionNotificationSettings(
+        repository = repository,
+        fictionId = fiction.id,
+        session = session,
+        available = notificationsAvailable,
+        refreshKey = chapterState.value,
+    )
+    var showNotificationSettings by remember(notificationState) { mutableStateOf(false) }
     var maintenanceNote by remember(fiction.id) { mutableStateOf<String?>(null) }
     val ebookExportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/epub+zip"),
@@ -1626,6 +1630,14 @@ private fun FictionScreen(
                             },
                             isFollowing = isFollowing,
                             isFollowBusy = isFollowBusy,
+                            notificationSettings = notificationState.settings,
+                            notificationStatusStale = notificationState.stale,
+                            notificationStatusLoading = notificationState.loading,
+                            onNotificationSettings = if (notificationsAvailable) {
+                                { showNotificationSettings = true }
+                            } else {
+                                null
+                            },
                             // Hidden entirely on a server whose library is still the whole shared
                             // list: there is no shelf for a follow to mean anything against.
                             onSetFollowing = if (capabilities.follows) {
@@ -2004,7 +2016,8 @@ private fun FictionScreen(
                     } else {
                         null
                     },
-                    notificationSummary = notificationModeSummary(notificationSettings),
+                    notificationSummary = notificationModeSummary(notificationState.settings) +
+                        if (notificationState.stale) " · Last known state" else "",
                     onNotificationSettings = if (capabilities.backlogNotifications && isFollowing) {
                         {
                             showMaintenance = false
@@ -2061,16 +2074,14 @@ private fun FictionScreen(
                 )
             }
 
-            if (showNotificationSettings) {
+            if (showNotificationSettings && notificationsAvailable) {
                 FictionNotificationSettingsSheet(
-                    fictionId = fiction.id,
-                    repository = repository,
-                    initial = notificationSettings,
+                    state = notificationState,
                     onDismiss = { showNotificationSettings = false },
                     onSaved = {
-                        notificationSettings = it
                         showNotificationSettings = false
                         maintenanceNote = "Chapter notification settings saved."
+                        onNotificationSettingsSaved()
                     },
                 )
             }
@@ -7861,6 +7872,10 @@ internal fun FictionDetailHeader(
     onSetFollowing: ((Boolean) -> Unit)? = null,
     isFollowing: Boolean = true,
     isFollowBusy: Boolean = false,
+    notificationSettings: FictionNotificationSettings? = null,
+    notificationStatusStale: Boolean = false,
+    notificationStatusLoading: Boolean = false,
+    onNotificationSettings: (() -> Unit)? = null,
     listeningSummary: FictionListeningSummary = FictionListeningSummary(),
     playbackSpeed: Float = 1f,
     /**
@@ -7942,7 +7957,9 @@ internal fun FictionDetailHeader(
         // side by side on a normal phone and wrap rather than truncate on a narrow one, which is
         // the failure #99 already paid for elsewhere. The sentences that used to trail each of
         // these as its own paragraph are still below — they explain the state, not the button.
-        if (onSetFollowing != null || onDownloadNext != null || onMore != null) {
+        if (onSetFollowing != null || onDownloadNext != null || onMore != null ||
+            (isFollowing && onNotificationSettings != null)
+        ) {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -7964,6 +7981,14 @@ internal fun FictionDetailHeader(
                             },
                         )
                     }
+                }
+                if (isFollowing && onNotificationSettings != null) {
+                    FictionNotificationStatusButton(
+                        settings = notificationSettings,
+                        stale = notificationStatusStale,
+                        loading = notificationStatusLoading,
+                        onClick = onNotificationSettings,
+                    )
                 }
                 onDownloadNext?.let { download ->
                     OutlinedButton(
@@ -8220,121 +8245,6 @@ private fun shareText(context: Context, text: String, title: String) {
  * Every row states what it will do and what it costs. None of these can be undone, and two are
  * indistinguishable from the outside until they finish.
  */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun FictionNotificationSettingsSheet(
-    fictionId: Int,
-    repository: TtsRoadRepository,
-    initial: FictionNotificationSettings?,
-    onDismiss: () -> Unit,
-    onSaved: (FictionNotificationSettings) -> Unit,
-) {
-    var settings by remember(fictionId) { mutableStateOf(initial) }
-    var mode by remember(fictionId) { mutableStateOf(initial?.mode ?: NotificationModeEvery) }
-    var hours by remember(fictionId) { mutableStateOf((initial?.backlogHours ?: 2.0).toString()) }
-    var loading by remember(fictionId) { mutableStateOf(initial == null) }
-    var saving by remember(fictionId) { mutableStateOf(false) }
-    var error by remember(fictionId) { mutableStateOf<String?>(null) }
-    val validHours = validBacklogHours(hours)
-
-    LaunchedEffect(fictionId) {
-        if (settings != null) return@LaunchedEffect
-        when (val result = repository.fictionNotificationSettings(fictionId)) {
-            is FictionNotificationSettingsResult.Loaded -> {
-                settings = result.settings
-                mode = result.settings.mode
-                hours = result.settings.backlogHours.toString()
-            }
-            is FictionNotificationSettingsResult.Refused -> error = result.message
-            FictionNotificationSettingsResult.Unsupported -> error = "This server cannot configure chapter notifications."
-        }
-        loading = false
-    }
-
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
-        Column(
-            modifier = Modifier.padding(horizontal = 20.dp).navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            SectionHeader(kicker = "NOTICE", title = "Chapter notifications")
-            when {
-                loading -> CircularProgressIndicator(color = AarisColor.Accent)
-                else -> {
-                    AarisChoiceRow(
-                        options = listOf(NotificationModeEvery, NotificationModeOff, NotificationModeBacklog),
-                        selected = mode,
-                        label = {
-                            when (it) {
-                                NotificationModeEvery -> "Every chapter"
-                                NotificationModeOff -> "Off"
-                                else -> "Wait for a backlog"
-                            }
-                        },
-                        onSelect = { mode = it },
-                        enabled = !saving,
-                    )
-                    if (mode == NotificationModeBacklog) {
-                        AarisChoiceRow(
-                            options = listOf(1.0, 2.0, 5.0),
-                            selected = validHours ?: Double.NaN,
-                            label = { "${it.toInt()}h" },
-                            onSelect = { hours = it.toInt().toString() },
-                            enabled = !saving,
-                        )
-                        OutlinedTextField(
-                            value = hours,
-                            onValueChange = { hours = it },
-                            label = { Text("Custom hours") },
-                            supportingText = {
-                                Text(if (hours.isNotBlank() && validHours == null) "Enter a number over 0 and up to 1000" else "0 < hours ≤ 1000")
-                            },
-                            isError = hours.isNotBlank() && validHours == null,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true,
-                            enabled = !saving,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        settings?.remainingSeconds?.let { remainingBacklogLabel(it) }?.let {
-                            MetaText(text = it, color = AarisColor.Accent)
-                        }
-                    }
-                    MetaText(
-                        text = "Changing this setting clears this book's existing chapter notices.",
-                        color = AarisColor.Dim,
-                    )
-                    error?.let { Text(text = it, color = MaterialTheme.colorScheme.error) }
-                    Button(
-                        onClick = {
-                            saving = true
-                            error = null
-                        },
-                        enabled = !saving && (mode != NotificationModeBacklog || validHours != null),
-                        shape = RectangleShape,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(if (saving) "SAVING…" else "SAVE") }
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-    }
-
-    LaunchedEffect(saving) {
-        if (!saving) return@LaunchedEffect
-        val backlogHours = if (mode == NotificationModeBacklog) validHours ?: return@LaunchedEffect else settings?.backlogHours ?: 2.0
-        when (
-            val result = repository.updateFictionNotificationSettings(
-                fictionId,
-                FictionNotificationSettingsRequest(mode, backlogHours),
-            )
-        ) {
-            is FictionNotificationSettingsResult.Loaded -> onSaved(result.settings)
-            is FictionNotificationSettingsResult.Refused -> error = result.message
-            FictionNotificationSettingsResult.Unsupported -> error = "This server cannot configure chapter notifications."
-        }
-        saving = false
-    }
-}
-
 internal fun ebookExportFileName(fiction: FictionSummary): String {
     val base = fiction.slug?.takeIf { it.isNotBlank() } ?: fiction.title
     val safe = base.trim()
