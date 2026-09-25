@@ -88,6 +88,38 @@ class TtsRoadRepositoryAuthTest {
     }
 
     @Test
+    fun `login on another server omits a token republished after login clears it`() = runTest {
+        val repository = TtsRoadRepository(loggedInStore())
+        server.enqueue(MockResponse().setBody("""{"api_version":1,"fictions":[]}"""))
+        repository.library()
+        assertEquals("Bearer stale-token", server.takeRequest().getHeader("Authorization"))
+
+        MockWebServer().use { otherServer ->
+            otherServer.start()
+            otherServer.enqueue(
+                MockResponse().setBody(
+                    """{"token":"fresh","token_type":"bearer","user":{"id":1,"username":"admin"}}""",
+                ),
+            )
+            repository.authHeader = "Bearer stale-token"
+            val api = TtsRoadRepository::class.java.getDeclaredMethod("api", String::class.java)
+                .apply { isAccessible = true }
+                .invoke(repository, otherServer.url("/").toString()) as TtsRoadApi
+
+            api.login(LoginRequest(username = "admin", password = "correct", deviceName = "Pixel"))
+
+            val request = otherServer.takeRequest()
+            assertEquals("/api/mobile/login", request.path)
+            assertNull(request.getHeader("Authorization"))
+            assertNull(request.getHeader(NoAuthHeader))
+        }
+
+        server.enqueue(MockResponse().setBody("""{"api_version":1,"fictions":[]}"""))
+        repository.library()
+        assertEquals("Bearer stale-token", server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
     fun `a wrong password still reports a plain failure`() = runTest {
         val store = FakeSessionStore(SessionState())
         val repository = TtsRoadRepository(store)
