@@ -300,4 +300,45 @@ class ReadAlongFileStoreTest {
         // the evictable prefix would be deleted by the very bound it is meant to be exempt from.
         assertFalse("pinned-readalong_".startsWith("readalong_"))
     }
+
+    @Test
+    fun `touching a chapter makes it the most recently used`() {
+        var now = 1_000_000L
+        val store = ReadAlongFileStore(folder.root, maxEntries = 2, clock = { now })
+        store.write(chapterId = 1, entry = entry("One."))
+        now += 10_000
+        store.write(chapterId = 2, entry = entry("Two."))
+        now += 10_000
+        store.touch(chapterId = 1)
+        now += 10_000
+        store.write(chapterId = 3, entry = entry("Three."))
+
+        assertNotNull(store.read(chapterId = 1))
+        assertNull(store.read(chapterId = 2))
+        assertNotNull(store.read(chapterId = 3))
+    }
+
+    @Test
+    fun `touching a chapter that is not held creates nothing`() {
+        store().touch(chapterId = 10)
+
+        assertNull(store().read(chapterId = 10))
+        assertEquals(0, store().size())
+    }
+
+    @Test
+    fun `removing a chapter drops both the browse and the pinned copy`() {
+        val store = store()
+        store.write(chapterId = 10, entry = entry("Browse."))
+        store.pin(chapterId = 11, entry = entry("Pinned."))
+        store.write(chapterId = 11, entry = entry("Pinned, revalidated."))
+
+        store.remove(chapterId = 10)
+        store.remove(chapterId = 11)
+
+        assertNull(store.read(chapterId = 10))
+        assertNull(store.read(chapterId = 11))
+        assertFalse(store.isPinned(chapterId = 11))
+    }
+
 }

@@ -773,8 +773,15 @@ class TtsRoadRepository(
                 // arrive without a document to answer it with.
                 val response = api.readAlong(chapterId, cached?.etag)
                 when {
-                    response.code() == 304 -> readerAccess(session, generation) { cached?.document }
-                    response.code() == 404 -> null
+                    response.code() == 304 -> readerAccess(session, generation) {
+                        cached?.also { readAlongStore.touch(chapterId) }?.document
+                    }
+                    // Authoritative: retire every copy so a later offline fallback cannot bring it back.
+                    response.code() == 404 -> readerAccess(session, generation) {
+                        synchronized(readAlongCache) { readAlongCache.remove(chapterId) }
+                        readAlongStore.remove(chapterId)
+                        null
+                    }
                     response.isSuccessful -> response.body()?.let { body ->
                         val document = ReadAlongDocument.from(body)
                         val etag = response.headers()["ETag"]

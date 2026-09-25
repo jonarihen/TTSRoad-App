@@ -17,6 +17,22 @@ interface ReadAlongStore {
     fun clear()
 
     /**
+     * Record that [chapterId] was just used without rewriting it.
+     *
+     * A 304 revalidation proves the held copy is current, so it is the most recently used chapter
+     * even though no bytes changed. Without this the browse cache would evict it as if unread.
+     */
+    fun touch(chapterId: Int)
+
+    /**
+     * Drop every copy of [chapterId], browse and pinned alike.
+     *
+     * For an authoritative "this document does not exist": a later transient failure must not be
+     * able to resurrect text the server has already said is gone.
+     */
+    fun remove(chapterId: Int)
+
+    /**
      * Keep [chapterId]'s document until it is explicitly released, exempt from eviction.
      *
      * For a chapter the user downloaded on purpose. The browse cache is bounded and evicts by age,
@@ -37,6 +53,8 @@ interface ReadAlongStore {
         override fun read(chapterId: Int): CachedReadAlong? = null
         override fun write(chapterId: Int, entry: CachedReadAlong) = Unit
         override fun clear() = Unit
+        override fun touch(chapterId: Int) = Unit
+        override fun remove(chapterId: Int) = Unit
         override fun pin(chapterId: Int, entry: CachedReadAlong) = Unit
         override fun unpin(chapterId: Int) = Unit
         override fun isPinned(chapterId: Int): Boolean = false
@@ -57,6 +75,7 @@ interface ReadAlongStore {
 class ReadAlongFileStore(
     private val directory: File,
     private val maxEntries: Int = DefaultMaxEntries,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : ReadAlongStore {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val adapter = moshi.adapter(CachedReadAlong::class.java)
@@ -80,9 +99,24 @@ class ReadAlongFileStore(
                 pinnedFileFor(chapterId).writeText(adapter.toJson(entry))
                 return
             }
-            fileFor(chapterId).writeText(adapter.toJson(entry))
+            fileFor(chapterId).also { file ->
+                file.writeText(adapter.toJson(entry))
+                file.setLastModified(clock())
+            }
             evictOldest()
         }
+    }
+
+    override fun touch(chapterId: Int) {
+        runCatching {
+            val file = fileFor(chapterId)
+            if (file.isFile) file.setLastModified(clock())
+        }
+    }
+
+    override fun remove(chapterId: Int) {
+        runCatching { fileFor(chapterId).delete() }
+        runCatching { pinnedFileFor(chapterId).delete() }
     }
 
     override fun pin(chapterId: Int, entry: CachedReadAlong) {
@@ -118,8 +152,8 @@ class ReadAlongFileStore(
     fun pinnedSize(): Int = pinnedFiles().size
 
     /**
-     * Drop the least recently written chapters. Last-modified is a good enough recency signal here:
-     * re-reading a chapter revalidates it, which rewrites the file.
+     * Drop the least recently used chapters. Last-modified is the recency signal: a fresh body
+     * rewrites the file and a 304 revalidation [touch]es it.
      */
     private fun evictOldest() {
         val files = cachedFiles()
