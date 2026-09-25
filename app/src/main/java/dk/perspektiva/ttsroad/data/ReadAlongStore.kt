@@ -25,6 +25,15 @@ interface ReadAlongStore {
     fun touch(chapterId: Int)
 
     /**
+     * Whether a copy of [chapterId] is persisted here, browse or pinned.
+     *
+     * The in-memory cache outlives disk eviction, so a chapter can still be revalidated from memory
+     * after its file was dropped. A 304 cannot rewrite a file that is gone; the caller asks this to
+     * decide whether to revalidate or refetch the body.
+     */
+    fun holds(chapterId: Int): Boolean
+
+    /**
      * Drop every copy of [chapterId], browse and pinned alike.
      *
      * For an authoritative "this document does not exist": a later transient failure must not be
@@ -54,6 +63,7 @@ interface ReadAlongStore {
         override fun write(chapterId: Int, entry: CachedReadAlong) = Unit
         override fun clear() = Unit
         override fun touch(chapterId: Int) = Unit
+        override fun holds(chapterId: Int): Boolean = true
         override fun remove(chapterId: Int) = Unit
         override fun pin(chapterId: Int, entry: CachedReadAlong) = Unit
         override fun unpin(chapterId: Int) = Unit
@@ -113,6 +123,9 @@ class ReadAlongFileStore(
             if (file.isFile) file.setLastModified(clock())
         }
     }
+
+    override fun holds(chapterId: Int): Boolean =
+        fileFor(chapterId).isFile || pinnedFileFor(chapterId).isFile
 
     override fun remove(chapterId: Int) {
         runCatching { fileFor(chapterId).delete() }

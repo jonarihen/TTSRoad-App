@@ -341,4 +341,16 @@ class ReadAlongFileStoreTest {
         assertFalse(store.isPinned(chapterId = 11))
     }
 
+
+    @Test
+    fun `holds reports a browse or pinned copy and nothing else`() {
+        val store = store()
+        store.write(chapterId = 10, entry = entry("Browse."))
+        store.pin(chapterId = 11, entry = entry("Pinned."))
+
+        assertTrue(store.holds(chapterId = 10))
+        assertTrue(store.holds(chapterId = 11))
+        assertFalse(store.holds(chapterId = 12))
+    }
+
 }

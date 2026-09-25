@@ -99,6 +99,13 @@ private class FakeReadAlongStore(
         entries -= chapterId
     }
 
+    override fun holds(chapterId: Int): Boolean = chapterId in entries
+
+    /** Drop the file behind the repository's back, the way browse-cache eviction does. */
+    fun evict(chapterId: Int) {
+        entries -= chapterId
+    }
+
     fun seed(chapterId: Int, entry: CachedReadAlong) {
         entries[chapterId] = entry
     }
@@ -695,6 +702,22 @@ class ReadAlongRepositoryTest {
 
         assertFalse(disk.isPinned(10))
         assertNull(disk.read(10))
+    }
+
+    @Test
+    fun `a chapter evicted from disk but still in memory is refetched and persisted again`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        repository.readAlong(chapterId = 10)
+        disk.evict(10)
+
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        assertNotNull(repository.readAlong(chapterId = 10))
+
+        server.takeRequest()
+        assertNull("a 304 could not restore the file, so ask for the body", server.takeRequest().getHeader("If-None-Match"))
+        assertNotNull(disk.read(10))
     }
 
     @Test
