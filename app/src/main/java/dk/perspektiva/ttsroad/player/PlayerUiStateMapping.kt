@@ -13,17 +13,22 @@ import androidx.media3.common.Player
  * and is where the decisions actually are.
  */
 
-/**
- * Identity of the queue's *shape*, used to skip rebuilding an unchanged list on every tick.
- *
- * Count plus the first and last media ids: a queue only changes here by being replaced wholesale
- * (`setMediaItems`), so those three together move whenever the list does. Position and index are
- * deliberately absent — they change every second, and including them would defeat the cache.
- */
-internal fun queueKeyOf(player: Player): String {
-    val count = player.mediaItemCount
-    if (count <= 0) return "0"
-    return "$count:${player.getMediaItemAt(0).mediaId}:${player.getMediaItemAt(count - 1).mediaId}"
+internal class QueueSnapshot {
+    private var cached: List<QueueItem>? = null
+
+    fun onEvents(events: Player.Events) {
+        if (events.contains(Player.EVENT_TIMELINE_CHANGED) ||
+            events.contains(Player.EVENT_MEDIA_METADATA_CHANGED)
+        ) {
+            invalidate()
+        }
+    }
+
+    fun invalidate() {
+        cached = null
+    }
+
+    fun queueOf(player: Player): List<QueueItem> = cached ?: buildQueue(player).also { cached = it }
 }
 
 /**
@@ -48,7 +53,7 @@ internal fun buildQueue(player: Player): List<QueueItem> {
 /**
  * Map the player's current state onto the UI state, given an already-resolved [queue].
  *
- * [queue] is passed in rather than derived so the caller can reuse a cached list; see [queueKeyOf].
+ * [queue] is passed in rather than derived so the caller can reuse a cached list.
  */
 internal fun playerUiStateOf(player: Player, queue: List<QueueItem>): PlayerUiState {
     val metadata = player.currentMediaItem?.mediaMetadata

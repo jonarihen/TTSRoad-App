@@ -1,13 +1,17 @@
 package dk.perspektiva.ttsroad.player
 
+import android.os.Looper
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
@@ -112,20 +116,64 @@ class PlayerUiStateMappingTest {
     }
 
     @Test
-    fun `the queue key changes when the queue does, and not when only position does`() {
-        // This is what stops a 246-chapter list being rebuilt every second for a whole night.
-        val playlist = listOf(FakePlayer.item("chapter:1"), FakePlayer.item("chapter:2"))
-        val atStart = queueKeyOf(FakePlayer(playlist, currentIndex = 0, positionMs = 0L))
-        val laterSameQueue = queueKeyOf(FakePlayer(playlist, currentIndex = 1, positionMs = 90_000L))
-        val differentQueue = queueKeyOf(
-            FakePlayer(listOf(FakePlayer.item("chapter:9"), FakePlayer.item("chapter:10"))),
-        )
-        val shorterQueue = queueKeyOf(FakePlayer(listOf(FakePlayer.item("chapter:1"))))
+    fun `replacing a middle chapter refreshes published queue rows`() {
+        val first = FakePlayer.item("chapter:1", "One")
+        val last = FakePlayer.item("chapter:3", "Three")
+        val player = FakePlayer(listOf(first, FakePlayer.item("chapter:2", "Two"), last))
+        val snapshot = QueueSnapshot()
+        var state = playerUiStateOf(player, snapshot.queueOf(player))
+        player.addListener(object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                snapshot.onEvents(events)
+                state = playerUiStateOf(player, snapshot.queueOf(player))
+            }
+        })
 
-        assertEquals(atStart, laterSameQueue)
-        assertTrue(atStart != differentQueue)
-        assertTrue(atStart != shorterQueue)
-        assertEquals("0", queueKeyOf(FakePlayer()))
+        player.replacePlaylist(listOf(first, FakePlayer.item("chapter:4", "Four"), last))
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("chapter:1", "chapter:4", "chapter:3"), state.queue.map { it.mediaId })
+        assertEquals(listOf("One", "Four", "Three"), state.queue.map { it.title })
+    }
+
+    @Test
+    fun `changing only a middle chapter title refreshes published queue rows`() {
+        val first = FakePlayer.item("chapter:1", "One")
+        val last = FakePlayer.item("chapter:3", "Three")
+        val player = FakePlayer(listOf(first, FakePlayer.item("chapter:2", "Old"), last))
+        val snapshot = QueueSnapshot()
+        var state = playerUiStateOf(player, snapshot.queueOf(player))
+        player.addListener(object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                snapshot.onEvents(events)
+                state = playerUiStateOf(player, snapshot.queueOf(player))
+            }
+        })
+
+        player.replacePlaylist(listOf(first, FakePlayer.item("chapter:2", "New"), last))
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("One", "New", "Three"), state.queue.map { it.title })
+    }
+
+    @Test
+    fun `position ticks reuse the same queue instance`() {
+        val player = FakePlayer(listOf(FakePlayer.item("chapter:1", "One")))
+        val snapshot = QueueSnapshot()
+        val initial = playerUiStateOf(player, snapshot.queueOf(player))
+        player.addListener(object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                snapshot.onEvents(events)
+            }
+        })
+
+        player.changePosition(10_000L)
+        shadowOf(Looper.getMainLooper()).idle()
+        val later = playerUiStateOf(player, snapshot.queueOf(player))
+
+        assertEquals(10_000L, later.positionMs)
+        assertSame(initial.queue, later.queue)
+        assertSame(later.queue, snapshot.queueOf(player))
     }
 
     @Test

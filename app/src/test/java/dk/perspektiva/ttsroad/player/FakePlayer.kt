@@ -44,6 +44,16 @@ class FakePlayer(
         .setPlayerError(error)
         .build()
 
+    fun replacePlaylist(items: List<MediaItemData>) {
+        playlist = items
+        invalidateState()
+    }
+
+    fun changePosition(position: Long) {
+        positionMs = position
+        invalidateState()
+    }
+
     companion object {
         /**
          * One queue entry. The title goes on the [MediaItem]'s own metadata because that is what

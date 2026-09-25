@@ -110,10 +110,7 @@ class PlaybackController internal constructor(
     private var inFlightFuture: ListenableFuture<MediaController>? = null
     private var tickerJob: Job? = null
 
-    // The queue only changes when a new playlist is set, but publishState runs every second.
-    // Cache the mapped list and rebuild only when the timeline's shape actually changes.
-    private var cachedQueue: List<QueueItem> = emptyList()
-    private var cachedQueueKey: String? = null
+    private val queueSnapshot = QueueSnapshot()
 
     private val listener = object : Player.Listener {
         override fun onPositionDiscontinuity(
@@ -133,6 +130,7 @@ class PlaybackController internal constructor(
         }
 
         override fun onEvents(player: Player, events: Player.Events) {
+            queueSnapshot.onEvents(events)
             updateTicker(player)
             publishState(player)
         }
@@ -161,8 +159,7 @@ class PlaybackController internal constructor(
                         this@PlaybackController.controller = null
                         tickerJob?.cancel()
                         tickerJob = null
-                        cachedQueue = emptyList()
-                        cachedQueueKey = null
+                        queueSnapshot.invalidate()
                         _transientFeedback.value = null
                         _state.value = PlayerUiState()
                     }
@@ -224,6 +221,7 @@ class PlaybackController internal constructor(
             ?.let { (it * 1000).roundToLong() }
             ?: 0L
 
+        queueSnapshot.invalidate()
         controller.setMediaItem(item, startPositionMs)
         controller.prepare()
         controller.play()
@@ -260,6 +258,7 @@ class PlaybackController internal constructor(
             ?: 0L
 
         val controller = controllerOrNull() ?: return
+        queueSnapshot.invalidate()
         controller.setMediaItems(built.map { it.second }, startIndex, startPositionMs)
         controller.prepare()
         controller.play()
@@ -413,6 +412,7 @@ class PlaybackController internal constructor(
         tickerJob = null
         controller.pause()
         controller.clearMediaItems()
+        queueSnapshot.invalidate()
         _state.value = PlayerUiState()
     }
 
@@ -429,6 +429,7 @@ class PlaybackController internal constructor(
         controller?.removeListener(listener)
         controller?.release()
         controller = null
+        queueSnapshot.invalidate()
         _state.value = PlayerUiState()
     }
 
@@ -449,18 +450,7 @@ class PlaybackController internal constructor(
     }
 
     private fun publishState(player: Player) {
-        // The mapping itself lives in PlayerUiStateMapping so it can be tested against a fake
-        // Player; what stays here is the per-controller cache it reads through.
-        val queueKey = queueKeyOf(player)
-        val queue = if (queueKey == cachedQueueKey) {
-            cachedQueue
-        } else {
-            buildQueue(player).also {
-                cachedQueueKey = queueKey
-                cachedQueue = it
-            }
-        }
-        _state.value = playerUiStateOf(player, queue)
+        _state.value = playerUiStateOf(player, queueSnapshot.queueOf(player))
     }
 }
 
