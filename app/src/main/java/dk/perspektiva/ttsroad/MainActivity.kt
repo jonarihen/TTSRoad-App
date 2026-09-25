@@ -426,7 +426,6 @@ private fun TtsRoadApp(
     val playbackController = remember { ServiceLocator.playbackController(context) }
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
-    val session by tokenStore.session.collectAsStateWithLifecycle(initialValue = SessionState())
     var backStack by remember { mutableStateOf(rootBackStack) }
     var openPlayerPending by remember { mutableStateOf(startOnPlayer) }
 
@@ -435,8 +434,9 @@ private fun TtsRoadApp(
         ActivityResultContracts.RequestPermission(),
     ) { }
 
-    LaunchedEffect(session.isLoggedIn) {
-        if (session.isLoggedIn) {
+    val session = resolvedSession(
+        sessionFlow = tokenStore.session,
+        onSignedIn = {
             // Ask what this server supports before the library renders, so optional affordances are
             // gated by the time there is anything to gate. Never throws; an older or unreachable
             // server resolves to the baseline and the ordinary flow continues.
@@ -450,7 +450,8 @@ private fun TtsRoadApp(
             if (needsNotificationPermission(context)) {
                 notificationPermissionLauncher.launch(PostNotificationsPermission)
             }
-        } else {
+        },
+        onSignedOut = {
             backStack = rootBackStack
             playbackController.stop()
             playbackController.release()
@@ -458,8 +459,8 @@ private fun TtsRoadApp(
             // otherwise the next account is shown the previous one's library.
             ServiceLocator.libraryCache(context).clear()
             ServiceLocator.pendingProgress(context).clear()
-        }
-    }
+        },
+    )
 
     LaunchedEffect(openPlayerRequests) {
         openPlayerRequests.collect { openPlayerPending = true }
@@ -467,8 +468,8 @@ private fun TtsRoadApp(
 
     // The stored session loads asynchronously, so a notification tap can land before isLoggedIn is
     // known. Holding the request until then keeps the reset above from swallowing it.
-    LaunchedEffect(openPlayerPending, session.isLoggedIn) {
-        if (openPlayerPending && session.isLoggedIn) {
+    LaunchedEffect(openPlayerPending, session?.isLoggedIn) {
+        if (openPlayerPending && session?.isLoggedIn == true) {
             backStack = backStack.navigateTo(AppScreen.Player)
             openPlayerPending = false
         }
@@ -477,11 +478,11 @@ private fun TtsRoadApp(
     // Quietly check GitHub Releases for a newer build once per launch.
     LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
 
-    CompositionLocalProvider(LocalServerUrl provides session.serverUrl) {
-        if (!session.isLoggedIn) {
-            LoginScreen(repository = repository, session = session)
-        } else {
-            MainScaffold(
+    CompositionLocalProvider(LocalServerUrl provides session?.serverUrl.orEmpty()) {
+        when {
+            session == null -> Unit
+            !session.isLoggedIn -> LoginScreen(repository = repository, session = session)
+            else -> MainScaffold(
                 session = session,
                 screen = backStack.last(),
                 selectedRoot = backStack.activeRoot,
@@ -511,6 +512,24 @@ private fun TtsRoadApp(
         onDownload = { release -> updateManager.downloadAndInstall(context, release) },
         onDismiss = { updateManager.dismiss() },
     )
+}
+
+@Composable
+internal fun resolvedSession(
+    sessionFlow: Flow<SessionState>,
+    onSignedIn: suspend () -> Unit,
+    onSignedOut: () -> Unit,
+): SessionState? {
+    val nullableSessionFlow = remember(sessionFlow) { sessionFlow.map<SessionState, SessionState?> { it } }
+    val session by nullableSessionFlow.collectAsStateWithLifecycle(initialValue = null)
+    LaunchedEffect(session?.isLoggedIn) {
+        when (session?.isLoggedIn) {
+            true -> onSignedIn()
+            false -> onSignedOut()
+            null -> Unit
+        }
+    }
+    return session
 }
 
 @Composable
