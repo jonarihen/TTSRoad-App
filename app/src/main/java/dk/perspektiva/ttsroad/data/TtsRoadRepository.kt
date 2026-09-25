@@ -429,7 +429,11 @@ class TtsRoadRepository(
 
     suspend fun exportEbook(fictionId: Int): EbookExportResult {
         if (!_currentCapabilities.value.ebookExport) return EbookExportResult.Unsupported
-        val response = withAuthorizedApi { it.exportEbook(fictionId) }
+        val response = withAuthorizedApi {
+            it.exportEbook(fictionId).also { response ->
+                if (response.code() == 401) throw HttpException(response)
+            }
+        }
         if (response.isSuccessful) {
             val body = response.body()
                 ?: return EbookExportResult.Refused("The server returned an empty EPUB.")
