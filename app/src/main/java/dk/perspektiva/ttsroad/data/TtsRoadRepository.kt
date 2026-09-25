@@ -217,12 +217,24 @@ class TtsRoadRepository(
     /**
      * The last stats payload seen for each `weeks` value, with the `ETag` that answered it.
      *
-     * Keyed by `weeks` because a different grid size will not answer the previous `ETag` — the
-     * server folds it into the revision. In memory only: these are lifetime figures that move every
-     * time anything is played, so a copy surviving a process restart would be stale far more often
-     * than it would be useful, and re-asking costs one conditional request.
+     * In memory only: these are lifetime figures that move every time anything is played, so a
+     * copy surviving a process restart would be stale far more often than it would be useful.
      */
     private val listeningStatsCache = HashMap<Int, CachedListeningStats>()
+    private var listeningStatsOwner: StatsSessionKey? = null
+    private var listeningStatsGeneration = 0L
+
+    private data class StatsSessionKey(
+        val serverUrl: String,
+        val username: String?,
+        val token: String,
+    )
+
+    private fun invalidateListeningStats() = synchronized(listeningStatsCache) {
+        listeningStatsCache.clear()
+        listeningStatsOwner = null
+        listeningStatsGeneration++
+    }
 
     private data class CachedListeningStats(
         val etag: String?,
@@ -272,6 +284,7 @@ class TtsRoadRepository(
                 ),
             )
             tokenStore.saveLogin(normalized, response)
+            invalidateListeningStats()
             _sessionEnd.value = null
             _currentCapabilitiesResolved.value = false
             LoginResult.Success
@@ -298,6 +311,7 @@ class TtsRoadRepository(
     suspend fun endSession(end: SessionEnd) = withContext(Dispatchers.IO) {
         authHeader = null
         tokenStore.clearToken()
+        invalidateListeningStats()
         invalidateReader()
         onSessionCleared()
         _currentCapabilitiesResolved.value = false
@@ -313,6 +327,7 @@ class TtsRoadRepository(
             }
         }
         tokenStore.clearToken()
+        invalidateListeningStats()
         authHeader = null
         // Discovery is per server, and the next sign-in may be a different one. Leaving the old
         // flags in place would show read-along or device management on a server without them.
@@ -1189,22 +1204,29 @@ class TtsRoadRepository(
             // Clamped rather than passed through: the server answers 422 outside 1..53, and a
             // screen choosing its own grid size should never be able to produce one.
             val requested = weeks.coerceIn(MinActivityWeeks, MaxActivityWeeks)
-            val cached = synchronized(listeningStatsCache) { listeningStatsCache[requested] }
-            authorized { api ->
-                // Only conditional when there is something to revalidate, so a 304 can never
-                // arrive without a payload to answer it with.
+            authorizedWithSession { api, session ->
+                val owner = StatsSessionKey(session.serverUrl, session.username, session.token!!)
+                val (cached, generation) = synchronized(listeningStatsCache) {
+                    if (listeningStatsOwner != owner) {
+                        listeningStatsCache.clear()
+                        listeningStatsOwner = owner
+                        listeningStatsGeneration++
+                    }
+                    listeningStatsCache[requested] to listeningStatsGeneration
+                }
                 val response = api.listeningStats(requested, cached?.etag)
-                when {
-                    response.code() == 304 -> cached?.response
-                    response.isSuccessful -> response.body()?.also { body ->
-                        val etag = response.headers()["ETag"]
-                        synchronized(listeningStatsCache) {
-                            listeningStatsCache[requested] = CachedListeningStats(etag, body)
+                if (!response.isSuccessful && response.code() != 304) throw HttpException(response)
+                check(tokenStore.current() == session) { "Listening stats session changed" }
+                synchronized(listeningStatsCache) {
+                    check(listeningStatsOwner == owner && listeningStatsGeneration == generation) {
+                        "Listening stats session changed"
+                    }
+                    when {
+                        response.code() == 304 -> cached?.response
+                        else -> response.body()?.also { body ->
+                            listeningStatsCache[requested] = CachedListeningStats(response.headers()["ETag"], body)
                         }
                     }
-
-                    // Rethrown so `authorized` can see a 401 and expire the session.
-                    else -> throw HttpException(response)
                 }
             }
         }
@@ -1699,12 +1721,17 @@ class TtsRoadRepository(
      * [login] deliberately does not go through here: it answers 401 for a wrong password and
      * for `totp_required`, neither of which should clear a stored session.
      */
-    private suspend fun <T> authorized(block: suspend (TtsRoadApi) -> T): T {
+    private suspend fun <T> authorized(block: suspend (TtsRoadApi) -> T): T =
+        authorizedWithSession { api, _ -> block(api) }
+
+    private suspend fun <T> authorizedWithSession(
+        block: suspend (TtsRoadApi, SessionState) -> T,
+    ): T {
         val session = tokenStore.current()
         require(session.isLoggedIn) { "Not logged in" }
         authHeader = session.authorizationHeader
         return try {
-            block(api(session.serverUrl))
+            block(api(session.serverUrl), session)
         } catch (e: HttpException) {
             if (e.code() == 401) {
                 // A password change deliberately rotates this credential. A request that began
@@ -1714,6 +1741,7 @@ class TtsRoadRepository(
                 if (tokenStore.current().token == session.token) {
                     authHeader = null
                     tokenStore.clearToken()
+                    invalidateListeningStats()
                     invalidateReader()
                     onSessionCleared()
                     _sessionEnd.value = parseSessionEnd(e.response()?.errorBody()?.string())
