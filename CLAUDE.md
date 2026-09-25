@@ -3,6 +3,21 @@
 Guidance for AI coding agents working in this repository. `AGENTS.md` is a symlink to this file, so
 Claude Code, opencode, Codex and Cursor all read the same text — edit this one, never a copy.
 
+## GitHub delivery workflow
+
+A request to implement a bug fix, feature, refactor or other repository change is standing explicit
+authorization to complete the full GitHub delivery workflow. Unless the user explicitly says not to
+create an issue or pull request:
+
+1. Create a GitHub issue that describes the requested change and acceptance criteria.
+2. Make the change on a dedicated branch, verify it with the required tests and lint checks, and
+   commit only the intended files.
+3. Push the branch and open a pull request that links to and closes the issue.
+4. Return both the issue URL and pull-request URL to the user.
+
+Only skip the issue, pull request, or both when the user explicitly asks to skip them. This workflow
+applies to requests that modify the repository, not read-only investigation or informational answers.
+
 ## What this is
 
 Single-module Android client (Kotlin, Compose, Media3) for a private, self-hosted TTSRoad
