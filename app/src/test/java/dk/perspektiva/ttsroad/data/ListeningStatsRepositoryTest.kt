@@ -1,9 +1,15 @@
 package dk.perspektiva.ttsroad.data
 
 import java.time.ZoneId
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -79,7 +85,21 @@ class ListeningStatsRepositoryTest {
         return repository
     }
 
-    /** Any opaque validator token; the client only ever echoes it back. */
+    private suspend fun login(
+        repository: TtsRoadRepository,
+        server: MockWebServer,
+        username: String,
+        token: String,
+    ) {
+        server.enqueue(
+            json("""{"token":"$token","user":{"id":2,"username":"$username"}}"""),
+        )
+        assertEquals(
+            LoginResult.Success,
+            repository.login(server.url("/").toString(), username, "password", "Android"),
+        )
+    }
+
     private val etag = "W/\"stats-9\""
 
     /** A payload shaped exactly like `app/services/stats.py` builds it. */
@@ -234,6 +254,114 @@ class ListeningStatsRepositoryTest {
         // path is answering with an empty stats object.
         assertEquals("97h 30m", first?.stats?.timeLabel)
         assertEquals("97h 30m", second?.stats?.timeLabel)
+    }
+
+    @Test
+    fun `logout and login on the same server do not reuse another account's stats`() = runTest {
+        val repository = repository()
+        server.enqueue(json(fullPayload).setHeader("ETag", etag))
+        assertEquals("97h 30m", repository.listeningStats()?.stats?.timeLabel)
+        server.enqueue(json("""{"status":"ok","revoked":true}"""))
+        repository.logout()
+        login(repository, server, "another", "new-token")
+        server.enqueue(json("""{"api_version":1,"capabilities":{"listening_stats":true}}"""))
+        repository.refreshCurrentCapabilities(forceRefresh = true)
+        server.enqueue(MockResponse().setResponseCode(304))
+
+        assertNull(repository.listeningStats())
+
+        server.takeRequest()
+        server.takeRequest()
+        server.takeRequest()
+        server.takeRequest()
+        server.takeRequest()
+        val request = server.takeRequest()
+        assertEquals("/api/mobile/stats?weeks=12", request.path)
+        assertEquals("Bearer new-token", request.getHeader("Authorization"))
+        assertNull(request.getHeader("If-None-Match"))
+    }
+
+    @Test
+    fun `a new token for the same username does not inherit the old validator`() = runTest {
+        val repository = repository()
+        server.enqueue(json(fullPayload).setHeader("ETag", etag))
+        repository.listeningStats()
+        server.enqueue(json("""{"status":"ok","revoked":true}"""))
+        repository.logout()
+        login(repository, server, "reader", "replacement-token")
+        server.enqueue(json("""{"api_version":1,"capabilities":{"listening_stats":true}}"""))
+        repository.refreshCurrentCapabilities(forceRefresh = true)
+        server.enqueue(MockResponse().setResponseCode(304))
+
+        assertNull(repository.listeningStats())
+
+        repeat(5) { server.takeRequest() }
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
+    }
+
+    @Test
+    fun `a login on another server does not reuse the previous server's stats`() = runTest {
+        val repository = repository()
+        server.enqueue(json(fullPayload).setHeader("ETag", etag))
+        repository.listeningStats()
+        val other = MockWebServer()
+        other.start()
+        try {
+            login(repository, other, "reader", "new-token")
+            other.enqueue(json("""{"api_version":1,"capabilities":{"listening_stats":true}}"""))
+            repository.refreshCurrentCapabilities()
+            other.enqueue(MockResponse().setResponseCode(304))
+
+            assertNull(repository.listeningStats())
+
+            other.takeRequest()
+            other.takeRequest()
+            val request = other.takeRequest()
+            assertEquals("/api/mobile/stats?weeks=12", request.path)
+            assertNull(request.getHeader("If-None-Match"))
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test
+    fun `an old in-flight response cannot overwrite the new session cache`() = runTest {
+        val repository = repository()
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when {
+                request.path?.startsWith("/api/mobile/stats") == true &&
+                    request.getHeader("Authorization") == "Bearer t0ken" -> {
+                    started.countDown()
+                    if (!release.await(10, TimeUnit.SECONDS)) error("Old request was not released")
+                    json(fullPayload).setHeader("ETag", etag)
+                }
+                request.path == "/api/mobile/logout" -> json("""{"status":"ok","revoked":true}""")
+                request.path == "/api/mobile/login" ->
+                    json("""{"token":"new-token","user":{"id":2,"username":"another"}}""")
+                request.path == "/api/mobile/capabilities" ->
+                    json("""{"api_version":1,"capabilities":{"listening_stats":true}}""")
+                else -> json("""{"api_version":1,"weeks":12,"stats":{"has_data":false,"seconds":0}}""")
+            }
+        }
+        val old = async(Dispatchers.IO) { runCatching { repository.listeningStats() } }
+        try {
+            assertTrue(started.await(10, TimeUnit.SECONDS))
+            repository.logout()
+            assertEquals(
+                LoginResult.Success,
+                repository.login(server.url("/").toString(), "another", "password", "Android"),
+            )
+            repository.refreshCurrentCapabilities(forceRefresh = true)
+            val fresh = repository.listeningStats()
+            assertFalse(fresh!!.stats.hasData)
+            release.countDown()
+            assertTrue(old.await().isFailure)
+            assertFalse(repository.listeningStats()!!.stats.hasData)
+        } finally {
+            release.countDown()
+        }
     }
 
     /**
