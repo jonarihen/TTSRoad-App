@@ -87,6 +87,25 @@ private class FakeReadAlongStore(
 
     override fun isPinned(chapterId: Int): Boolean = chapterId in pinned
 
+    var touches = 0
+        private set
+
+    override fun touch(chapterId: Int) {
+        touches++
+    }
+
+    override fun remove(chapterId: Int) {
+        pinned -= chapterId
+        entries -= chapterId
+    }
+
+    override fun holds(chapterId: Int): Boolean = chapterId in entries
+
+    /** Drop the file behind the repository's back, the way browse-cache eviction does. */
+    fun evict(chapterId: Int) {
+        entries -= chapterId
+    }
+
     fun seed(chapterId: Int, entry: CachedReadAlong) {
         entries[chapterId] = entry
     }
@@ -600,7 +619,132 @@ class ReadAlongRepositoryTest {
 
         assertNull(repository.loadedReadAlong(chapterId = 10))
     }
+    @Test
+    fun `a 304 refreshes disk recency without rewriting the document`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        repository.readAlong(chapterId = 10)
+
+        server.enqueue(MockResponse().setResponseCode(304))
+        repository.readAlong(chapterId = 10)
+
+        assertEquals(1, disk.writes)
+        assertEquals(1, disk.touches)
+    }
+
+    @Test
+    fun `a chapter reopened with a 304 outlives one that was not`() = runTest {
+        val folder = kotlin.io.path.createTempDirectory("readalong").toFile()
+        try {
+            var now = 1_000_000L
+            val disk = ReadAlongFileStore(folder, maxEntries = 2, clock = { now })
+            val repository = repository(readAlongStore = disk)
+
+            server.enqueue(MockResponse().setBody(bodyFor(1)).setHeader("ETag", "\"a\""))
+            repository.readAlong(chapterId = 1)
+            now += 10_000
+            server.enqueue(MockResponse().setBody(bodyFor(2)).setHeader("ETag", "\"b\""))
+            repository.readAlong(chapterId = 2)
+            now += 10_000
+            server.enqueue(MockResponse().setResponseCode(304))
+            repository.readAlong(chapterId = 1)
+            now += 10_000
+            server.enqueue(MockResponse().setBody(bodyFor(3)).setHeader("ETag", "\"c\""))
+            repository.readAlong(chapterId = 3)
+
+            assertNull("B was least recently used and must be the one evicted", disk.read(2))
+
+            val restarted = repository(readAlongStore = disk)
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+            val reopened = restarted.readAlong(chapterId = 1)
+            assertNotNull("A was reopened most recently and must still read offline", reopened)
+            assertEquals(1, reopened!!.chapterId)
+        } finally {
+            folder.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a 404 retires the held document so a later outage cannot restore it`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        assertNotNull(repository.readAlong(chapterId = 10))
+
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertNull(repository.readAlong(chapterId = 10))
+        assertNull(disk.read(10))
+        assertNull(repository.loadedReadAlong(chapterId = 10))
+
+        server.enqueue(MockResponse().setResponseCode(503))
+        val afterOutage = runCatching { repository.readAlong(chapterId = 10) }
+        assertTrue("a retired document must not come back", afterOutage.isFailure || afterOutage.getOrNull() == null)
+        server.takeRequest()
+        server.takeRequest()
+        assertNull("nothing left to revalidate", server.takeRequest().getHeader("If-None-Match"))
+
+        val restarted = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
+        val afterRestart = runCatching { restarted.readAlong(chapterId = 10) }
+        assertTrue(afterRestart.isFailure || afterRestart.getOrNull() == null)
+    }
+
+    @Test
+    fun `a 404 retires a pinned copy too`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        assertTrue(repository.pinReadAlong(chapterId = 10))
+
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertNull(repository.readAlong(chapterId = 10))
+
+        assertFalse(disk.isPinned(10))
+        assertNull(disk.read(10))
+    }
+
+    @Test
+    fun `a chapter evicted from disk but still in memory is refetched and persisted again`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        repository.readAlong(chapterId = 10)
+        disk.evict(10)
+
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        assertNotNull(repository.readAlong(chapterId = 10))
+
+        server.takeRequest()
+        assertNull("a 304 could not restore the file, so ask for the body", server.takeRequest().getHeader("If-None-Match"))
+        assertNotNull(disk.read(10))
+    }
+
+    @Test
+    fun `a transient failure without a 404 still falls back after restart`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
+        val online = repository.readAlong(chapterId = 10)
+
+        server.enqueue(MockResponse().setResponseCode(503))
+        assertSame(online, repository.readAlong(chapterId = 10))
+
+        val restarted = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setResponseCode(503))
+        assertNotNull(restarted.readAlong(chapterId = 10))
+    }
 }
+
+private fun bodyFor(chapterId: Int) = """
+{
+  "api_version": 1,
+  "chapter": {"id":$chapterId,"fiction_id":1,"title":"Chapter $chapterId","audio_duration":60.0,"has_timings":true},
+  "text": "Chapter $chapterId.",
+  "paragraphs": [[0,10]],
+  "cues": [[0,3,0.0]]
+}
+"""
 
 private fun cachedEntry(etag: String? = "\"abc\"", owner: String? = null): CachedReadAlong = CachedReadAlong(
     etag = etag,

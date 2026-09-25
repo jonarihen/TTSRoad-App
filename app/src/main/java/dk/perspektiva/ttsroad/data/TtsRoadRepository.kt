@@ -766,15 +766,25 @@ class TtsRoadRepository(
         val session = tokenStore.current()
         val generation = readerGeneration
         val owner = readerOwner(session)
-        val cached = readerAccess(session, generation) { cachedReadAlong(chapterId, owner) }
+        val (cached, persisted) = readerAccess(session, generation) {
+            cachedReadAlong(chapterId, owner) to readAlongStore.holds(chapterId)
+        }
         try {
             authorized { api ->
                 // Only send If-None-Match when there is something to revalidate, so a 304 can never
-                // arrive without a document to answer it with.
-                val response = api.readAlong(chapterId, cached?.etag)
+                // arrive without a document to answer it with. A copy only memory still holds (its
+                // file was evicted) is refetched instead, so the body can be written back to disk.
+                val response = api.readAlong(chapterId, cached?.etag?.takeIf { persisted })
                 when {
-                    response.code() == 304 -> readerAccess(session, generation) { cached?.document }
-                    response.code() == 404 -> null
+                    response.code() == 304 -> readerAccess(session, generation) {
+                        cached?.also { readAlongStore.touch(chapterId) }?.document
+                    }
+                    // Authoritative: retire every copy so a later offline fallback cannot bring it back.
+                    response.code() == 404 -> readerAccess(session, generation) {
+                        synchronized(readAlongCache) { readAlongCache.remove(chapterId) }
+                        readAlongStore.remove(chapterId)
+                        null
+                    }
                     response.isSuccessful -> response.body()?.let { body ->
                         val document = ReadAlongDocument.from(body)
                         val etag = response.headers()["ETag"]

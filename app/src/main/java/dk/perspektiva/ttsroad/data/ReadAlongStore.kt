@@ -17,6 +17,31 @@ interface ReadAlongStore {
     fun clear()
 
     /**
+     * Record that [chapterId] was just used without rewriting it.
+     *
+     * A 304 revalidation proves the held copy is current, so it is the most recently used chapter
+     * even though no bytes changed. Without this the browse cache would evict it as if unread.
+     */
+    fun touch(chapterId: Int)
+
+    /**
+     * Whether a copy of [chapterId] is persisted here, browse or pinned.
+     *
+     * The in-memory cache outlives disk eviction, so a chapter can still be revalidated from memory
+     * after its file was dropped. A 304 cannot rewrite a file that is gone; the caller asks this to
+     * decide whether to revalidate or refetch the body.
+     */
+    fun holds(chapterId: Int): Boolean
+
+    /**
+     * Drop every copy of [chapterId], browse and pinned alike.
+     *
+     * For an authoritative "this document does not exist": a later transient failure must not be
+     * able to resurrect text the server has already said is gone.
+     */
+    fun remove(chapterId: Int)
+
+    /**
      * Keep [chapterId]'s document until it is explicitly released, exempt from eviction.
      *
      * For a chapter the user downloaded on purpose. The browse cache is bounded and evicts by age,
@@ -37,6 +62,9 @@ interface ReadAlongStore {
         override fun read(chapterId: Int): CachedReadAlong? = null
         override fun write(chapterId: Int, entry: CachedReadAlong) = Unit
         override fun clear() = Unit
+        override fun touch(chapterId: Int) = Unit
+        override fun holds(chapterId: Int): Boolean = true
+        override fun remove(chapterId: Int) = Unit
         override fun pin(chapterId: Int, entry: CachedReadAlong) = Unit
         override fun unpin(chapterId: Int) = Unit
         override fun isPinned(chapterId: Int): Boolean = false
@@ -57,6 +85,7 @@ interface ReadAlongStore {
 class ReadAlongFileStore(
     private val directory: File,
     private val maxEntries: Int = DefaultMaxEntries,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : ReadAlongStore {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val adapter = moshi.adapter(CachedReadAlong::class.java)
@@ -77,18 +106,34 @@ class ReadAlongFileStore(
             // A pinned chapter is revalidated in place rather than gaining a second copy: writing
             // to the browse cache instead would leave the pinned file stale and double the bytes.
             if (pinnedFileFor(chapterId).isFile) {
-                pinnedFileFor(chapterId).writeText(adapter.toJson(entry))
+                writeAtomically(pinnedFileFor(chapterId), entry)
                 return
             }
-            fileFor(chapterId).writeText(adapter.toJson(entry))
+            writeAtomically(fileFor(chapterId), entry)
+            fileFor(chapterId).setLastModified(clock())
             evictOldest()
         }
+    }
+
+    override fun touch(chapterId: Int) {
+        runCatching {
+            val file = fileFor(chapterId)
+            if (file.isFile) file.setLastModified(clock())
+        }
+    }
+
+    override fun holds(chapterId: Int): Boolean =
+        fileFor(chapterId).isFile || pinnedFileFor(chapterId).isFile
+
+    override fun remove(chapterId: Int) {
+        runCatching { fileFor(chapterId).delete() }
+        runCatching { pinnedFileFor(chapterId).delete() }
     }
 
     override fun pin(chapterId: Int, entry: CachedReadAlong) {
         runCatching {
             if (!directory.isDirectory && !directory.mkdirs()) return
-            pinnedFileFor(chapterId).writeText(adapter.toJson(entry))
+            writeAtomically(pinnedFileFor(chapterId), entry)
             // The browse copy is now redundant, and leaving it would keep occupying a slot in a
             // bound meant for chapters that have no pinned copy.
             runCatching { fileFor(chapterId).delete() }
@@ -118,8 +163,8 @@ class ReadAlongFileStore(
     fun pinnedSize(): Int = pinnedFiles().size
 
     /**
-     * Drop the least recently written chapters. Last-modified is a good enough recency signal here:
-     * re-reading a chapter revalidates it, which rewrites the file.
+     * Drop the least recently used chapters. Last-modified is the recency signal: a fresh body
+     * rewrites the file and a 304 revalidation [touch]es it.
      */
     private fun evictOldest() {
         val files = cachedFiles()
@@ -146,6 +191,24 @@ class ReadAlongFileStore(
             ?.toList()
             ?: emptyList()
 
+    /**
+     * Write to a sibling temp file and rename it into place, so a file that exists is always a
+     * complete document. [holds] relies on that: a truncated file would otherwise be revalidated by
+     * 304 forever and never repaired.
+     */
+    private fun writeAtomically(target: File, entry: CachedReadAlong) {
+        val temp = File(directory, "$TempPrefix${target.name}")
+        try {
+            temp.writeText(adapter.toJson(entry))
+            if (!temp.renameTo(target)) {
+                target.delete()
+                check(temp.renameTo(target)) { "could not move ${temp.name} into place" }
+            }
+        } finally {
+            temp.delete()
+        }
+    }
+
     private fun fileFor(chapterId: Int) = File(directory, "$Prefix$chapterId.json")
 
     private fun pinnedFileFor(chapterId: Int) = File(directory, "$PinnedPrefix$chapterId.json")
@@ -158,6 +221,9 @@ class ReadAlongFileStore(
          * exact failure this split exists to prevent.
          */
         const val PinnedPrefix = "pinned-readalong_"
+
+        /** In-flight writes. Matches neither prefix, so neither eviction nor reads can see one. */
+        const val TempPrefix = ".tmp-"
 
         /** Roughly a fortnight of reading before anything is dropped, at a few hundred kB each. */
         const val DefaultMaxEntries = 40
