@@ -106,13 +106,11 @@ class ReadAlongFileStore(
             // A pinned chapter is revalidated in place rather than gaining a second copy: writing
             // to the browse cache instead would leave the pinned file stale and double the bytes.
             if (pinnedFileFor(chapterId).isFile) {
-                pinnedFileFor(chapterId).writeText(adapter.toJson(entry))
+                writeAtomically(pinnedFileFor(chapterId), entry)
                 return
             }
-            fileFor(chapterId).also { file ->
-                file.writeText(adapter.toJson(entry))
-                file.setLastModified(clock())
-            }
+            writeAtomically(fileFor(chapterId), entry)
+            fileFor(chapterId).setLastModified(clock())
             evictOldest()
         }
     }
@@ -135,7 +133,7 @@ class ReadAlongFileStore(
     override fun pin(chapterId: Int, entry: CachedReadAlong) {
         runCatching {
             if (!directory.isDirectory && !directory.mkdirs()) return
-            pinnedFileFor(chapterId).writeText(adapter.toJson(entry))
+            writeAtomically(pinnedFileFor(chapterId), entry)
             // The browse copy is now redundant, and leaving it would keep occupying a slot in a
             // bound meant for chapters that have no pinned copy.
             runCatching { fileFor(chapterId).delete() }
@@ -193,6 +191,24 @@ class ReadAlongFileStore(
             ?.toList()
             ?: emptyList()
 
+    /**
+     * Write to a sibling temp file and rename it into place, so a file that exists is always a
+     * complete document. [holds] relies on that: a truncated file would otherwise be revalidated by
+     * 304 forever and never repaired.
+     */
+    private fun writeAtomically(target: File, entry: CachedReadAlong) {
+        val temp = File(directory, "$TempPrefix${target.name}")
+        try {
+            temp.writeText(adapter.toJson(entry))
+            if (!temp.renameTo(target)) {
+                target.delete()
+                check(temp.renameTo(target)) { "could not move ${temp.name} into place" }
+            }
+        } finally {
+            temp.delete()
+        }
+    }
+
     private fun fileFor(chapterId: Int) = File(directory, "$Prefix$chapterId.json")
 
     private fun pinnedFileFor(chapterId: Int) = File(directory, "$PinnedPrefix$chapterId.json")
@@ -205,6 +221,9 @@ class ReadAlongFileStore(
          * exact failure this split exists to prevent.
          */
         const val PinnedPrefix = "pinned-readalong_"
+
+        /** In-flight writes. Matches neither prefix, so neither eviction nor reads can see one. */
+        const val TempPrefix = ".tmp-"
 
         /** Roughly a fortnight of reading before anything is dropped, at a few hundred kB each. */
         const val DefaultMaxEntries = 40

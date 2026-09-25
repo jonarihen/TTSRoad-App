@@ -353,4 +353,27 @@ class ReadAlongFileStoreTest {
         assertFalse(store.holds(chapterId = 12))
     }
 
+
+    @Test
+    fun `a write leaves no temp file behind`() {
+        store().write(chapterId = 10, entry = entry("Ten."))
+        store().pin(chapterId = 11, entry = entry("Eleven."))
+
+        assertEquals(
+            setOf("readalong_10.json", "pinned-readalong_11.json"),
+            folder.root.list()!!.toSet(),
+        )
+    }
+
+    @Test
+    fun `a failed write keeps the previous complete document`() {
+        val store = store()
+        store.write(chapterId = 10, entry = entry("Original."))
+        File(folder.root, ".tmp-readalong_10.json").mkdirs()
+
+        store.write(chapterId = 10, entry = entry("Replacement."))
+
+        assertEquals("Original.", store().read(chapterId = 10)!!.response.text)
+    }
+
 }
