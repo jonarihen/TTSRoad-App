@@ -87,6 +87,7 @@ class PendingProgressStore(
 
     private val lock = Any()
     private var entries: MutableList<PendingProgress> = load().toMutableList()
+    private var lastRecordedMillis = entries.maxOfOrNull { it.recordedAtMillis } ?: Long.MIN_VALUE
 
     /**
      * Record a position, replacing any earlier one for the same chapter.
@@ -100,16 +101,17 @@ class PendingProgressStore(
         positionSeconds: Double,
         isPlayed: Boolean,
     ): PendingProgress {
-        val now = clock()
-        val entry = PendingProgress(
-            fictionId = fictionId,
-            chapterId = chapterId,
-            positionSeconds = positionSeconds.coerceAtLeast(0.0),
-            isPlayed = isPlayed,
-            clientUpdatedAt = iso8601Utc(now),
-            recordedAtMillis = now,
-        )
-        synchronized(lock) {
+        return synchronized(lock) {
+            val now = clock().coerceAtLeast(lastRecordedMillis + 1)
+            lastRecordedMillis = now
+            val entry = PendingProgress(
+                fictionId = fictionId,
+                chapterId = chapterId,
+                positionSeconds = positionSeconds.coerceAtLeast(0.0),
+                isPlayed = isPlayed,
+                clientUpdatedAt = iso8601Utc(now),
+                recordedAtMillis = now,
+            )
             entries.removeAll { it.chapterId == chapterId }
             entries.add(entry)
             // Oldest first out. A position from last week matters less than one from this morning,
@@ -119,8 +121,8 @@ class PendingProgressStore(
                 entries.removeAt(0)
             }
             persist()
+            entry
         }
-        return entry
     }
 
     /** Everything waiting, oldest first. */
@@ -146,6 +148,7 @@ class PendingProgressStore(
     fun clear() {
         synchronized(lock) {
             entries.clear()
+            lastRecordedMillis = Long.MIN_VALUE
             runCatching {
                 val tmp = File(file.parentFile, "${file.name}.tmp")
                 if (tmp.exists()) tmp.delete()
