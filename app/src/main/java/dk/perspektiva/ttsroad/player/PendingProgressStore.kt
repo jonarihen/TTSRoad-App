@@ -7,6 +7,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.UUID
 
 /**
  * One recorded playback position, waiting to reach the server.
@@ -25,6 +26,7 @@ data class PendingProgress(
     val clientUpdatedAt: String,
     /** Epoch millis of the same moment, kept so entries can be ordered without reparsing. */
     val recordedAtMillis: Long,
+    val recordId: String = UUID.randomUUID().toString(),
 )
 
 /**
@@ -129,15 +131,14 @@ class PendingProgressStore(
     /**
      * Drop entries the server has dealt with.
      *
-     * Keyed on the recorded stamp as well as the chapter: a tick that landed *while* the flush was
-     * in flight has already replaced the entry being acknowledged, and discarding it because an
-     * older copy of the same chapter succeeded would lose the newer position.
+     * Keyed on the record identity: a tick that landed *while* the flush was in flight has already
+     * replaced the entry being acknowledged, even if both share the same millisecond timestamp.
      */
     fun resolve(resolved: Collection<PendingProgress>) {
         if (resolved.isEmpty()) return
-        val keys = resolved.map { it.chapterId to it.recordedAtMillis }.toSet()
+        val keys = resolved.map { it.recordId }.toSet()
         synchronized(lock) {
-            val removed = entries.removeAll { (it.chapterId to it.recordedAtMillis) in keys }
+            val removed = entries.removeAll { it.recordId in keys }
             if (removed) persist()
         }
     }

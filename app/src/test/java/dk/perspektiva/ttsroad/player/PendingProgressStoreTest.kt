@@ -191,6 +191,19 @@ class PendingProgressStoreTest {
     }
 
     @Test
+    fun `a replacement in the same millisecond survives acknowledgement and restart`() {
+        val store = store { 1_700_000_000_000L }
+        val inFlight = store.record(1, 7, 10.0, false)
+        val latest = store.record(1, 7, 99.0, false)
+
+        assertEquals(inFlight.clientUpdatedAt, latest.clientUpdatedAt)
+        store.resolve(listOf(inFlight))
+
+        assertEquals(listOf(latest), store.pending())
+        assertEquals(listOf(latest), store().pending())
+    }
+
+    @Test
     fun `the backlog survives the process being killed`() {
         // This queue exists for the case where the phone is offline and stays offline, which is
         // also when the process is most likely to be killed before it ever reconnects.
