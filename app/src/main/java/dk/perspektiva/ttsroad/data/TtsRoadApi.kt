@@ -39,6 +39,7 @@ interface TtsRoadApi {
     @GET("api/mobile/capabilities")
     suspend fun capabilities(): CapabilitiesResponse
 
+    @Headers("$NoAuthHeader: 1")
     @POST("api/mobile/login")
     suspend fun login(@Body request: LoginRequest): LoginResponse
 
