@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.player
 
 import java.io.File
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -188,6 +189,33 @@ class PendingProgressStoreTest {
         val pending = store.pending()
         assertEquals(1, pending.size)
         assertEquals(99.0, pending[0].positionSeconds, 0.001)
+    }
+
+    @Test
+    fun `a replacement in the same millisecond survives acknowledgement and restart`() {
+        val store = store { 1_700_000_000_000L }
+        val inFlight = store.record(1, 7, 10.0, false)
+        val latest = store.record(1, 7, 99.0, false)
+
+        assertEquals(inFlight.recordedAtMillis + 1, latest.recordedAtMillis)
+        assertTrue(Instant.parse(inFlight.clientUpdatedAt) < Instant.parse(latest.clientUpdatedAt))
+        store.resolve(listOf(inFlight))
+
+        assertEquals(listOf(latest), store.pending())
+        assertEquals(listOf(latest), store().pending())
+    }
+
+    @Test
+    fun `a restarted store advances past a pending timestamp even if the clock moves back`() {
+        val store = store { 1_700_000_000_001L }
+        val earlier = store.record(1, 7, 10.0, false)
+        val restarted = store { 1_700_000_000_000L }
+        val later = restarted.record(1, 7, 20.0, true)
+
+        assertEquals(earlier.recordedAtMillis + 1, later.recordedAtMillis)
+        assertTrue(Instant.parse(earlier.clientUpdatedAt) < Instant.parse(later.clientUpdatedAt))
+        restarted.resolve(listOf(earlier))
+        assertEquals(listOf(later), restarted.pending())
     }
 
     @Test

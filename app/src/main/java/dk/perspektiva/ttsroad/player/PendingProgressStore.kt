@@ -7,6 +7,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.UUID
 
 /**
  * One recorded playback position, waiting to reach the server.
@@ -25,6 +26,7 @@ data class PendingProgress(
     val clientUpdatedAt: String,
     /** Epoch millis of the same moment, kept so entries can be ordered without reparsing. */
     val recordedAtMillis: Long,
+    val recordId: String = UUID.randomUUID().toString(),
 )
 
 /**
@@ -85,6 +87,7 @@ class PendingProgressStore(
 
     private val lock = Any()
     private var entries: MutableList<PendingProgress> = load().toMutableList()
+    private var lastRecordedMillis = entries.maxOfOrNull { it.recordedAtMillis } ?: Long.MIN_VALUE
 
     /**
      * Record a position, replacing any earlier one for the same chapter.
@@ -98,16 +101,17 @@ class PendingProgressStore(
         positionSeconds: Double,
         isPlayed: Boolean,
     ): PendingProgress {
-        val now = clock()
-        val entry = PendingProgress(
-            fictionId = fictionId,
-            chapterId = chapterId,
-            positionSeconds = positionSeconds.coerceAtLeast(0.0),
-            isPlayed = isPlayed,
-            clientUpdatedAt = iso8601Utc(now),
-            recordedAtMillis = now,
-        )
-        synchronized(lock) {
+        return synchronized(lock) {
+            val now = clock().coerceAtLeast(lastRecordedMillis + 1)
+            lastRecordedMillis = now
+            val entry = PendingProgress(
+                fictionId = fictionId,
+                chapterId = chapterId,
+                positionSeconds = positionSeconds.coerceAtLeast(0.0),
+                isPlayed = isPlayed,
+                clientUpdatedAt = iso8601Utc(now),
+                recordedAtMillis = now,
+            )
             entries.removeAll { it.chapterId == chapterId }
             entries.add(entry)
             // Oldest first out. A position from last week matters less than one from this morning,
@@ -117,8 +121,8 @@ class PendingProgressStore(
                 entries.removeAt(0)
             }
             persist()
+            entry
         }
-        return entry
     }
 
     /** Everything waiting, oldest first. */
@@ -129,15 +133,14 @@ class PendingProgressStore(
     /**
      * Drop entries the server has dealt with.
      *
-     * Keyed on the recorded stamp as well as the chapter: a tick that landed *while* the flush was
-     * in flight has already replaced the entry being acknowledged, and discarding it because an
-     * older copy of the same chapter succeeded would lose the newer position.
+     * Keyed on the record identity: a tick that landed *while* the flush was in flight has already
+     * replaced the entry being acknowledged, even if both share the same millisecond timestamp.
      */
     fun resolve(resolved: Collection<PendingProgress>) {
         if (resolved.isEmpty()) return
-        val keys = resolved.map { it.chapterId to it.recordedAtMillis }.toSet()
+        val keys = resolved.map { it.recordId }.toSet()
         synchronized(lock) {
-            val removed = entries.removeAll { (it.chapterId to it.recordedAtMillis) in keys }
+            val removed = entries.removeAll { it.recordId in keys }
             if (removed) persist()
         }
     }
@@ -145,6 +148,7 @@ class PendingProgressStore(
     fun clear() {
         synchronized(lock) {
             entries.clear()
+            lastRecordedMillis = Long.MIN_VALUE
             runCatching {
                 val tmp = File(file.parentFile, "${file.name}.tmp")
                 if (tmp.exists()) tmp.delete()
