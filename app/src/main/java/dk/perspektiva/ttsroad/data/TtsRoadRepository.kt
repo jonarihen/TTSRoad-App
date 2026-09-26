@@ -805,6 +805,7 @@ class TtsRoadRepository(
                         null
                     }
                     response.isSuccessful -> response.body()?.let { body ->
+                        check(body.chapter.id == chapterId) { "Read-along chapter ID mismatch: requested $chapterId, received ${body.chapter.id}" }
                         val document = ReadAlongDocument.from(body)
                         val etag = response.headers()["ETag"]
                         readerAccess(session, generation) {
@@ -891,7 +892,7 @@ class TtsRoadRepository(
         val generation = readerGeneration
         val owner = readerOwner(session)
         val promoted = readerAccess(session, generation) {
-            val held = readAlongStore.read(chapterId)?.takeIf { it.owner == owner }
+            val held = storedReadAlong(chapterId, owner)
             when {
                 held == null -> false
                 readAlongStore.isPinned(chapterId) -> true
@@ -908,6 +909,7 @@ class TtsRoadRepository(
                 when {
                     response.code() == 404 -> false
                     response.isSuccessful -> response.body()?.let { body ->
+                        if (body.chapter.id != chapterId) return@let false
                         readerAccess(session, generation) {
                             readAlongStore.pin(chapterId, CachedReadAlong(response.headers()["ETag"], body, owner))
                             true
@@ -952,10 +954,19 @@ class TtsRoadRepository(
         }
     }
 
+    private fun storedReadAlong(chapterId: Int, owner: String): CachedReadAlong? {
+        val stored = readAlongStore.read(chapterId) ?: return null
+        if (stored.response.chapter.id != chapterId) {
+            readAlongStore.remove(chapterId)
+            return null
+        }
+        return stored.takeIf { it.owner == owner }
+    }
+
     /** Whatever copy of [chapterId] we already hold, promoting the on-disk one into memory. */
     private fun cachedReadAlong(chapterId: Int, owner: String): CachedReadAlongDocument? {
         synchronized(readAlongCache) { readAlongCache[chapterId] }?.takeIf { it.owner == owner }?.let { return it }
-        val stored = readAlongStore.read(chapterId)?.takeIf { it.owner == owner } ?: return null
+        val stored = storedReadAlong(chapterId, owner) ?: return null
         val restored = CachedReadAlongDocument(stored.etag, ReadAlongDocument.from(stored.response), owner)
         synchronized(readAlongCache) { readAlongCache[chapterId] = restored }
         return restored

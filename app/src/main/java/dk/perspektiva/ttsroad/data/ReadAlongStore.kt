@@ -94,11 +94,15 @@ class ReadAlongFileStore(
      * The pinned copy first, then the browse cache — the same order playback reads its two audio
      * caches in, and for the same reason: the pinned one is the copy somebody asked for.
      */
-    override fun read(chapterId: Int): CachedReadAlong? =
-        runCatching {
-            val file = listOf(pinnedFileFor(chapterId), fileFor(chapterId)).firstOrNull { it.isFile }
-            file?.let { adapter.fromJson(it.readText()) }
-        }.getOrNull()
+    override fun read(chapterId: Int): CachedReadAlong? {
+        for (file in listOf(pinnedFileFor(chapterId), fileFor(chapterId))) {
+            if (!file.isFile) continue
+            val entry = runCatching { adapter.fromJson(file.readText()) }.getOrNull()
+            if (entry != null && entry.response.chapter.id == chapterId) return entry
+            runCatching { file.delete() }
+        }
+        return null
+    }
 
     override fun write(chapterId: Int, entry: CachedReadAlong) {
         runCatching {

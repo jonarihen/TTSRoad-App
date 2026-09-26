@@ -241,6 +241,79 @@ class ReadAlongRepositoryTest {
     }
 
     @Test
+    fun `a mismatched 200 cannot populate memory or disk or become an offline fallback`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"wrong\""))
+
+        assertNotNull(runCatching { repository.readAlong(chapterId = 11) }.exceptionOrNull())
+        assertNull(repository.loadedReadAlong(chapterId = 11))
+        assertNull(disk.read(11))
+
+        server.enqueue(MockResponse().setResponseCode(503))
+        assertNotNull(runCatching { repository.readAlong(chapterId = 11) }.exceptionOrNull())
+        assertNull(disk.read(11))
+        server.takeRequest()
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
+    }
+
+    @Test
+    fun `a mismatched 200 preserves a valid cached fallback and ETag`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"good\""))
+        val valid = repository.readAlong(chapterId = 10)
+
+        server.enqueue(MockResponse().setBody(bodyFor(11)).setHeader("ETag", "\"wrong\""))
+        assertSame(valid, repository.readAlong(chapterId = 10))
+        assertSame(valid, repository.loadedReadAlong(chapterId = 10))
+        assertEquals("\"good\"", disk.read(10)?.etag)
+
+        server.enqueue(MockResponse().setResponseCode(304))
+        assertSame(valid, repository.readAlong(chapterId = 10))
+        server.takeRequest()
+        server.takeRequest()
+        assertEquals("\"good\"", server.takeRequest().getHeader("If-None-Match"))
+    }
+
+    @Test
+    fun `a mismatched disk entry cannot be restored or used to revalidate`() = runTest {
+        val disk = FakeReadAlongStore()
+        disk.seed(chapterId = 11, entry = cachedEntry(owner = owner()))
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setResponseCode(503))
+
+        assertNotNull(runCatching { repository.readAlong(chapterId = 11) }.exceptionOrNull())
+        assertNull(repository.loadedReadAlong(chapterId = 11))
+        assertNull(disk.read(11))
+        assertNull(server.takeRequest().getHeader("If-None-Match"))
+    }
+
+    @Test
+    fun `a mismatched pinned entry is not promoted or served offline`() = runTest {
+        val disk = FakeReadAlongStore()
+        disk.pin(chapterId = 11, entry = cachedEntry(owner = owner()))
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setResponseCode(404))
+
+        assertFalse(repository.pinReadAlong(chapterId = 11))
+        assertFalse(disk.isPinned(chapterId = 11))
+        assertNull(disk.read(11))
+        assertEquals("/api/mobile/chapters/11/readalong", server.takeRequest().path)
+    }
+
+    @Test
+    fun `a mismatched prefetch response never pins a document`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        server.enqueue(MockResponse().setBody(ChapterBody))
+
+        assertFalse(repository.pinReadAlong(chapterId = 11))
+        assertFalse(disk.isPinned(chapterId = 11))
+        assertNull(disk.read(11))
+    }
+
+    @Test
     fun `a 404 means this chapter has no read-along, which is not an error`() = runTest {
         val repository = repository()
         server.enqueue(MockResponse().setResponseCode(404))
@@ -347,11 +420,11 @@ class ReadAlongRepositoryTest {
         val repository = repository()
         server.enqueue(MockResponse().setBody(ChapterBody).setHeader("ETag", "\"abc\""))
         val ten = repository.readAlong(chapterId = 10)
-        server.enqueue(MockResponse().setBody(RevisedBody).setHeader("ETag", "\"xyz\""))
+        server.enqueue(MockResponse().setBody(bodyFor(11)).setHeader("ETag", "\"xyz\""))
         val eleven = repository.readAlong(chapterId = 11)
 
         assertEquals("The knight rode north.\n\nSnow fell on the pass.", ten!!.text)
-        assertEquals("The knight rode south.", eleven!!.text)
+        assertEquals("Chapter 11.", eleven!!.text)
 
         // Revalidating chapter 11 must present chapter 11's tag, not the one cached for chapter 10.
         server.enqueue(MockResponse().setResponseCode(304))
