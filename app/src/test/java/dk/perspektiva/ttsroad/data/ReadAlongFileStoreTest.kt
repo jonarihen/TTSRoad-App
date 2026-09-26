@@ -24,10 +24,10 @@ class ReadAlongFileStoreTest {
 
     private fun store(maxEntries: Int = 40) = ReadAlongFileStore(folder.root, maxEntries)
 
-    private fun entry(text: String, etag: String? = "\"v1\"") = CachedReadAlong(
+    private fun entry(text: String, etag: String? = "\"v1\"", chapterId: Int = 10) = CachedReadAlong(
         etag = etag,
         response = ReadAlongResponse(
-            chapter = ReadAlongChapter(id = 10, fictionId = 1, title = "Chapter 1", audioDuration = 60.0),
+            chapter = ReadAlongChapter(id = chapterId, fictionId = 1, title = "Chapter 1", audioDuration = 60.0),
             text = text,
             paragraphs = listOf(listOf(0.0, text.length.toDouble())),
             cues = listOf(listOf(0.0, 3.0, 0.0)),
@@ -124,6 +124,30 @@ class ReadAlongFileStoreTest {
     }
 
     @Test
+    fun `a mismatched browse entry is removed instead of restored`() {
+        val store = store()
+        store.write(chapterId = 11, entry = entry("Wrong chapter."))
+
+        assertNull(store.read(chapterId = 11))
+        assertFalse(store.holds(chapterId = 11))
+        assertEquals(0, store.size())
+    }
+
+    @Test
+    fun `a mismatched pinned entry is removed and a valid browse copy survives`() {
+        val store = store()
+        store.write(chapterId = 11, entry = entry("Correct chapter.", chapterId = 11))
+        val browse = File(folder.root, "readalong_11.json").readText()
+        store.pin(chapterId = 11, entry = entry("Wrong chapter."))
+        File(folder.root, "readalong_11.json").writeText(browse)
+
+        assertEquals("Correct chapter.", store.read(chapterId = 11)?.response?.text)
+        assertFalse(store.isPinned(chapterId = 11))
+        assertEquals(0, store.pinnedSize())
+        assertEquals(1, store.size())
+    }
+
+    @Test
     fun `a file left by an unrelated build is ignored`() {
         File(folder.root, "notes.txt").writeText("hello")
 
@@ -134,7 +158,7 @@ class ReadAlongFileStoreTest {
     fun `chapters are cached independently`() {
         val store = store()
         store.write(chapterId = 10, entry = entry("Ten."))
-        store.write(chapterId = 11, entry = entry("Eleven."))
+        store.write(chapterId = 11, entry = entry("Eleven.", chapterId = 11))
 
         assertEquals("Ten.", store.read(chapterId = 10)!!.response.text)
         assertEquals("Eleven.", store.read(chapterId = 11)!!.response.text)
@@ -145,7 +169,7 @@ class ReadAlongFileStoreTest {
         val store = store(maxEntries = 3)
 
         for (chapterId in 1..6) {
-            store.write(chapterId = chapterId, entry = entry("Chapter $chapterId."))
+            store.write(chapterId = chapterId, entry = entry("Chapter $chapterId.", chapterId = chapterId))
         }
 
         assertTrue("kept ${store.size()} entries", store.size() <= 3)
@@ -156,7 +180,7 @@ class ReadAlongFileStoreTest {
     fun `clearing removes every cached chapter`() {
         val store = store()
         store.write(chapterId = 10, entry = entry("Ten."))
-        store.write(chapterId = 11, entry = entry("Eleven."))
+        store.write(chapterId = 11, entry = entry("Eleven.", chapterId = 11))
 
         store.clear()
 
@@ -199,7 +223,7 @@ class ReadAlongFileStoreTest {
         store.pin(chapterId = 10, entry = entry("The pinned chapter."))
 
         for (chapterId in 20..30) {
-            store.write(chapterId = chapterId, entry = entry("Chapter $chapterId"))
+            store.write(chapterId = chapterId, entry = entry("Chapter $chapterId", chapterId = chapterId))
         }
 
         assertTrue(store.isPinned(chapterId = 10))
@@ -211,7 +235,7 @@ class ReadAlongFileStoreTest {
     @Test
     fun `the bound counts only the evictable half`() {
         val store = store(maxEntries = 2)
-        for (chapterId in 1..5) store.pin(chapterId = chapterId, entry = entry("Chapter $chapterId"))
+        for (chapterId in 1..5) store.pin(chapterId = chapterId, entry = entry("Chapter $chapterId", chapterId = chapterId))
 
         // Five pinned documents do not push each other out, and do not consume the browse bound.
         assertEquals(5, store.pinnedSize())
@@ -271,7 +295,7 @@ class ReadAlongFileStoreTest {
         // "Free the space" is one intent, as it is for the two audio caches.
         val store = store()
         store.write(chapterId = 10, entry = entry("Browsed."))
-        store.pin(chapterId = 11, entry = entry("Downloaded."))
+        store.pin(chapterId = 11, entry = entry("Downloaded.", chapterId = 11))
 
         store.clear()
 
@@ -305,13 +329,13 @@ class ReadAlongFileStoreTest {
     fun `touching a chapter makes it the most recently used`() {
         var now = 1_000_000L
         val store = ReadAlongFileStore(folder.root, maxEntries = 2, clock = { now })
-        store.write(chapterId = 1, entry = entry("One."))
+        store.write(chapterId = 1, entry = entry("One.", chapterId = 1))
         now += 10_000
-        store.write(chapterId = 2, entry = entry("Two."))
+        store.write(chapterId = 2, entry = entry("Two.", chapterId = 2))
         now += 10_000
         store.touch(chapterId = 1)
         now += 10_000
-        store.write(chapterId = 3, entry = entry("Three."))
+        store.write(chapterId = 3, entry = entry("Three.", chapterId = 3))
 
         assertNotNull(store.read(chapterId = 1))
         assertNull(store.read(chapterId = 2))
@@ -330,8 +354,8 @@ class ReadAlongFileStoreTest {
     fun `removing a chapter drops both the browse and the pinned copy`() {
         val store = store()
         store.write(chapterId = 10, entry = entry("Browse."))
-        store.pin(chapterId = 11, entry = entry("Pinned."))
-        store.write(chapterId = 11, entry = entry("Pinned, revalidated."))
+        store.pin(chapterId = 11, entry = entry("Pinned.", chapterId = 11))
+        store.write(chapterId = 11, entry = entry("Pinned, revalidated.", chapterId = 11))
 
         store.remove(chapterId = 10)
         store.remove(chapterId = 11)
@@ -346,7 +370,7 @@ class ReadAlongFileStoreTest {
     fun `holds reports a browse or pinned copy and nothing else`() {
         val store = store()
         store.write(chapterId = 10, entry = entry("Browse."))
-        store.pin(chapterId = 11, entry = entry("Pinned."))
+        store.pin(chapterId = 11, entry = entry("Pinned.", chapterId = 11))
 
         assertTrue(store.holds(chapterId = 10))
         assertTrue(store.holds(chapterId = 11))
@@ -357,7 +381,7 @@ class ReadAlongFileStoreTest {
     @Test
     fun `a write leaves no temp file behind`() {
         store().write(chapterId = 10, entry = entry("Ten."))
-        store().pin(chapterId = 11, entry = entry("Eleven."))
+        store().pin(chapterId = 11, entry = entry("Eleven.", chapterId = 11))
 
         assertEquals(
             setOf("readalong_10.json", "pinned-readalong_11.json"),
