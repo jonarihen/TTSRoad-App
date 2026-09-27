@@ -956,15 +956,16 @@ class TtsRoadMediaService : MediaLibraryService() {
         val plan = Triple(chapterId, keepAhead, ServiceLocator.offlineDownloads(this).keepAheadGeneration.value)
         if (plan == lastKeepAheadPlan) return
         val chapters = fictionChapters(fictionId)?.second ?: return
-        // Claimed only after the listing arrived, so a failed fetch is retried on the next tick.
-        lastKeepAheadPlan = plan
-        ServiceLocator.offlineDownloads(this).applyKeepAhead(
+        // Claimed only once the plan settled, so a failed fetch, a refused start, or removals still in
+        // flight from an off-switch are all retried on the next tick.
+        val settled = ServiceLocator.offlineDownloads(this).applyKeepAhead(
             chapters = chapters,
             currentChapterId = chapterId,
             keepAhead = keepAhead,
             fictionId = fictionId,
             serverUrl = serverUrl(),
         )
+        if (settled) lastKeepAheadPlan = plan
     }
 
     private suspend fun serverUrl(): String = tokenStore.current().serverUrl

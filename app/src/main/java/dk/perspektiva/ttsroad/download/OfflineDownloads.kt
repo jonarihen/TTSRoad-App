@@ -272,6 +272,8 @@ class OfflineDownloads(
                 keepAheadReleaseWhenOff(keepAhead, downloads).filterNot { it in keepAheadReleaseRequested }
             }
                 .collect { release ->
+                    val present = _downloads.value.keys.mapNotNullTo(mutableSetOf()) { TtsRoadMediaIds.chapterId(it) }
+                    keepAheadReleaseRequested.retainAll(present)
                     val sent = release.filter { runCatching { remove(it) }.isSuccess }
                     keepAheadReleaseRequested += sent
                     keepAheadReleasePending = sent.size < release.size
@@ -381,6 +383,10 @@ class OfflineDownloads(
      * A chapter already downloaded by hand inside the window is left exactly as it is — it is
      * counted as handled, so it is not re-queued, and its manual origin is not overwritten. That
      * matters on the way out: the window moving past it must not delete it.
+     *
+     * Answers whether the plan is settled. It is not while the feature has been switched off since
+     * the caller read it, while a service start was refused, or while an earlier release is still
+     * removing rows the plan would otherwise count as handled — the caller re-plans next time.
      */
     fun applyKeepAhead(
         chapters: List<ChapterSummary>,
@@ -388,8 +394,12 @@ class OfflineDownloads(
         keepAhead: Int,
         fictionId: Int,
         serverUrl: String?,
-    ) {
+    ): Boolean {
+        if (keepAheadSetting.value <= 0) return false
         val known = _downloads.value
+        val settled = known.values.none {
+            it.origin == DownloadOrigin.Auto && it.state == ChapterDownloadState.Removing
+        }
         // A failed download is not "handled" — leaving it out is what lets the window retry it.
         // A failed *manual* one is left alone even so: re-queuing it here would rewrite its record
         // as an automatic download, and the window would then be entitled to delete something the
@@ -410,16 +420,16 @@ class OfflineDownloads(
             handled = handled,
             autoDownloaded = autoDownloaded,
         )
-        if (plan.isEmpty) return
+        if (plan.isEmpty) return settled
 
         // Wrapped for the same reason resumeUnfinished is: this runs from the media service, which
         // is often in the background, and starting the download service from there is not always
         // allowed. A refused start leaves the honest state — not downloaded — rather than killing
         // playback, which is the thing the user actually asked for.
-        runCatching {
+        return runCatching {
             download(plan.download, serverUrl, DownloadOrigin.Auto)
             plan.release.forEach(::remove)
-        }
+        }.isSuccess && settled
     }
 
     /** Delete a chapter's audio and its read-along document, or cancel it if it is still downloading. */
