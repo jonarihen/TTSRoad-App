@@ -52,6 +52,7 @@ import dk.perspektiva.ttsroad.data.libraryMoved
 import dk.perspektiva.ttsroad.data.mergeLibraryDelta
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
+import dk.perspektiva.ttsroad.player.InProcessPlayer
 import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.adSkipTarget
 import dk.perspektiva.ttsroad.player.PlaybackFailure
@@ -179,6 +180,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             }
         }
         player = createPlayer()
+        InProcessPlayer.attach(player)
         startAudioTuning()
         // Speed lives in the service, not the UI: the player is recreated on a swipe-away, a
         // process kill, or a reboot, and the car can start playback with no UI running at all.
@@ -343,6 +345,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         runCatching { loudnessEnhancer?.release() }
         loudnessEnhancer = null
         session.release()
+        InProcessPlayer.detach(player)
         player.release()
         serviceScope.cancel()
         super.onDestroy()
