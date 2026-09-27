@@ -124,8 +124,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var retryJob: Job? = null
     private var retryAttempt = 0
 
-    // The chapter the keep-ahead window was last planned around; see moveKeepAheadWindow.
-    private var lastKeepAheadChapterId: Int? = null
+    // The chapter and window size the keep-ahead window was last planned around; see moveKeepAheadWindow.
+    private var lastKeepAheadPlan: Pair<Int, Int>? = null
     private var playbackSkips: ChapterSkips? = null
     private var playbackSkipsLoad: Job? = null
     private var playbackSkipsGeneration = 0L
@@ -944,16 +944,20 @@ class TtsRoadMediaService : MediaLibraryService() {
      * chapter listing could not be fetched.
      */
     private suspend fun moveKeepAheadWindow(fictionId: Int, chapterId: Int) {
-        if (chapterId == lastKeepAheadChapterId) return
         val keepAhead = runCatching { downloadPreferences.current().keepAheadChapters }
             .getOrDefault(0)
         // Switching the feature off is handled by OfflineDownloads, which watches the setting and
-        // releases every automatic download at once, in every fiction. Nothing is claimed here while
-        // it is off, so switching it back on re-plans on the next tick rather than the next chapter.
-        if (keepAhead <= 0) return
+        // releases every automatic download at once, in every fiction. The window size is part of
+        // the key, so switching it back on — or to another size — re-plans on the next tick.
+        if (keepAhead <= 0) {
+            lastKeepAheadPlan = null
+            return
+        }
+        val plan = chapterId to keepAhead
+        if (plan == lastKeepAheadPlan) return
         val chapters = fictionChapters(fictionId)?.second ?: return
         // Claimed only after the listing arrived, so a failed fetch is retried on the next tick.
-        lastKeepAheadChapterId = chapterId
+        lastKeepAheadPlan = plan
         ServiceLocator.offlineDownloads(this).applyKeepAhead(
             chapters = chapters,
             currentChapterId = chapterId,

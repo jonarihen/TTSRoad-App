@@ -122,6 +122,14 @@ class OfflineDownloads(
 
     private val _downloads = MutableStateFlow<Map<String, ChapterDownload>>(emptyMap())
 
+    /**
+     * Keep-ahead's off-switch release could not reach the download service, most likely because the
+     * process was in the background. Retried from [resumeUnfinished], which runs in the foreground.
+     */
+    @Volatile
+    private var keepAheadReleasePending = false
+    private val keepAheadRetry = MutableStateFlow(0)
+
     /** Every known download, keyed by the chapter's media id. Empty until the index has loaded. */
     val downloads: StateFlow<Map<String, ChapterDownload>> = _downloads.asStateFlow()
 
@@ -242,11 +250,11 @@ class OfflineDownloads(
                 }
         }
         scope.launch {
-            combine(downloadPrefs.map { it.keepAheadChapters }, _downloads) { keepAhead, downloads ->
-                keepAheadReleaseWhenOff(keepAhead, downloads)
+            combine(downloadPrefs.map { it.keepAheadChapters }, _downloads, keepAheadRetry) { keepAhead, downloads, attempt ->
+                keepAheadReleaseWhenOff(keepAhead, downloads) to attempt
             }
                 .distinctUntilChanged()
-                .collect { release -> runCatching { release.forEach(::remove) } }
+                .collect { (release, _) -> keepAheadReleasePending = !tryRemove(release) }
         }
         // The cap is applied to the live evictor rather than only at construction, so lowering it
         // frees space now — someone who has just chosen a smaller number is usually trying to get
@@ -393,6 +401,9 @@ class OfflineDownloads(
         }
     }
 
+    private fun tryRemove(chapterIds: List<Int>): Boolean =
+        chapterIds.all { runCatching { remove(it) }.isSuccess }
+
     /** Delete a chapter's audio and its read-along document, or cancel it if it is still downloading. */
     fun remove(chapterId: Int) {
         unpinReadAlong(chapterId)
@@ -452,6 +463,7 @@ class OfflineDownloads(
      * a background service start, and the user will open the app before the next drive anyway.
      */
     fun resumeUnfinished() {
+        if (keepAheadReleasePending) keepAheadRetry.value++
         runCatching {
             DownloadService.sendResumeDownloads(
                 context,
