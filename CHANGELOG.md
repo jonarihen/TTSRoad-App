@@ -2,6 +2,15 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- The read-along highlight no longer jumps backwards and forwards during playback. The reader now
+  takes the position from the service's player itself. Before, it used the media controller's
+  estimate, which was only corrected every three seconds and drifted most with skip-silence on.
+  (#277)
+
 ## 0.18.0 — 2026-09-24
 
 ### Added

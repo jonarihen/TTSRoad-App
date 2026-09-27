@@ -6,6 +6,8 @@ internal data class ReadAlongPlaybackSample(
     val isPlaying: Boolean,
     val speed: Float,
     val discontinuityGeneration: Long,
+    /** Read from the service's player itself rather than a controller's extrapolation of it. */
+    val exact: Boolean = false,
 )
 
 internal class ReadAlongPlaybackPosition {
@@ -30,6 +32,7 @@ internal class ReadAlongPlaybackPosition {
         previousSample = sample
         val uninterrupted = previous != null &&
             previous.mediaId == sample.mediaId &&
+            previous.exact == sample.exact &&
             previous.discontinuityGeneration == sample.discontinuityGeneration &&
             previous.isPlaying && sample.isPlaying &&
             previous.speed == sample.speed
