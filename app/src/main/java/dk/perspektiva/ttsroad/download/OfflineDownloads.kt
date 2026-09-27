@@ -241,6 +241,13 @@ class OfflineDownloads(
                     }
                 }
         }
+        scope.launch {
+            combine(downloadPrefs.map { it.keepAheadChapters }, _downloads) { keepAhead, downloads ->
+                keepAheadReleaseWhenOff(keepAhead, downloads)
+            }
+                .distinctUntilChanged()
+                .collect { release -> runCatching { release.forEach(::remove) } }
+        }
         // The cap is applied to the live evictor rather than only at construction, so lowering it
         // frees space now — someone who has just chosen a smaller number is usually trying to get
         // disk back, and "restart the app" is not an answer to that.

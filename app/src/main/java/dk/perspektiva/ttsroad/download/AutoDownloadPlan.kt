@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.download
 
 import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 
 /**
  * What keep-ahead should do right now: fetch these, let go of those.
@@ -80,4 +81,23 @@ fun autoDownloadPlan(
         download = window.filterNot { it.resolvedChapterId in handled },
         release = autoDownloaded.filterNot { it in windowIds }.sorted(),
     )
+}
+
+/**
+ * Every chapter keep-ahead fetched, in any fiction, when the feature is switched off.
+ *
+ * The per-fiction scoping in [autoDownloadPlan] is right while the feature is on and wrong once it
+ * is off: switching it off is a global statement, and the windows it left in other books are just
+ * as much its own cache as the one in the book playing now. Hand-picked downloads are never listed.
+ */
+fun keepAheadReleaseWhenOff(
+    keepAhead: Int,
+    downloads: Map<String, ChapterDownload>,
+): List<Int> {
+    if (keepAhead > 0) return emptyList()
+    return downloads
+        .filterValues { it.origin == DownloadOrigin.Auto && it.state != ChapterDownloadState.Removing }
+        .keys
+        .mapNotNull { TtsRoadMediaIds.chapterId(it) }
+        .sorted()
 }
