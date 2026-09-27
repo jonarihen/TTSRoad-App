@@ -484,6 +484,15 @@ class OfflineDownloads(
     }
 
     /**
+     * Retry a keep-ahead release the download service refused, now that the app is in the foreground.
+     * Called on every return to the foreground, not only at launch, because a stopped activity that
+     * comes back is not created again.
+     */
+    fun retryPendingKeepAheadRelease() {
+        if (keepAheadReleasePending) keepAheadRetry.value++
+    }
+
+    /**
      * Restart whatever was still in flight when the app was last killed.
      *
      * Called from the activity, so the process is in the foreground and starting the service is
@@ -491,7 +500,7 @@ class OfflineDownloads(
      * a background service start, and the user will open the app before the next drive anyway.
      */
     fun resumeUnfinished() {
-        if (keepAheadReleasePending) keepAheadRetry.value++
+        retryPendingKeepAheadRelease()
         runCatching {
             DownloadService.sendResumeDownloads(
                 context,
