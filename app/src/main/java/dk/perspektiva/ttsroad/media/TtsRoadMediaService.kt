@@ -124,8 +124,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var retryJob: Job? = null
     private var retryAttempt = 0
 
-    // The chapter and window size the keep-ahead window was last planned around; see moveKeepAheadWindow.
-    private var lastKeepAheadPlan: Pair<Int, Int>? = null
+    // The chapter, window size and setting generation the window was last planned around.
+    private var lastKeepAheadPlan: Triple<Int, Int, Long>? = null
     private var playbackSkips: ChapterSkips? = null
     private var playbackSkipsLoad: Job? = null
     private var playbackSkipsGeneration = 0L
@@ -947,13 +947,13 @@ class TtsRoadMediaService : MediaLibraryService() {
         val keepAhead = runCatching { downloadPreferences.current().keepAheadChapters }
             .getOrDefault(0)
         // Switching the feature off is handled by OfflineDownloads, which watches the setting and
-        // releases every automatic download at once, in every fiction. The window size is part of
-        // the key, so switching it back on — or to another size — re-plans on the next tick.
+        // releases every automatic download at once, in every fiction. The setting's generation is
+        // part of the key, so any change to it — off and back on included — re-plans on the next tick.
         if (keepAhead <= 0) {
             lastKeepAheadPlan = null
             return
         }
-        val plan = chapterId to keepAhead
+        val plan = Triple(chapterId, keepAhead, ServiceLocator.offlineDownloads(this).keepAheadGeneration.value)
         if (plan == lastKeepAheadPlan) return
         val chapters = fictionChapters(fictionId)?.second ?: return
         // Claimed only after the listing arrived, so a failed fetch is retried on the next tick.

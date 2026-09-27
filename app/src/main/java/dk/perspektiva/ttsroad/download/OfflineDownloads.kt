@@ -129,6 +129,14 @@ class OfflineDownloads(
     @Volatile
     private var keepAheadReleasePending = false
     private val keepAheadRetry = MutableStateFlow(0)
+    private val keepAheadSetting = MutableStateFlow(Int.MAX_VALUE)
+    private val keepAheadReleaseRequested: MutableSet<Int> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * Bumped each time the keep-ahead setting changes. The media service keys its plan on this, so
+     * switching the feature off and on again — even back to the same size — re-plans the window.
+     */
+    val keepAheadGeneration = MutableStateFlow(0L)
 
     /** Every known download, keyed by the chapter's media id. Empty until the index has loaded. */
     val downloads: StateFlow<Map<String, ChapterDownload>> = _downloads.asStateFlow()
@@ -250,11 +258,24 @@ class OfflineDownloads(
                 }
         }
         scope.launch {
-            combine(downloadPrefs.map { it.keepAheadChapters }, _downloads, keepAheadRetry) { keepAhead, downloads, attempt ->
-                keepAheadReleaseWhenOff(keepAhead, downloads) to attempt
-            }
+            downloadPrefs
+                .map { it.keepAheadChapters }
                 .distinctUntilChanged()
-                .collect { (release, _) -> keepAheadReleasePending = !tryRemove(release) }
+                .collect { keepAhead ->
+                    if (keepAhead > 0) keepAheadReleaseRequested.clear()
+                    keepAheadSetting.value = keepAhead
+                    keepAheadGeneration.value++
+                }
+        }
+        scope.launch {
+            combine(keepAheadSetting, _downloads, keepAheadRetry) { keepAhead, downloads, _ ->
+                keepAheadReleaseWhenOff(keepAhead, downloads).filterNot { it in keepAheadReleaseRequested }
+            }
+                .collect { release ->
+                    val sent = release.filter { runCatching { remove(it) }.isSuccess }
+                    keepAheadReleaseRequested += sent
+                    keepAheadReleasePending = sent.size < release.size
+                }
         }
         // The cap is applied to the live evictor rather than only at construction, so lowering it
         // frees space now — someone who has just chosen a smaller number is usually trying to get
@@ -400,9 +421,6 @@ class OfflineDownloads(
             plan.release.forEach(::remove)
         }
     }
-
-    private fun tryRemove(chapterIds: List<Int>): Boolean =
-        chapterIds.all { runCatching { remove(it) }.isSuccess }
 
     /** Delete a chapter's audio and its read-along document, or cancel it if it is still downloading. */
     fun remove(chapterId: Int) {
