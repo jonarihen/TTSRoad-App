@@ -202,4 +202,11 @@ class ReadAlongPlaybackPositionTest {
         assertEquals(3_004L, position(sample(2_992L), 16L))
         assertEquals(2_980L, ReadAlongPlaybackPosition().positionMs(sample(2_980L), mediaId, 32L))
     }
+
+    @Test
+    fun `switching between controller and in-process sources resets continuity`() {
+        position(sample(3_050L))
+        val exact = ReadAlongPlaybackSample(mediaId, 2_990L, true, 1f, 1L, exact = true)
+        assertEquals(2_990L, position(exact, 16L))
+    }
 }

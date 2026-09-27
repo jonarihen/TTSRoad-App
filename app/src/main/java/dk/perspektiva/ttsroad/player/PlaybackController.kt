@@ -283,6 +283,7 @@ class PlaybackController internal constructor(
     internal fun readAlongSample(): ReadAlongPlaybackSample? {
         check(Looper.myLooper() == Looper.getMainLooper())
         val controller = controller?.takeIf { it.isConnected } ?: return null
+        InProcessPlayer.sample()?.let { return it }
         val mediaId = controller.currentMediaItem?.mediaId ?: return null
         return ReadAlongPlaybackSample(
             mediaId = mediaId,

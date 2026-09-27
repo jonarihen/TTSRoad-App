@@ -126,6 +126,7 @@ class PlaybackControllerConnectionTest {
 
     @After
     fun tearDown() {
+        InProcessPlayer.detach(player)
         scope.cancel()
         session.release()
         player.release()
@@ -575,5 +576,87 @@ class PlaybackControllerConnectionTest {
         assertNotNull(controller.reportedPositionMs())
 
         controller.release()
+    }
+
+    @Test
+    fun `sample reads the in-process player exactly instead of the controller's extrapolation`() = runTest {
+        player.positionSupplier = SimpleBasePlayer.PositionSupplier { player.position }
+        player.publish()
+        shadowOf(Looper.getMainLooper()).idle()
+        val controller = connectedController()
+        InProcessPlayer.attach(player)
+        try {
+            val initial = controller.readAlongSample()!!
+            assertTrue(initial.exact)
+            assertEquals(player.position, initial.positionMs)
+
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1_500L))
+            player.position = initial.positionMs + 1_900L
+
+            val sample = controller.readAlongSample()!!
+            assertEquals(player.position, sample.positionMs)
+            assertEquals(initial.discontinuityGeneration, sample.discontinuityGeneration)
+            assertEquals(initial.positionMs + 1_500L, controller.reportedPositionMs())
+        } finally {
+            controller.release()
+        }
+    }
+
+    @Test
+    fun `in-process sample bumps its generation on seek pause speed and item change`() = runTest {
+        val controller = connectedController()
+        InProcessPlayer.attach(player)
+        try {
+            var before = controller.readAlongSample()!!
+            player.seekTo(0, 9_000L)
+            shadowOf(Looper.getMainLooper()).idle()
+            var after = controller.readAlongSample()!!
+            assertTrue(after.discontinuityGeneration > before.discontinuityGeneration)
+
+            before = after
+            player.pause()
+            shadowOf(Looper.getMainLooper()).idle()
+            after = controller.readAlongSample()!!
+            assertFalse(after.isPlaying)
+            assertTrue(after.discontinuityGeneration > before.discontinuityGeneration)
+
+            before = after
+            player.setPlaybackSpeed(1.5f)
+            shadowOf(Looper.getMainLooper()).idle()
+            after = controller.readAlongSample()!!
+            assertEquals(1.5f, after.speed, 0f)
+            assertTrue(after.discontinuityGeneration > before.discontinuityGeneration)
+
+            before = after
+            player.seekTo(1, 0L)
+            shadowOf(Looper.getMainLooper()).idle()
+            after = controller.readAlongSample()!!
+            assertEquals("chapter:11", after.mediaId)
+            assertTrue(after.discontinuityGeneration > before.discontinuityGeneration)
+        } finally {
+            controller.release()
+        }
+    }
+
+    @Test
+    fun `detached in-process player falls back to the controller sample`() = runTest {
+        val controller = connectedController()
+        InProcessPlayer.attach(player)
+        try {
+            assertTrue(controller.readAlongSample()!!.exact)
+            InProcessPlayer.detach(player)
+            val fallback = controller.readAlongSample()!!
+            assertFalse(fallback.exact)
+            assertEquals(controller.reportedPositionMs(), fallback.positionMs)
+        } finally {
+            controller.release()
+        }
+    }
+
+    @Test
+    fun `in-process player is never sampled without a connected controller`() = runTest {
+        InProcessPlayer.attach(player)
+        val controller = controller(RecordingConnector())
+        assertNull(controller.readAlongSample())
     }
 }
