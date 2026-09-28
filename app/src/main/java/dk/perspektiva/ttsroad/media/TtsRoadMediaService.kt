@@ -187,6 +187,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     lastLibrary = null
                     lastLibraryCursor = null
                     searchCacheGeneration++
+                    if (::session.isInitialized) notifyBrowseTreeChanged(session)
                 }
                 if (!state.isLoggedIn) {
                     if (::player.isInitialized) stopSignedOutPlayback(player)
@@ -1243,8 +1244,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 val fictionId = extras?.getInt("fiction_id", 0)?.takeIf { it > 0 }
                 val chapterId = extras?.getInt("chapter_id", 0)?.takeIf { it > 0 }
                 if (fictionId != null && chapterId != null) {
-                    service.buildFictionQueue(fictionId, chapterId)?.let {
+                    val sessionAtRequest = service.librarySessionGeneration
+                    service.buildFictionQueue(fictionId, chapterId, sessionAtRequest)?.let {
                         return@future it.withRequestedStartPosition(startPositionMs)
+                    }
+                    if (!service.sessionStillCurrent(sessionAtRequest)) {
+                        throw UnsupportedOperationException("Signed out or switched account")
                     }
                 }
                 MediaSession.MediaItemsWithStartPosition(
@@ -1476,6 +1481,22 @@ internal class SearchResultCache {
         cachedGeneration = found.generation
         cachedResults = found.items
         return found.items
+    }
+}
+
+/**
+ * Tell every connected browser that the whole browse tree changed, so a car that cached the
+ * previous account's lists reloads them instead of showing them after a sign-out or account switch.
+ */
+internal fun notifyBrowseTreeChanged(session: MediaLibraryService.MediaLibrarySession) {
+    for (id in listOf(
+        TtsRoadMediaIds.Root,
+        TtsRoadMediaIds.Continue,
+        TtsRoadMediaIds.Fictions,
+        TtsRoadMediaIds.Recent,
+        TtsRoadMediaIds.Queue,
+    )) {
+        session.notifyChildrenChanged(id, Int.MAX_VALUE, null)
     }
 }
 
