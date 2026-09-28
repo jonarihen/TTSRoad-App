@@ -96,4 +96,37 @@ class SearchResultCacheTest {
         assertNull(first)
         assertEquals(2, searches)
     }
+
+    @Test
+    fun `invalidating forces the next lookup to search again`() = runTest {
+        val cache = SearchResultCache()
+        var searches = 0
+        val search: suspend () -> SearchResult? = {
+            searches++
+            SearchResult(listOf(item("chapter:1")), generation = 3L)
+        }
+
+        cache.results("ashes", generation = 3L, search)
+        cache.invalidate()
+        cache.results("ashes", generation = 3L, search)
+
+        assertEquals(2, searches)
+    }
+
+    @Test
+    fun `an account change refreshes the roots and every fiction folder the car could have open`() {
+        assertEquals(
+            listOf(
+                TtsRoadMediaIds.Root,
+                TtsRoadMediaIds.Continue,
+                TtsRoadMediaIds.Fictions,
+                TtsRoadMediaIds.Recent,
+                TtsRoadMediaIds.Queue,
+                "fiction:7",
+                "fiction:9",
+            ),
+            browseNodesToRefresh(listOf(7, 9, 7)),
+        )
+    }
+
 }

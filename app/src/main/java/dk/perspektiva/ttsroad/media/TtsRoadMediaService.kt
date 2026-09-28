@@ -184,10 +184,11 @@ class TtsRoadMediaService : MediaLibraryService() {
                     librarySessionGeneration++
                     // The car searches and browses off this memo. Never serve one account's
                     // library — or its spoken-search results — to another, or to nobody.
+                    val previousFictionIds = lastLibrary?.fictions?.map { it.id }.orEmpty()
                     lastLibrary = null
                     lastLibraryCursor = null
                     searchCacheGeneration++
-                    if (::session.isInitialized) notifyBrowseTreeChanged(session)
+                    if (::session.isInitialized) notifyBrowseTreeChanged(session, previousFictionIds)
                 }
                 if (!state.isLoggedIn) {
                     if (::player.isInitialized) stopSignedOutPlayback(player)
@@ -1290,6 +1291,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<Void>> =
             service.serviceScope.future {
+                searchCache.invalidate()
                 val found = results(query)
                 session.notifySearchResultChanged(browser, query, found.size, params)
                 LibraryResult.ofVoid()
@@ -1451,20 +1453,20 @@ internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition
 internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): MediaItem? =
     if (previous != null && previous.mediaId != newMediaId) previous else null
 
+/** Items found by one search, tagged with the generation of the library they were built from. */
+internal data class SearchResult(val items: List<MediaItem>, val generation: Long)
+
 /**
  * The spoken-search result held between Media3's two-step search.
  *
  * `onSearch` does the work and `onGetSearchResult` pages it, so the library is not fetched twice
- * per query — but a retained result must never outlive the library or session it was built from.
- * The generation tags both: the service bumps it on sign-out, account switch and every library
- * refresh, so a repeat query after any of those refetches instead of serving stale items. A result
- * is cached under the generation of the library it was actually built from, which the search itself
- * reports, so a refresh during or after it can never mislabel it. A search that answers null was
- * overtaken by an account change and is never cached.
+ * per query. Every new `onSearch` starts from a fresh fetch, so a repeated query sees titles the
+ * server gained or lost since. A retained result must never outlive the library or session it was
+ * built from: the service bumps the generation on sign-out, account switch and every library
+ * refresh, and a result is cached under the generation of the library it was actually built from,
+ * which the search itself reports. A search that answers null was overtaken by an account change
+ * and is never cached.
  */
-/** Items found by one search, tagged with the generation of the library they were built from. */
-internal data class SearchResult(val items: List<MediaItem>, val generation: Long)
-
 internal class SearchResultCache {
     private var cachedQuery: String? = null
     private var cachedGeneration = -1L
@@ -1482,23 +1484,37 @@ internal class SearchResultCache {
         cachedResults = found.items
         return found.items
     }
+
+    /** Forget the held result, so the next lookup searches afresh. */
+    fun invalidate() {
+        cachedQuery = null
+        cachedGeneration = -1L
+        cachedResults = emptyList()
+    }
 }
 
 /**
  * Tell every connected browser that the whole browse tree changed, so a car that cached the
  * previous account's lists reloads them instead of showing them after a sign-out or account switch.
  */
-internal fun notifyBrowseTreeChanged(session: MediaLibraryService.MediaLibrarySession) {
-    for (id in listOf(
+internal fun notifyBrowseTreeChanged(
+    session: MediaLibraryService.MediaLibrarySession,
+    fictionIds: List<Int> = emptyList(),
+) {
+    for (id in browseNodesToRefresh(fictionIds)) {
+        session.notifyChildrenChanged(id, Int.MAX_VALUE, null)
+    }
+}
+
+/** The fixed browse roots plus the folder of every fiction the previous account could open. */
+internal fun browseNodesToRefresh(fictionIds: List<Int>): List<String> =
+    listOf(
         TtsRoadMediaIds.Root,
         TtsRoadMediaIds.Continue,
         TtsRoadMediaIds.Fictions,
         TtsRoadMediaIds.Recent,
         TtsRoadMediaIds.Queue,
-    )) {
-        session.notifyChildrenChanged(id, Int.MAX_VALUE, null)
-    }
-}
+    ) + fictionIds.distinct().map(TtsRoadMediaIds::fiction)
 
 internal fun stopSignedOutPlayback(player: Player) {
     player.pause()
