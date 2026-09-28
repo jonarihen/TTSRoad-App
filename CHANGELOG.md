@@ -2,6 +2,35 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.18.1 — 2026-09-28
+
+### Fixed
+
+- Offline listening progress is no longer erased by a cold launch before the saved session has
+  loaded. (#272)
+- A newer position recorded in the same millisecond as one already in flight is kept, and gets a
+  strictly newer sync stamp so the server accepts it. (#266)
+- Signing in to a server no longer risks sending the previous session's token with the login
+  request. (#264)
+- Listening statistics are cached per account, so switching accounts never shows the previous
+  account's figures. (#265)
+- An EPUB export refused with 401 now signs out the rejected session like every other request.
+  (#274)
+- The queue sheet refreshes when a queue is replaced by one with the same first and last chapter.
+  (#267)
+- Read-along: reopening a chapter with an unchanged copy keeps it from being evicted, a chapter the
+  server no longer has is removed rather than resurrected offline, and a cached copy dropped from
+  disk is fetched again. (#254)
+- Read-along rejects a response whose chapter does not match the one asked for, and removes such a
+  copy from disk. (#273)
+- The read-along highlight follows the player's actual position instead of the controller's
+  estimate, so it no longer jumps between position updates. (#277)
+- Switching **Keep chapters ahead** off now frees its downloads at once, in every book, and
+  switching it back on or changing the size re-plans without waiting for the next chapter.
+- Android Auto and voice search no longer show the previous account's library or search results
+  after signing out or switching account.
+- Home-screen chapter entries open the fiction page.
+
 ## 0.18.0 — 2026-09-24
 
 ### Added
