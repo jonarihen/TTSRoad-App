@@ -105,6 +105,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var player: ExoPlayer
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private lateinit var session: MediaLibrarySession
+    private lateinit var browserCallback: BrowserCallback
     private lateinit var sleepTimer: SleepTimerController
     private lateinit var fictionSpeeds: FictionSpeedPreferences
     private lateinit var nowPlayingStore: NowPlayingStore
@@ -118,6 +119,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var shakeDetector: ShakeDetector? = null
     private var lastLibrary: LibraryResponse? = null
     private var lastLibraryCursor: String? = null
+    private var lastSessionIdentity: Pair<String, String?>? = null
+    private var searchCacheGeneration = 0L
+
+    // Bumped on every account change, so a library fetch that outlives its session is discarded.
+    private var librarySessionGeneration = 0L
 
     // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
     // outage later in the night gets a fresh set of attempts rather than giving up immediately.
@@ -169,6 +175,25 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
                 // for the instant before its DataStore read finishes.
+                val sessionIdentity = if (state.isLoggedIn) {
+                    state.serverUrl to state.username
+                } else {
+                    null
+                }
+                if (sessionIdentity != lastSessionIdentity) {
+                    lastSessionIdentity = sessionIdentity
+                    librarySessionGeneration++
+                    // The car searches and browses off this memo. Never serve one account's
+                    // library — or its spoken-search results — to another, or to nobody.
+                    val previousFictionIds = lastLibrary?.fictions?.map { it.id }.orEmpty()
+                    lastLibrary = null
+                    lastLibraryCursor = null
+                    searchCacheGeneration++
+                    if (::session.isInitialized) {
+                        notifyBrowseTreeChanged(session, previousFictionIds)
+                        browserCallback.retractSearches(session)
+                    }
+                }
                 if (!state.isLoggedIn) {
                     if (::player.isInitialized) stopSignedOutPlayback(player)
                     // Ordered against the publishes: a tick captured just before the sign-out must
@@ -312,7 +337,8 @@ class TtsRoadMediaService : MediaLibraryService() {
         startProgressTicker()
         startPlaybackSkipTicker()
         startSleepTimer()
-        session = MediaLibrarySession.Builder(this, player, BrowserCallback(this))
+        browserCallback = BrowserCallback(this)
+        session = MediaLibrarySession.Builder(this, player, browserCallback)
             .setSessionActivity(playerActivityIntent())
             .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
             .build()
@@ -976,8 +1002,10 @@ class TtsRoadMediaService : MediaLibraryService() {
         if (repository.currentCapabilities.value.advertised.isEmpty()) {
             repository.refreshCurrentCapabilities()
         }
+        val session = librarySessionGeneration
         val previous = lastLibrary
         val cursor = lastLibraryCursor
+        var nextCursor = cursor
         val loaded = runCatching {
             if (previous != null && cursor != null &&
                 repository.currentCapabilities.value.deltaSync
@@ -989,19 +1017,34 @@ class TtsRoadMediaService : MediaLibraryService() {
                     previous
                 }
                 if (index != null) {
-                    lastLibraryCursor = index.serverTime
+                    nextCursor = index.serverTime
                     refreshed.copy(serverTime = index.serverTime)
                 } else {
                     refreshed
                 }
             } else {
-                repository.library().also { lastLibraryCursor = it.serverTime }
+                repository.library().also { nextCursor = it.serverTime }
             }
         }.getOrNull()
+        if (!sessionStillCurrent(session)) return null
         if (loaded != null) {
+            if (loaded != lastLibrary) searchCacheGeneration++
             lastLibrary = loaded
+            lastLibraryCursor = nextCursor
         }
         return loaded ?: lastLibrary
+    }
+
+    /**
+     * Whether the account that [generation] was captured under is still the signed-in one.
+     *
+     * Checked right before anything built from a fetch is handed to the car. The generation alone
+     * lags a sign-out by one collector hop, so the live token store is read as well.
+     */
+    private suspend fun sessionStillCurrent(generation: Long): Boolean {
+        if (generation != librarySessionGeneration) return false
+        val live = tokenStore.current()
+        return live.isLoggedIn && (live.serverUrl to live.username) == lastSessionIdentity
     }
 
     private suspend fun fictionChapters(fictionId: Int): Pair<FictionSummary, List<ChapterSummary>>? {
@@ -1020,9 +1063,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun buildFictionQueue(
         fictionId: Int,
         startChapterId: Int,
+        session: Long = librarySessionGeneration,
     ): MediaSession.MediaItemsWithStartPosition? {
         val (fiction, chapters) = fictionChapters(fictionId) ?: return null
         val serverUrl = serverUrl()
+        if (!sessionStillCurrent(session)) return null
         val built = chapters.mapNotNull { chapter ->
             TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)?.let { chapter to it }
         }
@@ -1051,9 +1096,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun queueForSpokenQuery(
         query: String,
     ): MediaSession.MediaItemsWithStartPosition? {
+        val session = librarySessionGeneration
         val library = library() ?: return null
         val fiction = resolveSpokenFiction(library.fictions, query) ?: return null
-        return buildFictionQueue(fiction.id, resumeChapterId(library, fiction.id))
+        return buildFictionQueue(fiction.id, resumeChapterId(library, fiction.id), session)
     }
 
     /**
@@ -1067,29 +1113,34 @@ class TtsRoadMediaService : MediaLibraryService() {
             ?: 0
 
     /** Fictions and chapters matching a car search, as browse items. */
-    private suspend fun searchItems(query: String): List<MediaItem> {
-        val library = library() ?: return emptyList()
+    private suspend fun searchItems(query: String): SearchResult? {
+        val session = librarySessionGeneration
+        val library = library() ?: return null
+        val generation = searchCacheGeneration
         val serverUrl = serverUrl()
+        if (!sessionStillCurrent(session)) return null
         val fictions = searchFictions(library.fictions, query)
         val chapters = searchChapters(
             library.continueListening + library.recentChapters,
             query,
         ).distinctBy { it.resolvedChapterId }
 
-        return fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) } +
+        val items = fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) } +
             chapters.mapNotNull { chapter ->
                 val fiction = chapter.fiction
                     ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
             }
+        return SearchResult(items, generation)
     }
 
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
+        val session = librarySessionGeneration
         val library = library() ?: return null
         val chapter = library.continueListening.firstOrNull() ?: return null
         val fictionId = chapter.resolvedFictionId.takeIf { it > 0 } ?: return null
-        return buildFictionQueue(fictionId, chapter.resolvedChapterId)
+        return buildFictionQueue(fictionId, chapter.resolvedChapterId, session)
     }
 
     @OptIn(UnstableApi::class)
@@ -1199,8 +1250,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 val fictionId = extras?.getInt("fiction_id", 0)?.takeIf { it > 0 }
                 val chapterId = extras?.getInt("chapter_id", 0)?.takeIf { it > 0 }
                 if (fictionId != null && chapterId != null) {
-                    service.buildFictionQueue(fictionId, chapterId)?.let {
+                    val sessionAtRequest = service.librarySessionGeneration
+                    service.buildFictionQueue(fictionId, chapterId, sessionAtRequest)?.let {
                         return@future it.withRequestedStartPosition(startPositionMs)
+                    }
+                    if (!service.sessionStillCurrent(sessionAtRequest)) {
+                        throw UnsupportedOperationException("Signed out or switched account")
                     }
                 }
                 MediaSession.MediaItemsWithStartPosition(
@@ -1223,16 +1278,37 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         // Media3 splits searching in two: onSearch does the work and reports how many results
         // exist, then the browser asks for the page it wants. The result is cached between the two
-        // so the library is not fetched and matched twice per spoken search.
-        private var cachedQuery: String? = null
-        private var cachedResults: List<MediaItem> = emptyList()
+        // so the library is not fetched and matched twice per spoken search, and so the pages come
+        // from the same result set whose count was announced.
+        private val searchCache = SearchResultCache()
 
-        private suspend fun results(query: String): List<MediaItem> {
-            if (query == cachedQuery) return cachedResults
-            val found = service.searchItems(query)
-            cachedQuery = query
-            cachedResults = found
-            return found
+        // Every browser that has been told a result count, so an account change can retract it.
+        private val activeSearches = mutableMapOf<MediaSession.ControllerInfo, Pair<String, LibraryParams?>>()
+
+        /**
+         * Withdraw every search result a connected car is showing. Called on sign-out and account
+         * switch: the held result belongs to the previous account, and the car keeps rendering
+         * what it was last told until it hears otherwise.
+         */
+        fun retractSearches(session: MediaLibrarySession) {
+            searchCache.invalidate()
+            for ((browser, search) in activeSearches) {
+                session.notifySearchResultChanged(browser, search.first, 0, search.second)
+            }
+            activeSearches.clear()
+        }
+
+        private suspend fun results(query: String, fresh: Boolean): List<MediaItem> {
+            val session = service.librarySessionGeneration
+            val found = if (fresh) {
+                searchCache.invalidate()
+                searchCache.results(query, service.searchCacheGeneration) { service.searchItems(query) }
+            } else {
+                searchCache.held(query) ?: searchCache.results(query, service.searchCacheGeneration) {
+                    service.searchItems(query)
+                }
+            } ?: return emptyList()
+            return if (service.sessionStillCurrent(session)) found else emptyList()
         }
 
         override fun onSearch(
@@ -1242,7 +1318,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<Void>> =
             service.serviceScope.future {
-                val found = results(query)
+                val found = results(query, fresh = true)
+                activeSearches[browser] = query to params
                 session.notifySearchResultChanged(browser, query, found.size, params)
                 LibraryResult.ofVoid()
             }
@@ -1256,7 +1333,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
             service.serviceScope.future {
-                LibraryResult.ofItemList(page(results(query), page, pageSize), params)
+                LibraryResult.ofItemList(page(results(query, fresh = false), page, pageSize), params)
             }
 
         override fun onGetChildren(
@@ -1326,14 +1403,18 @@ class TtsRoadMediaService : MediaLibraryService() {
         )
 
         private suspend fun queueItems(): List<MediaItem> {
+            val session = service.librarySessionGeneration
             val queue = runCatching { service.repository.queue() }.getOrNull() ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return queue.items.mapNotNull { TtsRoadMediaItems.queueItem(it, serverUrl) }
         }
 
         private suspend fun continueItems(): List<MediaItem> {
+            val session = service.librarySessionGeneration
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return library.continueListening.mapNotNull { chapter ->
                 val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
@@ -1341,14 +1422,18 @@ class TtsRoadMediaService : MediaLibraryService() {
         }
 
         private suspend fun fictionFolders(): List<MediaItem> {
+            val session = service.librarySessionGeneration
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return library.fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) }
         }
 
         private suspend fun recentItems(): List<MediaItem> {
+            val session = service.librarySessionGeneration
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return library.recentChapters.mapNotNull { chapter ->
                 val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
@@ -1357,8 +1442,10 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         private suspend fun fictionChildren(parentId: String): List<MediaItem> {
             val fictionId = TtsRoadMediaIds.fictionId(parentId) ?: return emptyList()
+            val session = service.librarySessionGeneration
             val (fiction, chapters) = service.fictionChapters(fictionId) ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return chapters.mapNotNull { TtsRoadMediaItems.chapter(it, fiction, serverUrl) }
         }
 
@@ -1392,6 +1479,76 @@ internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition
  */
 internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): MediaItem? =
     if (previous != null && previous.mediaId != newMediaId) previous else null
+
+/** Items found by one search, tagged with the generation of the library they were built from. */
+internal data class SearchResult(val items: List<MediaItem>, val generation: Long)
+
+/**
+ * The spoken-search result held between Media3's two-step search.
+ *
+ * `onSearch` does the work and `onGetSearchResult` pages it, so the library is not fetched twice
+ * per query. Every new `onSearch` starts from a fresh fetch, so a repeated query sees titles the
+ * server gained or lost since. A retained result must never outlive the library or session it was
+ * built from: the service bumps the generation on sign-out, account switch and every library
+ * refresh, and a result is cached under the generation of the library it was actually built from,
+ * which the search itself reports. A search that answers null was overtaken by an account change
+ * and is never cached.
+ */
+internal class SearchResultCache {
+    private var cachedQuery: String? = null
+    private var cachedGeneration = -1L
+    private var cachedResults: List<MediaItem> = emptyList()
+
+    suspend fun results(
+        query: String,
+        generation: Long,
+        search: suspend () -> SearchResult?,
+    ): List<MediaItem>? {
+        if (query == cachedQuery && generation == cachedGeneration) return cachedResults
+        val found = search() ?: return null
+        cachedQuery = query
+        cachedGeneration = found.generation
+        cachedResults = found.items
+        return found.items
+    }
+
+    /**
+     * The held result for [query], whatever the library has done since. For the page requests that
+     * follow an `onSearch`: they must page the same set whose count was announced. Session changes
+     * still drop it, through [invalidate].
+     */
+    fun held(query: String): List<MediaItem>? = cachedResults.takeIf { query == cachedQuery }
+
+    /** Forget the held result, so the next lookup searches afresh. */
+    fun invalidate() {
+        cachedQuery = null
+        cachedGeneration = -1L
+        cachedResults = emptyList()
+    }
+}
+
+/**
+ * Tell every connected browser that the whole browse tree changed, so a car that cached the
+ * previous account's lists reloads them instead of showing them after a sign-out or account switch.
+ */
+internal fun notifyBrowseTreeChanged(
+    session: MediaLibraryService.MediaLibrarySession,
+    fictionIds: List<Int> = emptyList(),
+) {
+    for (id in browseNodesToRefresh(fictionIds)) {
+        session.notifyChildrenChanged(id, Int.MAX_VALUE, null)
+    }
+}
+
+/** The fixed browse roots plus the folder of every fiction the previous account could open. */
+internal fun browseNodesToRefresh(fictionIds: List<Int>): List<String> =
+    listOf(
+        TtsRoadMediaIds.Root,
+        TtsRoadMediaIds.Continue,
+        TtsRoadMediaIds.Fictions,
+        TtsRoadMediaIds.Recent,
+        TtsRoadMediaIds.Queue,
+    ) + fictionIds.distinct().map(TtsRoadMediaIds::fiction)
 
 internal fun stopSignedOutPlayback(player: Player) {
     player.pause()
