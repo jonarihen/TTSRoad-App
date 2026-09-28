@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.media
 import androidx.media3.common.MediaItem
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class SearchResultCacheTest {
@@ -12,13 +13,13 @@ class SearchResultCacheTest {
     fun `repeating a query reuses the result within a generation`() = runTest {
         val cache = SearchResultCache()
         var searches = 0
-        val search: suspend () -> List<MediaItem>? = {
+        val search: suspend () -> SearchResult? = {
             searches++
-            listOf(item("chapter:1"))
+            SearchResult(listOf(item("chapter:1")), generation = 3L)
         }
 
-        val first = cache.results("ashes", generation = { 3L }, search)
-        val second = cache.results("ashes", generation = { 3L }, search)
+        val first = cache.results("ashes", generation = 3L, search)
+        val second = cache.results("ashes", generation = 3L, search)
 
         assertEquals(first, second)
         assertEquals(1, searches)
@@ -29,13 +30,13 @@ class SearchResultCacheTest {
         val cache = SearchResultCache()
         var searches = 0
 
-        cache.results("ashes", generation = { 3L }) {
+        cache.results("ashes", generation = 3L) {
             searches++
-            listOf(item("chapter:1"))
+            SearchResult(listOf(item("chapter:1")), generation = 3L)
         }
-        val refreshed = cache.results("ashes", generation = { 4L }) {
+        val refreshed = cache.results("ashes", generation = 4L) {
             searches++
-            listOf(item("chapter:2"))
+            SearchResult(listOf(item("chapter:2")), generation = 4L)
         }
 
         assertEquals(listOf(item("chapter:2")), refreshed)
@@ -46,51 +47,53 @@ class SearchResultCacheTest {
     fun `a new query searches even within a generation`() = runTest {
         val cache = SearchResultCache()
         var searches = 0
-        val search: suspend () -> List<MediaItem>? = {
+        val search: suspend () -> SearchResult? = {
             searches++
-            emptyList()
+            SearchResult(emptyList(), generation = 3L)
         }
 
-        cache.results("ashes", generation = { 3L }, search)
-        cache.results("cinder", generation = { 3L }, search)
+        cache.results("ashes", generation = 3L, search)
+        cache.results("cinder", generation = 3L, search)
 
         assertEquals(2, searches)
     }
 
     @Test
-    fun `a search that bumps the generation is cached under the generation it produced`() = runTest {
+    fun `a result is cached under the generation of the library it was built from`() = runTest {
         val cache = SearchResultCache()
-        var generation = 3L
         var searches = 0
-        val search: suspend () -> List<MediaItem>? = {
+
+        cache.results("ashes", generation = 3L) {
             searches++
-            generation++
-            listOf(item("chapter:1"))
+            SearchResult(listOf(item("chapter:1")), generation = 4L)
+        }
+        cache.results("ashes", generation = 4L) {
+            searches++
+            SearchResult(listOf(item("chapter:2")), generation = 4L)
+        }
+        cache.results("ashes", generation = 5L) {
+            searches++
+            SearchResult(listOf(item("chapter:3")), generation = 5L)
         }
 
-        cache.results("ashes", { generation }, search)
-        cache.results("ashes", { generation }, search)
-
-        assertEquals(1, searches)
+        assertEquals(2, searches)
     }
-
 
     @Test
     fun `a search overtaken by an account change is not cached`() = runTest {
         val cache = SearchResultCache()
         var searches = 0
 
-        val first = cache.results("ashes", { 3L }) {
+        val first = cache.results("ashes", generation = 3L) {
             searches++
             null
         }
-        cache.results("ashes", { 3L }) {
+        cache.results("ashes", generation = 3L) {
             searches++
-            listOf(item("chapter:9"))
+            SearchResult(listOf(item("chapter:9")), generation = 3L)
         }
 
-        assertEquals(null, first)
+        assertNull(first)
         assertEquals(2, searches)
     }
-
 }

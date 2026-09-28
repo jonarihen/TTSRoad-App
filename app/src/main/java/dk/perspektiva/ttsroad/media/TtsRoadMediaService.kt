@@ -1106,9 +1106,10 @@ class TtsRoadMediaService : MediaLibraryService() {
             ?: 0
 
     /** Fictions and chapters matching a car search, as browse items. */
-    private suspend fun searchItems(query: String): List<MediaItem>? {
+    private suspend fun searchItems(query: String): SearchResult? {
         val session = librarySessionGeneration
-        val library = library() ?: return emptyList()
+        val library = library() ?: return null
+        val generation = searchCacheGeneration
         val serverUrl = serverUrl()
         if (!sessionStillCurrent(session)) return null
         val fictions = searchFictions(library.fictions, query)
@@ -1117,12 +1118,13 @@ class TtsRoadMediaService : MediaLibraryService() {
             query,
         ).distinctBy { it.resolvedChapterId }
 
-        return fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) } +
+        val items = fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) } +
             chapters.mapNotNull { chapter ->
                 val fiction = chapter.fiction
                     ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
             }
+        return SearchResult(items, generation)
     }
 
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
@@ -1270,7 +1272,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         private suspend fun results(query: String): List<MediaItem> {
             val session = service.librarySessionGeneration
-            val found = searchCache.results(query, { service.searchCacheGeneration }) {
+            val found = searchCache.results(query, service.searchCacheGeneration) {
                 service.searchItems(query)
             } ?: return emptyList()
             return if (service.sessionStillCurrent(session)) found else emptyList()
@@ -1450,10 +1452,14 @@ internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): 
  * `onSearch` does the work and `onGetSearchResult` pages it, so the library is not fetched twice
  * per query — but a retained result must never outlive the library or session it was built from.
  * The generation tags both: the service bumps it on sign-out, account switch and every library
- * refresh, so a repeat query after any of those refetches instead of serving stale items. It is
- * read again after the search, because the search itself may refresh the library and bump it. A
- * search that answers null was overtaken by an account change and is never cached.
+ * refresh, so a repeat query after any of those refetches instead of serving stale items. A result
+ * is cached under the generation of the library it was actually built from, which the search itself
+ * reports, so a refresh during or after it can never mislabel it. A search that answers null was
+ * overtaken by an account change and is never cached.
  */
+/** Items found by one search, tagged with the generation of the library they were built from. */
+internal data class SearchResult(val items: List<MediaItem>, val generation: Long)
+
 internal class SearchResultCache {
     private var cachedQuery: String? = null
     private var cachedGeneration = -1L
@@ -1461,15 +1467,15 @@ internal class SearchResultCache {
 
     suspend fun results(
         query: String,
-        generation: () -> Long,
-        search: suspend () -> List<MediaItem>?,
+        generation: Long,
+        search: suspend () -> SearchResult?,
     ): List<MediaItem>? {
-        if (query == cachedQuery && generation() == cachedGeneration) return cachedResults
+        if (query == cachedQuery && generation == cachedGeneration) return cachedResults
         val found = search() ?: return null
         cachedQuery = query
-        cachedGeneration = generation()
-        cachedResults = found
-        return found
+        cachedGeneration = found.generation
+        cachedResults = found.items
+        return found.items
     }
 }
 
