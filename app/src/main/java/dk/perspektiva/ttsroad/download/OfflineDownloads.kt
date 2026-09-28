@@ -394,7 +394,7 @@ class OfflineDownloads(
         fictionId: Int,
         serverUrl: String?,
     ): Boolean {
-        if (keepAheadSetting.value <= 0) return false
+        if (keepAheadSetting.value <= 0 || keepAheadSetting.value != keepAhead) return false
         val known = _downloads.value
         val settled = known.none { (mediaId, download) ->
             download.origin == DownloadOrigin.Auto && (
