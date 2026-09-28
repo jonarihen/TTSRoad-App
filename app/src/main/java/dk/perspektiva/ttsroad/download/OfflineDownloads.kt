@@ -262,7 +262,6 @@ class OfflineDownloads(
                 .map { it.keepAheadChapters }
                 .distinctUntilChanged()
                 .collect { keepAhead ->
-                    if (keepAhead > 0) keepAheadReleaseRequested.clear()
                     keepAheadSetting.value = keepAhead
                     keepAheadGeneration.value++
                 }
@@ -397,8 +396,11 @@ class OfflineDownloads(
     ): Boolean {
         if (keepAheadSetting.value <= 0) return false
         val known = _downloads.value
-        val settled = known.values.none {
-            it.origin == DownloadOrigin.Auto && it.state == ChapterDownloadState.Removing
+        val settled = known.none { (mediaId, download) ->
+            download.origin == DownloadOrigin.Auto && (
+                download.state == ChapterDownloadState.Removing ||
+                    TtsRoadMediaIds.chapterId(mediaId) in keepAheadReleaseRequested
+                )
         }
         // A failed download is not "handled" — leaving it out is what lets the window retry it.
         // A failed *manual* one is left alone even so: re-queuing it here would rewrite its record
