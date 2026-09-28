@@ -1019,15 +1019,25 @@ class TtsRoadMediaService : MediaLibraryService() {
                 repository.library().also { nextCursor = it.serverTime }
             }
         }.getOrNull()
-        if (session != librarySessionGeneration) return null
-        val live = tokenStore.current()
-        if (!live.isLoggedIn || (live.serverUrl to live.username) != lastSessionIdentity) return null
+        if (!sessionStillCurrent(session)) return null
         if (loaded != null) {
             if (loaded != lastLibrary) searchCacheGeneration++
             lastLibrary = loaded
             lastLibraryCursor = nextCursor
         }
         return loaded ?: lastLibrary
+    }
+
+    /**
+     * Whether the account that [generation] was captured under is still the signed-in one.
+     *
+     * Checked right before anything built from a fetch is handed to the car. The generation alone
+     * lags a sign-out by one collector hop, so the live token store is read as well.
+     */
+    private suspend fun sessionStillCurrent(generation: Long): Boolean {
+        if (generation != librarySessionGeneration) return false
+        val live = tokenStore.current()
+        return live.isLoggedIn && (live.serverUrl to live.username) == lastSessionIdentity
     }
 
     private suspend fun fictionChapters(fictionId: Int): Pair<FictionSummary, List<ChapterSummary>>? {
@@ -1046,9 +1056,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun buildFictionQueue(
         fictionId: Int,
         startChapterId: Int,
+        session: Long = librarySessionGeneration,
     ): MediaSession.MediaItemsWithStartPosition? {
         val (fiction, chapters) = fictionChapters(fictionId) ?: return null
         val serverUrl = serverUrl()
+        if (!sessionStillCurrent(session)) return null
         val built = chapters.mapNotNull { chapter ->
             TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)?.let { chapter to it }
         }
@@ -1077,9 +1089,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun queueForSpokenQuery(
         query: String,
     ): MediaSession.MediaItemsWithStartPosition? {
+        val session = librarySessionGeneration
         val library = library() ?: return null
         val fiction = resolveSpokenFiction(library.fictions, query) ?: return null
-        return buildFictionQueue(fiction.id, resumeChapterId(library, fiction.id))
+        return buildFictionQueue(fiction.id, resumeChapterId(library, fiction.id), session)
     }
 
     /**
@@ -1097,7 +1110,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         val session = librarySessionGeneration
         val library = library() ?: return emptyList()
         val serverUrl = serverUrl()
-        if (session != librarySessionGeneration) return null
+        if (!sessionStillCurrent(session)) return null
         val fictions = searchFictions(library.fictions, query)
         val chapters = searchChapters(
             library.continueListening + library.recentChapters,
@@ -1114,10 +1127,11 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
+        val session = librarySessionGeneration
         val library = library() ?: return null
         val chapter = library.continueListening.firstOrNull() ?: return null
         val fictionId = chapter.resolvedFictionId.takeIf { it > 0 } ?: return null
-        return buildFictionQueue(fictionId, chapter.resolvedChapterId)
+        return buildFictionQueue(fictionId, chapter.resolvedChapterId, session)
     }
 
     @OptIn(UnstableApi::class)
@@ -1254,10 +1268,13 @@ class TtsRoadMediaService : MediaLibraryService() {
         // so the library is not fetched and matched twice per spoken search.
         private val searchCache = SearchResultCache()
 
-        private suspend fun results(query: String): List<MediaItem> =
-            searchCache.results(query, { service.searchCacheGeneration }) {
+        private suspend fun results(query: String): List<MediaItem> {
+            val session = service.librarySessionGeneration
+            val found = searchCache.results(query, { service.searchCacheGeneration }) {
                 service.searchItems(query)
-            } ?: emptyList()
+            } ?: return emptyList()
+            return if (service.sessionStillCurrent(session)) found else emptyList()
+        }
 
         override fun onSearch(
             session: MediaLibrarySession,
@@ -1350,14 +1367,18 @@ class TtsRoadMediaService : MediaLibraryService() {
         )
 
         private suspend fun queueItems(): List<MediaItem> {
+            val session = service.librarySessionGeneration
             val queue = runCatching { service.repository.queue() }.getOrNull() ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return queue.items.mapNotNull { TtsRoadMediaItems.queueItem(it, serverUrl) }
         }
 
         private suspend fun continueItems(): List<MediaItem> {
+            val session = service.librarySessionGeneration
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return library.continueListening.mapNotNull { chapter ->
                 val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
@@ -1365,14 +1386,18 @@ class TtsRoadMediaService : MediaLibraryService() {
         }
 
         private suspend fun fictionFolders(): List<MediaItem> {
+            val session = service.librarySessionGeneration
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return library.fictions.map { TtsRoadMediaItems.fictionFolder(it, serverUrl) }
         }
 
         private suspend fun recentItems(): List<MediaItem> {
+            val session = service.librarySessionGeneration
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return library.recentChapters.mapNotNull { chapter ->
                 val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
@@ -1381,8 +1406,10 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         private suspend fun fictionChildren(parentId: String): List<MediaItem> {
             val fictionId = TtsRoadMediaIds.fictionId(parentId) ?: return emptyList()
+            val session = service.librarySessionGeneration
             val (fiction, chapters) = service.fictionChapters(fictionId) ?: return emptyList()
             val serverUrl = service.serverUrl()
+            if (!service.sessionStillCurrent(session)) return emptyList()
             return chapters.mapNotNull { TtsRoadMediaItems.chapter(it, fiction, serverUrl) }
         }
 
