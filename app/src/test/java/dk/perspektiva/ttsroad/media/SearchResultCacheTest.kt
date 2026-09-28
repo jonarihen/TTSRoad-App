@@ -12,7 +12,7 @@ class SearchResultCacheTest {
     fun `repeating a query reuses the result within a generation`() = runTest {
         val cache = SearchResultCache()
         var searches = 0
-        val search: suspend () -> List<MediaItem> = {
+        val search: suspend () -> List<MediaItem>? = {
             searches++
             listOf(item("chapter:1"))
         }
@@ -46,7 +46,7 @@ class SearchResultCacheTest {
     fun `a new query searches even within a generation`() = runTest {
         val cache = SearchResultCache()
         var searches = 0
-        val search: suspend () -> List<MediaItem> = {
+        val search: suspend () -> List<MediaItem>? = {
             searches++
             emptyList()
         }
@@ -62,7 +62,7 @@ class SearchResultCacheTest {
         val cache = SearchResultCache()
         var generation = 3L
         var searches = 0
-        val search: suspend () -> List<MediaItem> = {
+        val search: suspend () -> List<MediaItem>? = {
             searches++
             generation++
             listOf(item("chapter:1"))
@@ -72,6 +72,25 @@ class SearchResultCacheTest {
         cache.results("ashes", { generation }, search)
 
         assertEquals(1, searches)
+    }
+
+
+    @Test
+    fun `a search overtaken by an account change is not cached`() = runTest {
+        val cache = SearchResultCache()
+        var searches = 0
+
+        val first = cache.results("ashes", { 3L }) {
+            searches++
+            null
+        }
+        cache.results("ashes", { 3L }) {
+            searches++
+            listOf(item("chapter:9"))
+        }
+
+        assertEquals(null, first)
+        assertEquals(2, searches)
     }
 
 }

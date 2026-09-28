@@ -1019,7 +1019,9 @@ class TtsRoadMediaService : MediaLibraryService() {
                 repository.library().also { nextCursor = it.serverTime }
             }
         }.getOrNull()
-        if (session != librarySessionGeneration) return lastLibrary
+        if (session != librarySessionGeneration) return null
+        val live = tokenStore.current()
+        if (!live.isLoggedIn || (live.serverUrl to live.username) != lastSessionIdentity) return null
         if (loaded != null) {
             if (loaded != lastLibrary) searchCacheGeneration++
             lastLibrary = loaded
@@ -1091,9 +1093,11 @@ class TtsRoadMediaService : MediaLibraryService() {
             ?: 0
 
     /** Fictions and chapters matching a car search, as browse items. */
-    private suspend fun searchItems(query: String): List<MediaItem> {
+    private suspend fun searchItems(query: String): List<MediaItem>? {
+        val session = librarySessionGeneration
         val library = library() ?: return emptyList()
         val serverUrl = serverUrl()
+        if (session != librarySessionGeneration) return null
         val fictions = searchFictions(library.fictions, query)
         val chapters = searchChapters(
             library.continueListening + library.recentChapters,
@@ -1253,7 +1257,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         private suspend fun results(query: String): List<MediaItem> =
             searchCache.results(query, { service.searchCacheGeneration }) {
                 service.searchItems(query)
-            }
+            } ?: emptyList()
 
         override fun onSearch(
             session: MediaLibrarySession,
@@ -1420,7 +1424,8 @@ internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): 
  * per query — but a retained result must never outlive the library or session it was built from.
  * The generation tags both: the service bumps it on sign-out, account switch and every library
  * refresh, so a repeat query after any of those refetches instead of serving stale items. It is
- * read again after the search, because the search itself may refresh the library and bump it.
+ * read again after the search, because the search itself may refresh the library and bump it. A
+ * search that answers null was overtaken by an account change and is never cached.
  */
 internal class SearchResultCache {
     private var cachedQuery: String? = null
@@ -1430,14 +1435,14 @@ internal class SearchResultCache {
     suspend fun results(
         query: String,
         generation: () -> Long,
-        search: suspend () -> List<MediaItem>,
-    ): List<MediaItem> {
+        search: suspend () -> List<MediaItem>?,
+    ): List<MediaItem>? {
         if (query == cachedQuery && generation() == cachedGeneration) return cachedResults
-        return search().also {
-            cachedQuery = query
-            cachedGeneration = generation()
-            cachedResults = it
-        }
+        val found = search() ?: return null
+        cachedQuery = query
+        cachedGeneration = generation()
+        cachedResults = found
+        return found
     }
 }
 
