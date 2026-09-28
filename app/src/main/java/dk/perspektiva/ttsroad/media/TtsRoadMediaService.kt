@@ -105,6 +105,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var player: ExoPlayer
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private lateinit var session: MediaLibrarySession
+    private lateinit var browserCallback: BrowserCallback
     private lateinit var sleepTimer: SleepTimerController
     private lateinit var fictionSpeeds: FictionSpeedPreferences
     private lateinit var nowPlayingStore: NowPlayingStore
@@ -188,7 +189,10 @@ class TtsRoadMediaService : MediaLibraryService() {
                     lastLibrary = null
                     lastLibraryCursor = null
                     searchCacheGeneration++
-                    if (::session.isInitialized) notifyBrowseTreeChanged(session, previousFictionIds)
+                    if (::session.isInitialized) {
+                        notifyBrowseTreeChanged(session, previousFictionIds)
+                        browserCallback.retractSearches(session)
+                    }
                 }
                 if (!state.isLoggedIn) {
                     if (::player.isInitialized) stopSignedOutPlayback(player)
@@ -333,7 +337,8 @@ class TtsRoadMediaService : MediaLibraryService() {
         startProgressTicker()
         startPlaybackSkipTicker()
         startSleepTimer()
-        session = MediaLibrarySession.Builder(this, player, BrowserCallback(this))
+        browserCallback = BrowserCallback(this)
+        session = MediaLibrarySession.Builder(this, player, browserCallback)
             .setSessionActivity(playerActivityIntent())
             .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
             .build()
@@ -1273,13 +1278,35 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         // Media3 splits searching in two: onSearch does the work and reports how many results
         // exist, then the browser asks for the page it wants. The result is cached between the two
-        // so the library is not fetched and matched twice per spoken search.
+        // so the library is not fetched and matched twice per spoken search, and so the pages come
+        // from the same result set whose count was announced.
         private val searchCache = SearchResultCache()
 
-        private suspend fun results(query: String): List<MediaItem> {
+        // Every browser that has been told a result count, so an account change can retract it.
+        private val activeSearches = mutableMapOf<MediaSession.ControllerInfo, Pair<String, LibraryParams?>>()
+
+        /**
+         * Withdraw every search result a connected car is showing. Called on sign-out and account
+         * switch: the held result belongs to the previous account, and the car keeps rendering
+         * what it was last told until it hears otherwise.
+         */
+        fun retractSearches(session: MediaLibrarySession) {
+            searchCache.invalidate()
+            for ((browser, search) in activeSearches) {
+                session.notifySearchResultChanged(browser, search.first, 0, search.second)
+            }
+            activeSearches.clear()
+        }
+
+        private suspend fun results(query: String, fresh: Boolean): List<MediaItem> {
             val session = service.librarySessionGeneration
-            val found = searchCache.results(query, service.searchCacheGeneration) {
-                service.searchItems(query)
+            val found = if (fresh) {
+                searchCache.invalidate()
+                searchCache.results(query, service.searchCacheGeneration) { service.searchItems(query) }
+            } else {
+                searchCache.held(query) ?: searchCache.results(query, service.searchCacheGeneration) {
+                    service.searchItems(query)
+                }
             } ?: return emptyList()
             return if (service.sessionStillCurrent(session)) found else emptyList()
         }
@@ -1291,8 +1318,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<Void>> =
             service.serviceScope.future {
-                searchCache.invalidate()
-                val found = results(query)
+                val found = results(query, fresh = true)
+                activeSearches[browser] = query to params
                 session.notifySearchResultChanged(browser, query, found.size, params)
                 LibraryResult.ofVoid()
             }
@@ -1306,7 +1333,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
             service.serviceScope.future {
-                LibraryResult.ofItemList(page(results(query), page, pageSize), params)
+                LibraryResult.ofItemList(page(results(query, fresh = false), page, pageSize), params)
             }
 
         override fun onGetChildren(
@@ -1484,6 +1511,13 @@ internal class SearchResultCache {
         cachedResults = found.items
         return found.items
     }
+
+    /**
+     * The held result for [query], whatever the library has done since. For the page requests that
+     * follow an `onSearch`: they must page the same set whose count was announced. Session changes
+     * still drop it, through [invalidate].
+     */
+    fun held(query: String): List<MediaItem>? = cachedResults.takeIf { query == cachedQuery }
 
     /** Forget the held result, so the next lookup searches afresh. */
     fun invalidate() {

@@ -5,7 +5,12 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class SearchResultCacheTest {
     private fun item(id: String) = MediaItem.Builder().setMediaId(id).build()
 
@@ -127,6 +132,19 @@ class SearchResultCacheTest {
             ),
             browseNodesToRefresh(listOf(7, 9, 7)),
         )
+    }
+
+
+    @Test
+    fun `the held result survives a library refresh until invalidated`() = runTest {
+        val cache = SearchResultCache()
+        cache.results("ashes", generation = 3L) { SearchResult(listOf(item("chapter:1")), generation = 3L) }
+
+        assertEquals(listOf(item("chapter:1")), cache.held("ashes"))
+        assertNull(cache.held("cinder"))
+
+        cache.invalidate()
+        assertNull(cache.held("ashes"))
     }
 
 }
