@@ -124,8 +124,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var retryJob: Job? = null
     private var retryAttempt = 0
 
-    // The chapter the keep-ahead window was last planned around; see moveKeepAheadWindow.
-    private var lastKeepAheadChapterId: Int? = null
+    // The chapter, window size and setting generation the window was last planned around.
+    private var lastKeepAheadPlan: Triple<Int, Int, Long>? = null
     private var playbackSkips: ChapterSkips? = null
     private var playbackSkipsLoad: Job? = null
     private var playbackSkipsGeneration = 0L
@@ -944,23 +944,28 @@ class TtsRoadMediaService : MediaLibraryService() {
      * chapter listing could not be fetched.
      */
     private suspend fun moveKeepAheadWindow(fictionId: Int, chapterId: Int) {
-        if (chapterId == lastKeepAheadChapterId) return
         val keepAhead = runCatching { downloadPreferences.current().keepAheadChapters }
             .getOrDefault(0)
-        // Claimed even when the feature is off, so switching it on mid-chapter still takes effect at
-        // the next chapter rather than never — and so an off setting costs one preference read per
-        // chapter rather than one per tick.
-        lastKeepAheadChapterId = chapterId
-        if (keepAhead <= 0) return
-
+        // Switching the feature off is handled by OfflineDownloads, which watches the setting and
+        // releases every automatic download at once, in every fiction. The setting's generation is
+        // part of the key, so any change to it — off and back on included — re-plans on the next tick.
+        if (keepAhead <= 0) {
+            lastKeepAheadPlan = null
+            return
+        }
+        val plan = Triple(chapterId, keepAhead, ServiceLocator.offlineDownloads(this).keepAheadGeneration.value)
+        if (plan == lastKeepAheadPlan) return
         val chapters = fictionChapters(fictionId)?.second ?: return
-        ServiceLocator.offlineDownloads(this).applyKeepAhead(
+        // Claimed only once the plan settled, so a failed fetch, a refused start, or removals still in
+        // flight from an off-switch are all retried on the next tick.
+        val settled = ServiceLocator.offlineDownloads(this).applyKeepAhead(
             chapters = chapters,
             currentChapterId = chapterId,
             keepAhead = keepAhead,
             fictionId = fictionId,
             serverUrl = serverUrl(),
         )
+        if (settled) lastKeepAheadPlan = plan
     }
 
     private suspend fun serverUrl(): String = tokenStore.current().serverUrl

@@ -122,6 +122,22 @@ class OfflineDownloads(
 
     private val _downloads = MutableStateFlow<Map<String, ChapterDownload>>(emptyMap())
 
+    /**
+     * Keep-ahead's off-switch release could not reach the download service, most likely because the
+     * process was in the background. Retried from [resumeUnfinished], which runs in the foreground.
+     */
+    @Volatile
+    private var keepAheadReleasePending = false
+    private val keepAheadRetry = MutableStateFlow(0)
+    private val keepAheadSetting = MutableStateFlow(Int.MAX_VALUE)
+    private val keepAheadReleaseRequested: MutableSet<Int> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * Bumped each time the keep-ahead setting changes. The media service keys its plan on this, so
+     * switching the feature off and on again — even back to the same size — re-plans the window.
+     */
+    val keepAheadGeneration = MutableStateFlow(0L)
+
     /** Every known download, keyed by the chapter's media id. Empty until the index has loaded. */
     val downloads: StateFlow<Map<String, ChapterDownload>> = _downloads.asStateFlow()
 
@@ -241,6 +257,27 @@ class OfflineDownloads(
                     }
                 }
         }
+        scope.launch {
+            downloadPrefs
+                .map { it.keepAheadChapters }
+                .distinctUntilChanged()
+                .collect { keepAhead ->
+                    keepAheadSetting.value = keepAhead
+                    keepAheadGeneration.value++
+                }
+        }
+        scope.launch {
+            combine(keepAheadSetting, _downloads, keepAheadRetry) { keepAhead, downloads, _ ->
+                keepAheadReleaseWhenOff(keepAhead, downloads).filterNot { it in keepAheadReleaseRequested }
+            }
+                .collect { release ->
+                    val present = _downloads.value.keys.mapNotNullTo(mutableSetOf()) { TtsRoadMediaIds.chapterId(it) }
+                    keepAheadReleaseRequested.retainAll(present)
+                    val sent = release.filter { runCatching { remove(it) }.isSuccess }
+                    keepAheadReleaseRequested += sent
+                    keepAheadReleasePending = sent.size < release.size
+                }
+        }
         // The cap is applied to the live evictor rather than only at construction, so lowering it
         // frees space now — someone who has just chosen a smaller number is usually trying to get
         // disk back, and "restart the app" is not an answer to that.
@@ -345,6 +382,10 @@ class OfflineDownloads(
      * A chapter already downloaded by hand inside the window is left exactly as it is — it is
      * counted as handled, so it is not re-queued, and its manual origin is not overwritten. That
      * matters on the way out: the window moving past it must not delete it.
+     *
+     * Answers whether the plan is settled. It is not while the feature has been switched off since
+     * the caller read it, while a service start was refused, or while an earlier release is still
+     * removing rows the plan would otherwise count as handled — the caller re-plans next time.
      */
     fun applyKeepAhead(
         chapters: List<ChapterSummary>,
@@ -352,8 +393,15 @@ class OfflineDownloads(
         keepAhead: Int,
         fictionId: Int,
         serverUrl: String?,
-    ) {
+    ): Boolean {
+        if (keepAheadSetting.value <= 0 || keepAheadSetting.value != keepAhead) return false
         val known = _downloads.value
+        val settled = known.none { (mediaId, download) ->
+            download.origin == DownloadOrigin.Auto && (
+                download.state == ChapterDownloadState.Removing ||
+                    TtsRoadMediaIds.chapterId(mediaId) in keepAheadReleaseRequested
+                )
+        }
         // A failed download is not "handled" — leaving it out is what lets the window retry it.
         // A failed *manual* one is left alone even so: re-queuing it here would rewrite its record
         // as an automatic download, and the window would then be entitled to delete something the
@@ -374,16 +422,16 @@ class OfflineDownloads(
             handled = handled,
             autoDownloaded = autoDownloaded,
         )
-        if (plan.isEmpty) return
+        if (plan.isEmpty) return settled
 
         // Wrapped for the same reason resumeUnfinished is: this runs from the media service, which
         // is often in the background, and starting the download service from there is not always
         // allowed. A refused start leaves the honest state — not downloaded — rather than killing
         // playback, which is the thing the user actually asked for.
-        runCatching {
+        return runCatching {
             download(plan.download, serverUrl, DownloadOrigin.Auto)
             plan.release.forEach(::remove)
-        }
+        }.isSuccess && settled
     }
 
     /** Delete a chapter's audio and its read-along document, or cancel it if it is still downloading. */
@@ -438,6 +486,15 @@ class OfflineDownloads(
     }
 
     /**
+     * Retry a keep-ahead release the download service refused, now that the app is in the foreground.
+     * Called on every return to the foreground, not only at launch, because a stopped activity that
+     * comes back is not created again.
+     */
+    fun retryPendingKeepAheadRelease() {
+        if (keepAheadReleasePending) keepAheadRetry.value++
+    }
+
+    /**
      * Restart whatever was still in flight when the app was last killed.
      *
      * Called from the activity, so the process is in the foreground and starting the service is
@@ -445,6 +502,7 @@ class OfflineDownloads(
      * a background service start, and the user will open the app before the next drive anyway.
      */
     fun resumeUnfinished() {
+        retryPendingKeepAheadRelease()
         runCatching {
             DownloadService.sendResumeDownloads(
                 context,

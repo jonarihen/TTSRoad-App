@@ -111,6 +111,27 @@ class AutoDownloadPlanTest {
     }
 
     @Test
+    fun `switched off releases every automatic download, in every fiction`() {
+        val downloads = mapOf(
+            "chapter:5" to ChapterDownload(ChapterDownloadState.Downloaded, origin = DownloadOrigin.Auto, fictionId = 1),
+            "chapter:40" to ChapterDownload(ChapterDownloadState.Queued, origin = DownloadOrigin.Auto, fictionId = 2),
+            "chapter:6" to ChapterDownload(ChapterDownloadState.Downloaded, origin = DownloadOrigin.Manual, fictionId = 1),
+            "chapter:7" to ChapterDownload(ChapterDownloadState.Removing, origin = DownloadOrigin.Auto, fictionId = 1),
+        )
+
+        assertEquals(listOf(5, 40), keepAheadReleaseWhenOff(keepAhead = 0, downloads = downloads))
+    }
+
+    @Test
+    fun `nothing is released while the feature is on`() {
+        val downloads = mapOf(
+            "chapter:5" to ChapterDownload(ChapterDownloadState.Downloaded, origin = DownloadOrigin.Auto, fictionId = 1),
+        )
+
+        assertTrue(keepAheadReleaseWhenOff(keepAhead = 3, downloads = downloads).isEmpty())
+    }
+
+    @Test
     fun `switching it off still leaves hand-picked downloads alone`() {
         val plan = autoDownloadPlan(
             fiction,
