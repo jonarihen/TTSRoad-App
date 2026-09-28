@@ -48,8 +48,11 @@ jobs:
       # secrets, and releases stay local and manual — that is what keeps the pinned signing lineage
       # safe. Verified on a clean tree that `clean test lint` configures and runs without it;
       # verifyTtsRoadSigningKey only gates the assemble tasks, which this job does not run.
+      # The runner container is capped at 6 GiB. A separate Kotlin compile daemon inherits the
+      # Gradle daemon's 4 GiB heap, and the two plus a Robolectric worker got the build OOM-killed
+      # (#281). Compiling in-process keeps one large JVM alive. Local builds are unaffected.
       - name: Run the gate
-        run: ./gradlew --no-daemon test lint
+        run: ./gradlew --no-daemon -Pkotlin.compiler.execution.strategy=in-process test lint
 
       - name: Upload reports
         if: always()
