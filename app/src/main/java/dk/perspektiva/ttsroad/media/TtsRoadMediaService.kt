@@ -121,6 +121,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var lastSessionIdentity: Pair<String, String?>? = null
     private var searchCacheGeneration = 0L
 
+    // Bumped on every account change, so a library fetch that outlives its session is discarded.
+    private var librarySessionGeneration = 0L
+
     // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
     // outage later in the night gets a fresh set of attempts rather than giving up immediately.
     private var retryJob: Job? = null
@@ -178,6 +181,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 }
                 if (sessionIdentity != lastSessionIdentity) {
                     lastSessionIdentity = sessionIdentity
+                    librarySessionGeneration++
                     // The car searches and browses off this memo. Never serve one account's
                     // library — or its spoken-search results — to another, or to nobody.
                     lastLibrary = null
@@ -991,8 +995,10 @@ class TtsRoadMediaService : MediaLibraryService() {
         if (repository.currentCapabilities.value.advertised.isEmpty()) {
             repository.refreshCurrentCapabilities()
         }
+        val session = librarySessionGeneration
         val previous = lastLibrary
         val cursor = lastLibraryCursor
+        var nextCursor = cursor
         val loaded = runCatching {
             if (previous != null && cursor != null &&
                 repository.currentCapabilities.value.deltaSync
@@ -1004,18 +1010,20 @@ class TtsRoadMediaService : MediaLibraryService() {
                     previous
                 }
                 if (index != null) {
-                    lastLibraryCursor = index.serverTime
+                    nextCursor = index.serverTime
                     refreshed.copy(serverTime = index.serverTime)
                 } else {
                     refreshed
                 }
             } else {
-                repository.library().also { lastLibraryCursor = it.serverTime }
+                repository.library().also { nextCursor = it.serverTime }
             }
         }.getOrNull()
+        if (session != librarySessionGeneration) return lastLibrary
         if (loaded != null) {
             if (loaded != lastLibrary) searchCacheGeneration++
             lastLibrary = loaded
+            lastLibraryCursor = nextCursor
         }
         return loaded ?: lastLibrary
     }
@@ -1243,7 +1251,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         private val searchCache = SearchResultCache()
 
         private suspend fun results(query: String): List<MediaItem> =
-            searchCache.results(query, service.searchCacheGeneration) {
+            searchCache.results(query, { service.searchCacheGeneration }) {
                 service.searchItems(query)
             }
 
@@ -1411,7 +1419,8 @@ internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): 
  * `onSearch` does the work and `onGetSearchResult` pages it, so the library is not fetched twice
  * per query — but a retained result must never outlive the library or session it was built from.
  * The generation tags both: the service bumps it on sign-out, account switch and every library
- * refresh, so a repeat query after any of those refetches instead of serving stale items.
+ * refresh, so a repeat query after any of those refetches instead of serving stale items. It is
+ * read again after the search, because the search itself may refresh the library and bump it.
  */
 internal class SearchResultCache {
     private var cachedQuery: String? = null
@@ -1420,13 +1429,13 @@ internal class SearchResultCache {
 
     suspend fun results(
         query: String,
-        generation: Long,
+        generation: () -> Long,
         search: suspend () -> List<MediaItem>,
     ): List<MediaItem> {
-        if (query == cachedQuery && generation == cachedGeneration) return cachedResults
+        if (query == cachedQuery && generation() == cachedGeneration) return cachedResults
         return search().also {
             cachedQuery = query
-            cachedGeneration = generation
+            cachedGeneration = generation()
             cachedResults = it
         }
     }

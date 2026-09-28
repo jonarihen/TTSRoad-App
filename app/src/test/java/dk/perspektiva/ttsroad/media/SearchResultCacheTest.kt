@@ -17,8 +17,8 @@ class SearchResultCacheTest {
             listOf(item("chapter:1"))
         }
 
-        val first = cache.results("ashes", generation = 3L, search)
-        val second = cache.results("ashes", generation = 3L, search)
+        val first = cache.results("ashes", generation = { 3L }, search)
+        val second = cache.results("ashes", generation = { 3L }, search)
 
         assertEquals(first, second)
         assertEquals(1, searches)
@@ -29,11 +29,11 @@ class SearchResultCacheTest {
         val cache = SearchResultCache()
         var searches = 0
 
-        cache.results("ashes", generation = 3L) {
+        cache.results("ashes", generation = { 3L }) {
             searches++
             listOf(item("chapter:1"))
         }
-        val refreshed = cache.results("ashes", generation = 4L) {
+        val refreshed = cache.results("ashes", generation = { 4L }) {
             searches++
             listOf(item("chapter:2"))
         }
@@ -51,9 +51,27 @@ class SearchResultCacheTest {
             emptyList()
         }
 
-        cache.results("ashes", generation = 3L, search)
-        cache.results("cinder", generation = 3L, search)
+        cache.results("ashes", generation = { 3L }, search)
+        cache.results("cinder", generation = { 3L }, search)
 
         assertEquals(2, searches)
     }
+
+    @Test
+    fun `a search that bumps the generation is cached under the generation it produced`() = runTest {
+        val cache = SearchResultCache()
+        var generation = 3L
+        var searches = 0
+        val search: suspend () -> List<MediaItem> = {
+            searches++
+            generation++
+            listOf(item("chapter:1"))
+        }
+
+        cache.results("ashes", { generation }, search)
+        cache.results("ashes", { generation }, search)
+
+        assertEquals(1, searches)
+    }
+
 }
