@@ -491,8 +491,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // the JSON API, so go through the repository rather than clearing the token here:
                 // that is what carries the reason to the login screen instead of dropping the user
                 // there with no explanation.
-                val body = httpFailure?.responseBody?.toString(Charsets.UTF_8)
-                serviceScope.launch { repository.endSession(parseSessionEnd(body)) }
+                serviceScope.launch { endAudioSession(repository, httpFailure) }
             }
 
             is PlaybackFailure.Transient -> scheduleRetry()
@@ -1554,5 +1553,26 @@ internal fun stopSignedOutPlayback(player: Player) {
     player.pause()
     player.stop()
     player.clearMediaItems()
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun endAudioSession(
+    repository: TtsRoadRepository,
+    failure: HttpDataSource.InvalidResponseCodeException?,
+): Boolean {
+    if (failure == null || failure.responseCode !in listOf(401, 403)) return false
+    val request = failure.dataSpec
+    val snapshot = request.customData as? dk.perspektiva.ttsroad.core.AudioAuthSnapshot ?: return false
+    val authorizationHeader = snapshot.authorizationHeader ?: return false
+    if (!ServerUrls.isSameOrigin(request.uri.toString(), snapshot.serverUrl) ||
+        request.httpRequestHeaders["Authorization"] != authorizationHeader
+    ) {
+        return false
+    }
+    return repository.endSessionIfCurrent(
+        snapshot.serverUrl,
+        authorizationHeader,
+        parseSessionEnd(failure.responseBody.toString(Charsets.UTF_8)),
+    )
 }
 
