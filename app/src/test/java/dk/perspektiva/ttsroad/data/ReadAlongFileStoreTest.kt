@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import java.io.File
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -387,6 +388,73 @@ class ReadAlongFileStoreTest {
             setOf("readalong_10.json", "pinned-readalong_11.json"),
             folder.root.list()!!.toSet(),
         )
+    }
+
+    @Test
+    fun `pin success means a complete copy survives restart`() {
+        assertTrue(store().pin(chapterId = 10, entry = entry("Durable.")))
+
+        assertTrue(store().isPinned(chapterId = 10))
+        assertEquals("Durable.", store().read(chapterId = 10)?.response?.text)
+    }
+
+    @Test
+    fun `an unwritable pin reports failure`() {
+        val blocked = folder.newFile("blocked")
+        val store = ReadAlongFileStore(blocked)
+
+        assertFalse(store.pin(chapterId = 10, entry = entry("Nowhere to go.")))
+        assertFalse(store.isPinned(chapterId = 10))
+        assertNull(store.read(chapterId = 10))
+        assertFalse(ReadAlongStore.None.pin(chapterId = 10, entry = entry("No persistence.")))
+    }
+
+    @Test
+    fun `a failed pinned temp write preserves the previous copy after restart`() {
+        assertTrue(store().pin(chapterId = 10, entry = entry("Original.")))
+        File(folder.root, ".tmp-pinned-readalong_10.json").mkdirs()
+
+        assertFalse(store().pin(chapterId = 10, entry = entry("Replacement.")))
+
+        assertEquals("Original.", store().read(chapterId = 10)?.response?.text)
+    }
+
+    @Test
+    fun `a failed atomic replacement preserves a pinned copy and removes the complete temp file`() {
+        val original = entry("Original.")
+        val replacement = entry("Replacement.", etag = "\"v2\"")
+        assertTrue(store().pin(chapterId = 10, entry = original))
+        var replacements = 0
+        val failing = ReadAlongFileStore(folder.root, replaceFile = { temp, target ->
+            replacements++
+            assertTrue(temp.isFile)
+            assertTrue(temp.readText().contains("Replacement."))
+            assertEquals("pinned-readalong_10.json", target.name)
+            assertEquals(original, store().read(chapterId = 10))
+            throw IOException("injected rename failure")
+        })
+
+        assertFalse(failing.pin(chapterId = 10, entry = replacement))
+        assertEquals(original, store().read(chapterId = 10))
+        failing.write(chapterId = 10, entry = replacement)
+
+        assertEquals(2, replacements)
+        assertEquals(original, store().read(chapterId = 10))
+        assertEquals(setOf("pinned-readalong_10.json"), folder.root.list()!!.toSet())
+    }
+
+    @Test
+    fun `a failed promotion keeps the browse copy without reporting a pin`() {
+        val original = entry("Browsed.")
+        store().write(chapterId = 10, entry = original)
+        val failing = ReadAlongFileStore(folder.root, replaceFile = { _, _ ->
+            throw IOException("injected rename failure")
+        })
+
+        assertFalse(failing.pin(chapterId = 10, entry = original))
+        assertFalse(store().isPinned(chapterId = 10))
+        assertEquals(original, store().read(chapterId = 10))
+        assertEquals(setOf("readalong_10.json"), folder.root.list()!!.toSet())
     }
 
     @Test

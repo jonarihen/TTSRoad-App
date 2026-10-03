@@ -1,11 +1,18 @@
 package dk.perspektiva.ttsroad.data
 
+import java.io.File
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit.MILLISECONDS
+import java.util.concurrent.TimeUnit.SECONDS
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
@@ -74,10 +81,11 @@ private class FakeReadAlongStore(
     var pins = 0
         private set
 
-    override fun pin(chapterId: Int, entry: CachedReadAlong) {
+    override fun pin(chapterId: Int, entry: CachedReadAlong): Boolean {
         pins++
         pinned += chapterId
         entries[chapterId] = entry
+        return true
     }
 
     override fun unpin(chapterId: Int) {
@@ -527,6 +535,126 @@ class ReadAlongRepositoryTest {
         assertFalse(repository.pinReadAlong(chapterId = 10))
 
         assertFalse(store.isPinned(chapterId = 10))
+    }
+
+    @Test
+    fun `a successful fetch cannot claim an unwritable pin is held`() = runTest {
+        val folder = kotlin.io.path.createTempDirectory("reader-pin").toFile()
+        try {
+            val blocked = File(folder, "blocked").apply { writeText("not a directory") }
+            val disk = ReadAlongFileStore(blocked)
+            server.enqueue(MockResponse().setBody(ChapterBody))
+
+            assertFalse(repository(readAlongStore = disk).pinReadAlong(chapterId = 10))
+            assertFalse(disk.isPinned(chapterId = 10))
+            assertNull(ReadAlongFileStore(blocked).read(chapterId = 10))
+        } finally {
+            folder.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a failed promotion reports false and keeps the readable browse copy`() = runTest {
+        val folder = kotlin.io.path.createTempDirectory("reader-pin").toFile()
+        try {
+            val entry = cachedEntry(owner = owner())
+            ReadAlongFileStore(folder).write(chapterId = 10, entry = entry)
+            val disk = ReadAlongFileStore(folder, replaceFile = { _, _ -> throw IOException("injected rename failure") })
+
+            assertFalse(repository(readAlongStore = disk).pinReadAlong(chapterId = 10))
+            assertFalse(disk.isPinned(chapterId = 10))
+            assertEquals(entry, ReadAlongFileStore(folder).read(chapterId = 10))
+            assertEquals(0, server.requestCount)
+        } finally {
+            folder.deleteRecursively()
+        }
+    }
+
+    private suspend fun withDeferredPin(block: suspend (TtsRoadRepository, FakeReadAlongStore, FakeReaderSessionStore, () -> Unit) -> Unit) {
+        val requested = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                if (requests.getAndIncrement() == 0) {
+                    requested.countDown()
+                    check(release.await(10, SECONDS)) { "pin response was never released" }
+                    return MockResponse().setBody(ChapterBody).setHeader("ETag", "\"old\"")
+                }
+                return MockResponse().setBody(RevisedBody).setHeader("ETag", "\"new\"")
+            }
+        }
+        val disk = FakeReadAlongStore()
+        val session = store()
+        val repository = repository(sessionStore = session, readAlongStore = disk)
+        try {
+            block(repository, disk, session) {
+                assertTrue("reader request must reach the barrier", requested.await(10, SECONDS))
+                release.countDown()
+            }
+        } finally {
+            release.countDown()
+        }
+    }
+
+    @Test
+    fun `an unpin discards a successful response still in flight`() = runTest {
+        withDeferredPin { repository, disk, _, release ->
+            val pending = async(Dispatchers.IO) { repository.pinReadAlong(chapterId = 10) }
+            assertNotNull(withContext(Dispatchers.IO) { server.takeRequest(10, SECONDS) })
+            repository.unpinReadAlong(chapterId = 10)
+            release()
+
+            assertFalse(pending.await())
+            assertFalse(disk.isPinned(chapterId = 10))
+            assertNull(disk.read(10))
+        }
+    }
+
+    @Test
+    fun `an obsolete completion cannot overwrite a newer pin after unpinning`() = runTest {
+        withDeferredPin { repository, disk, _, release ->
+            val pending = async(Dispatchers.IO) { repository.pinReadAlong(chapterId = 10) }
+            assertNotNull(withContext(Dispatchers.IO) { server.takeRequest(10, SECONDS) })
+            repository.unpinReadAlong(chapterId = 10)
+            assertTrue(repository.pinReadAlong(chapterId = 10))
+            release()
+
+            assertFalse(pending.await())
+            assertTrue(disk.isPinned(chapterId = 10))
+            assertEquals("The knight rode south.", disk.read(10)?.response?.text)
+            assertEquals("\"new\"", disk.read(10)?.etag)
+        }
+    }
+
+    @Test
+    fun `a pin completing after sign-out and the same session returning is rejected`() = runTest {
+        withDeferredPin { repository, disk, session, release ->
+            val pending = async(Dispatchers.IO) { repository.pinReadAlong(chapterId = 10) }
+            assertNotNull(withContext(Dispatchers.IO) { server.takeRequest(10, SECONDS) })
+            val previous = session.current()
+            repository.endSession(SessionEnd(reason = SessionEndReason.Expired, message = "Expired"))
+            session.adopt(previous)
+            release()
+
+            assertFalse(pending.await())
+            assertFalse(disk.isPinned(chapterId = 10))
+            assertNull(disk.read(10))
+        }
+    }
+
+    @Test
+    fun `a pin completing under a different account is rejected`() = runTest {
+        withDeferredPin { repository, disk, session, release ->
+            val pending = async(Dispatchers.IO) { repository.pinReadAlong(chapterId = 10) }
+            assertNotNull(withContext(Dispatchers.IO) { server.takeRequest(10, SECONDS) })
+            session.adopt(sessionState().copy(token = "other-token", username = "other"))
+            release()
+
+            assertFalse(pending.await())
+            assertFalse(disk.isPinned(chapterId = 10))
+            assertNull(disk.read(10))
+        }
     }
 
     @Test
