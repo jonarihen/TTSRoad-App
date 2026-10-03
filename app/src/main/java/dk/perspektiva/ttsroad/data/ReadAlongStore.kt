@@ -4,8 +4,10 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 
 /**
  * Where read-along documents live between launches.
@@ -91,6 +93,9 @@ class ReadAlongFileStore(
     private val clock: () -> Long = System::currentTimeMillis,
     private val replaceFile: (File, File) -> Unit = { source, target ->
         Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    },
+    private val syncDirectory: (File) -> Unit = { directory ->
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
     },
 ) : ReadAlongStore {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -208,13 +213,32 @@ class ReadAlongFileStore(
      */
     private fun writeAtomically(target: File, entry: CachedReadAlong) {
         val temp = File(directory, "$TempPrefix${target.name}")
+        var backup: File? = null
+        var replaced = false
+        var committed = false
         try {
             FileOutputStream(temp).use { output ->
                 output.write(adapter.toJson(entry).toByteArray(Charsets.UTF_8))
                 output.fd.sync()
             }
+            if (target.isFile) {
+                backup = File(directory, "$TempPrefix${java.util.UUID.randomUUID()}")
+                Files.createLink(backup.toPath(), target.toPath())
+            }
             replaceFile(temp, target)
+            replaced = true
+            syncDirectory(directory)
+            committed = true
         } finally {
+            if (replaced && !committed) {
+                runCatching {
+                    val previous = backup
+                    if (previous != null) replaceFile(previous, target) else Files.deleteIfExists(target.toPath())
+                    replaced = false
+                    syncDirectory(directory)
+                }
+            }
+            if (committed || !replaced) backup?.delete()
             temp.delete()
         }
     }

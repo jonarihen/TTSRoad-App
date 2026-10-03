@@ -554,6 +554,31 @@ class ReadAlongRepositoryTest {
     }
 
     @Test
+    fun `a successful fetch with failed directory sync reports false and can be retried`() = runTest {
+        val folder = kotlin.io.path.createTempDirectory("reader-pin").toFile()
+        try {
+            var syncs = 0
+            val disk = ReadAlongFileStore(folder, syncDirectory = {
+                syncs++
+                throw IOException("injected directory sync failure")
+            })
+            val repository = repository(readAlongStore = disk)
+            repeat(2) {
+                server.enqueue(MockResponse().setBody(ChapterBody))
+
+                assertFalse(repository.pinReadAlong(chapterId = 10))
+                assertFalse(ReadAlongFileStore(folder).isPinned(chapterId = 10))
+                assertNull(ReadAlongFileStore(folder).read(chapterId = 10))
+            }
+
+            assertEquals(4, syncs)
+            assertEquals(2, server.requestCount)
+        } finally {
+            folder.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `a failed promotion reports false and keeps the readable browse copy`() = runTest {
         val folder = kotlin.io.path.createTempDirectory("reader-pin").toFile()
         try {

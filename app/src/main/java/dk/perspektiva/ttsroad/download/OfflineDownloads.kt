@@ -95,6 +95,9 @@ class OfflineDownloads(
     private val forgetAudioHash: (Int) -> Unit = {},
     private val forgetAllAudioHashes: () -> Unit = {},
     private val initializeManager: Boolean = true,
+    private val sendRemoveAllDownloads: () -> Unit = {
+        DownloadService.sendRemoveAllDownloads(context, TtsRoadDownloadService::class.java, false)
+    },
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val readerPinLock = Any()
@@ -455,15 +458,11 @@ class OfflineDownloads(
     fun removeAll() {
         synchronized(readerPinLock) {
             val chapterIds = readerPins.keys + _downloads.value.keys.mapNotNull(TtsRoadMediaIds::chapterId)
+            sendRemoveAllDownloads()
             readerPins.values.forEach { it.cancel() }
             readerPins.clear()
             chapterIds.forEach(unpinReadAlong)
             forgetAllAudioHashes()
-            DownloadService.sendRemoveAllDownloads(
-                context,
-                TtsRoadDownloadService::class.java,
-                false,
-            )
         }
         scope.launch(Dispatchers.IO) {
             // removeAllDownloads only clears what the index knows about; a download cache upgraded

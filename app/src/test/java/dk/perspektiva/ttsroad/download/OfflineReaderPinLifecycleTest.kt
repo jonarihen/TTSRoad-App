@@ -7,6 +7,7 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.offline.DownloadRequest
+import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.offline.ProgressiveDownloader
 import dk.perspektiva.ttsroad.data.AudioInfo
 import dk.perspektiva.ttsroad.data.ChapterSummary
@@ -91,7 +92,13 @@ class OfflineReaderPinLifecycleTest {
         override suspend fun clearToken() { state = state.copy(token = null) }
     }
 
-    private fun createDownloads(ignoreCancellation: Boolean = false): OfflineDownloads = OfflineDownloads(
+    private fun createDownloads(
+        ignoreCancellation: Boolean = false,
+        forgetAllAudioHashes: () -> Unit = {},
+        sendRemoveAllDownloads: () -> Unit = {
+            DownloadService.sendRemoveAllDownloads(context, TtsRoadDownloadService::class.java, false)
+        },
+    ): OfflineDownloads = OfflineDownloads(
         context = context,
         tokenStore = TokenStore(context),
         capabilities = capabilities,
@@ -113,7 +120,9 @@ class OfflineReaderPinLifecycleTest {
             }
         },
         unpinReadAlong = repository::unpinReadAlong,
+        forgetAllAudioHashes = forgetAllAudioHashes,
         initializeManager = false,
+        sendRemoveAllDownloads = sendRemoveAllDownloads,
     ).also { downloads = it }
 
     private fun chapter(hasTimings: Boolean? = true, id: Int = 10) = ChapterSummary(
@@ -258,6 +267,72 @@ class OfflineReaderPinLifecycleTest {
 
         assertFalse(ReadAlongFileStore(directory).isPinned(10))
         assertNull(ReadAlongFileStore(directory).read(10))
+    }
+
+    @Test
+    fun `a refused remove all retains pinned text and hashes until a successful retry`() = runBlocking {
+        val hashes = AudioHashRecord(context).apply { merge(mapOf(10 to "audio-hash")) }
+        var refuse = true
+        var dispatches = 0
+        val downloads = createDownloads(
+            forgetAllAudioHashes = hashes::clear,
+            sendRemoveAllDownloads = {
+                dispatches++
+                assertTrue(disk.isPinned(10))
+                assertEquals(mapOf(10 to "audio-hash"), hashes.current())
+                if (refuse) throw IllegalStateException("injected service dispatch failure")
+                DownloadService.sendRemoveAllDownloads(context, TtsRoadDownloadService::class.java, false)
+            },
+        )
+        server.enqueue(MockResponse().setBody(body()))
+        downloads.download(chapter(), server.url("/").toString())
+        nextService()
+        assertTrue(result())
+
+        assertTrue(runCatching { downloads.removeAll() }.exceptionOrNull() is IllegalStateException)
+
+        assertTrue(ReadAlongFileStore(directory).isPinned(10))
+        assertEquals("Original text.", ReadAlongFileStore(directory).read(10)?.response?.text)
+        assertEquals(mapOf(10 to "audio-hash"), AudioHashRecord(context).current())
+        assertNull(shadowOf(context).nextStartedService)
+        refuse = false
+        downloads.removeAll()
+
+        nextService()
+        assertEquals(2, dispatches)
+        assertFalse(ReadAlongFileStore(directory).isPinned(10))
+        assertTrue(AudioHashRecord(context).current().isEmpty())
+    }
+
+    @Test
+    fun `a refused remove all leaves the in flight pin active and retryable`() = runBlocking {
+        deferFirstResponse()
+        val hashes = AudioHashRecord(context).apply { merge(mapOf(10 to "audio-hash")) }
+        var refuse = true
+        val downloads = createDownloads(
+            forgetAllAudioHashes = hashes::clear,
+            sendRemoveAllDownloads = {
+                if (refuse) throw IllegalStateException("injected service dispatch failure")
+                DownloadService.sendRemoveAllDownloads(context, TtsRoadDownloadService::class.java, false)
+            },
+        )
+        downloads.download(chapter(), server.url("/").toString())
+        nextService()
+        awaitReaderRequest()
+
+        assertTrue(runCatching { downloads.removeAll() }.exceptionOrNull() is IllegalStateException)
+        release.countDown()
+
+        assertTrue(result())
+        assertTrue(ReadAlongFileStore(directory).isPinned(10))
+        assertEquals(mapOf(10 to "audio-hash"), AudioHashRecord(context).current())
+        assertNull(shadowOf(context).nextStartedService)
+        refuse = false
+        downloads.removeAll()
+
+        nextService()
+        assertFalse(ReadAlongFileStore(directory).isPinned(10))
+        assertTrue(AudioHashRecord(context).current().isEmpty())
     }
 
     @Test
