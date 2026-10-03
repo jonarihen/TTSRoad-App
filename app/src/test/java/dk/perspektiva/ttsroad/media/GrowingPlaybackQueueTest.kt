@@ -103,11 +103,11 @@ class GrowingPlaybackQueueTest {
         assertFalse(player.playWhenReady)
     }
 
-    @Test fun `playing far from queue boundary does not load over an hour of polling`() = runTest {
+    @Test fun `playing far from chapter boundary does not load over an hour of polling`() = runTest {
         for (index in listOf(0, 50, 99)) {
             val player = QueuePlayer((1..100).map { item(it) })
             player.index = index
-            player.position = if (index == 99) 321L else 590_000L
+            player.position = 321L
             var loads = 0
             val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
                 { loads++; emptyList() }, { fail("Must not advance"); null }, { true })
@@ -123,7 +123,50 @@ class GrowingPlaybackQueueTest {
         }
     }
 
-    @Test fun `last chapter polls in final minute and stops after queue grows`() = runTest {
+    @Test fun `near-end poll fills gap before imminent queued transition`() = runTest {
+        val player = QueuePlayer(listOf(item(1), item(3)))
+        var loaded = listOf(item(1), item(3))
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; loaded }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(0, loads)
+        player.position = 540_000
+        player.publish()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        assertEquals(2, player.mediaItemCount)
+        player.pause()
+        loaded = listOf(item(1), item(2), item(3))
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        assertEquals(2, player.mediaItemCount)
+        player.play()
+        player.position = 590_000
+        player.publish()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(2, loads)
+        assertEquals(listOf("chapter:1", "chapter:2", "chapter:3"), player.entries.map { it.mediaItem.mediaId })
+        assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+        assertEquals(590_000L, player.currentPosition)
+        assertEquals(0, player.seeks)
+        assertTrue(player.isPlaying)
+        assertEquals("chapter:2", player.getMediaItemAt(player.nextMediaItemIndex).mediaId)
+        player.seekToNextMediaItem()
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+        assertEquals(0L, player.currentPosition)
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(2, loads)
+    }
+
+    @Test fun `last chapter polls in final minute and stops after transition to early successor`() = runTest {
         val chapters = listOf(item(1), item(2))
         val player = QueuePlayer(chapters)
         player.index = 1
@@ -153,6 +196,9 @@ class GrowingPlaybackQueueTest {
         assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
         assertEquals(540_000L, player.currentPosition)
         assertEquals(0, player.seeks)
+        player.seekToNextMediaItem()
+        assertEquals("chapter:3", player.currentMediaItem!!.mediaId)
+        assertEquals(0L, player.currentPosition)
         testScheduler.advanceTimeBy(3_600_000)
         testScheduler.runCurrent()
         assertEquals(3, loads)
