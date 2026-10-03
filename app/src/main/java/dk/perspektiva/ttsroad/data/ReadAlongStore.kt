@@ -3,6 +3,11 @@ package dk.perspektiva.ttsroad.data
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 
 /**
  * Where read-along documents live between launches.
@@ -49,7 +54,7 @@ interface ReadAlongStore {
      * app already learned this with audio, where a single LRU-evicted store meant any cap would
      * eventually delete something someone had asked for by name.
      */
-    fun pin(chapterId: Int, entry: CachedReadAlong)
+    fun pin(chapterId: Int, entry: CachedReadAlong): Boolean
 
     /** Release a pinned document. The browse cache's copy, if any, is left alone. */
     fun unpin(chapterId: Int)
@@ -65,7 +70,7 @@ interface ReadAlongStore {
         override fun touch(chapterId: Int) = Unit
         override fun holds(chapterId: Int): Boolean = true
         override fun remove(chapterId: Int) = Unit
-        override fun pin(chapterId: Int, entry: CachedReadAlong) = Unit
+        override fun pin(chapterId: Int, entry: CachedReadAlong): Boolean = false
         override fun unpin(chapterId: Int) = Unit
         override fun isPinned(chapterId: Int): Boolean = false
     }
@@ -86,6 +91,12 @@ class ReadAlongFileStore(
     private val directory: File,
     private val maxEntries: Int = DefaultMaxEntries,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val replaceFile: (File, File) -> Unit = { source, target ->
+        Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    },
+    private val syncDirectory: (File) -> Unit = { directory ->
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { it.force(true) }
+    },
 ) : ReadAlongStore {
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val adapter = moshi.adapter(CachedReadAlong::class.java)
@@ -134,15 +145,15 @@ class ReadAlongFileStore(
         runCatching { pinnedFileFor(chapterId).delete() }
     }
 
-    override fun pin(chapterId: Int, entry: CachedReadAlong) {
+    override fun pin(chapterId: Int, entry: CachedReadAlong): Boolean =
         runCatching {
-            if (!directory.isDirectory && !directory.mkdirs()) return
+            if (!directory.isDirectory && !directory.mkdirs()) return false
             writeAtomically(pinnedFileFor(chapterId), entry)
             // The browse copy is now redundant, and leaving it would keep occupying a slot in a
             // bound meant for chapters that have no pinned copy.
             runCatching { fileFor(chapterId).delete() }
-        }
-    }
+            true
+        }.getOrDefault(false)
 
     override fun unpin(chapterId: Int) {
         runCatching { pinnedFileFor(chapterId).delete() }
@@ -202,13 +213,32 @@ class ReadAlongFileStore(
      */
     private fun writeAtomically(target: File, entry: CachedReadAlong) {
         val temp = File(directory, "$TempPrefix${target.name}")
+        var backup: File? = null
+        var replaced = false
+        var committed = false
         try {
-            temp.writeText(adapter.toJson(entry))
-            if (!temp.renameTo(target)) {
-                target.delete()
-                check(temp.renameTo(target)) { "could not move ${temp.name} into place" }
+            FileOutputStream(temp).use { output ->
+                output.write(adapter.toJson(entry).toByteArray(Charsets.UTF_8))
+                output.fd.sync()
             }
+            if (target.isFile) {
+                backup = File(directory, "$TempPrefix${java.util.UUID.randomUUID()}")
+                Files.createLink(backup.toPath(), target.toPath())
+            }
+            replaceFile(temp, target)
+            replaced = true
+            syncDirectory(directory)
+            committed = true
         } finally {
+            if (replaced && !committed) {
+                runCatching {
+                    val previous = backup
+                    if (previous != null) replaceFile(previous, target) else Files.deleteIfExists(target.toPath())
+                    replaced = false
+                    syncDirectory(directory)
+                }
+            }
+            if (committed || !replaced) backup?.delete()
             temp.delete()
         }
     }
