@@ -40,10 +40,9 @@ internal class GrowingPlaybackQueue(
     }
 
     private fun shouldPoll(): Boolean {
-        if (!player.playWhenReady || player.mediaItemCount == 0 ||
-            player.currentMediaItemIndex != player.mediaItemCount - 1
-        ) return false
+        if (!player.playWhenReady || player.mediaItemCount == 0) return false
         if (player.playbackState == Player.STATE_ENDED) return true
+        if (player.currentMediaItemIndex != player.mediaItemCount - 1) return false
         return player.isPlaying && player.duration > 0 &&
             player.duration - player.currentPosition <= 60_000
     }

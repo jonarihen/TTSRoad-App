@@ -231,7 +231,7 @@ class GrowingPlaybackQueueTest {
         assertEquals(2, loads)
     }
 
-    @Test fun `ended listener refreshes paused queue once without recurring loads or continuation`() = runTest {
+    @Test fun `ended listener refreshes paused queue once and resumes appended successor on play`() = runTest {
         val player = QueuePlayer(listOf(item(1)))
         player.ready = false
         var loads = 0
@@ -252,6 +252,12 @@ class GrowingPlaybackQueueTest {
         assertEquals(1, loads)
         assertEquals(0, player.seeks)
         assertFalse(player.playWhenReady)
+        player.play()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(2, loads)
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+        assertEquals(1, player.seeks)
     }
 
     @Test fun `ended poll retries offline failure and discovers late chapter without advancing`() = runTest {
