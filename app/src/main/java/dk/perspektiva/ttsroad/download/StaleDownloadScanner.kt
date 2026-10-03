@@ -67,11 +67,14 @@ class StaleDownloadScanner(
     fun replacementHash(chapterId: Int): String? = serverHashes[chapterId]?.takeIf { chapterId in _staleChapters.value }
 
     fun replacementCompleted(chapterId: Int, hash: String) {
-        if (record.current()[chapterId] == hash) return
         generation++
         completedReplacements += chapterId
         record.merge(mapOf(chapterId to hash))
-        _staleChapters.value = _staleChapters.value - chapterId
+        _staleChapters.value = if (serverHashes[chapterId]?.let { it != hash } == true) {
+            _staleChapters.value + chapterId
+        } else {
+            _staleChapters.value - chapterId
+        }
     }
 
     /** A download that is gone cannot be stale, and its hash describes bytes no longer on disk. */

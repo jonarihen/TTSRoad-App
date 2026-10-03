@@ -209,6 +209,41 @@ class StaleDownloadScannerTest {
         assertEquals(mapOf(1 to "old"), record.current())
     }
 
+    @Test
+    fun `verified server revert clears stale even when the persisted hash is unchanged`() = runTest {
+        val scanner = scanner()
+        record.merge(mapOf(1 to "a"))
+        answer = response(AudioHash(chapterId = 1, audioSha256 = "b"))
+        scanner.scan(9, setOf(1))
+        answer = response(AudioHash(chapterId = 1, audioSha256 = "a"))
+        scanner.scan(9, setOf(1))
+        assertEquals(setOf(1), scanner.staleChapters.value)
+        assertEquals("a", scanner.replacementHash(1))
+
+        scanner.replacementCompleted(1, "a")
+
+        assertTrue(scanner.staleChapters.value.isEmpty())
+        assertEquals(mapOf(1 to "a"), record.current())
+        record.merge(mapOf(2 to "other"))
+        answer = response(AudioHash(chapterId = 2, audioSha256 = "other"))
+        scanner.scan(10, setOf(2))
+        assertEquals(mapOf(1 to "a", 2 to "other"), record.current())
+    }
+
+    @Test
+    fun `completion matching the record cannot clear a newer expected server hash`() = runTest {
+        val scanner = scanner()
+        record.merge(mapOf(1 to "a"))
+        answer = response(AudioHash(chapterId = 1, audioSha256 = "b"))
+        scanner.scan(9, setOf(1))
+
+        scanner.replacementCompleted(1, "a")
+
+        assertEquals(setOf(1), scanner.staleChapters.value)
+        assertEquals("b", scanner.replacementHash(1))
+        assertEquals(mapOf(1 to "a"), record.current())
+    }
+
     private fun response(vararg chapters: AudioHash) = AudioHashesResponse(
         fictionId = 9,
         total = chapters.size,

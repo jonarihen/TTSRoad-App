@@ -22,7 +22,9 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.TokenStore
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -57,6 +59,8 @@ class OfflineDownloadReplacementTest {
     @Volatile private var bodies = mapOf(1 to a, 2 to a)
     @Volatile private var fail = false
     private var hashes = bodies.mapValues { sha256(it.value) }
+    private val requests = AtomicInteger()
+    @Volatile private var responseGate: CountDownLatch? = null
 
     @Before
     fun setUp() {
@@ -65,6 +69,8 @@ class OfflineDownloadReplacementTest {
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
+                requests.incrementAndGet()
+                check(responseGate?.await(15, TimeUnit.SECONDS) != false)
                 if (fail) return MockResponse().setResponseCode(503)
                 val id = request.path!!.substringAfterLast('/').substringBefore('.').toInt()
                 val body = bodies.getValue(id)
@@ -96,6 +102,7 @@ class OfflineDownloadReplacementTest {
 
     @After
     fun tearDown() {
+        responseGate?.countDown()
         downloads.releaseForTest()
         server.shutdown()
     }
@@ -175,6 +182,95 @@ class OfflineDownloadReplacementTest {
 
         assertEquals(setOf(1), scanner.staleChapters.value)
         assertEquals(sha256(a), record.current()[1])
+        await { downloads.downloadCacheBytes.value == 0L && downloads.streamingCacheBytes.value == 0L }
+        assertTrue("unexpected bytes must not play offline", runCatching { play(chapters.first()) }.isFailure)
+    }
+
+    @Test
+    fun `a hash mismatch retry refetches and verifies the expected bytes`() {
+        seed(listOf(chapters.first()))
+        bodies = mapOf(1 to longerB, 2 to a)
+        markStale()
+        val attempts = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val body = if (attempts.incrementAndGet() == 1) shorterB else longerB
+                return MockResponse().setBody(Buffer().write(body))
+            }
+        }
+        downloads.downloadManager.minRetryCount = 1
+
+        downloads.download(chapters.first(), server.url("/").toString(), replaceExisting = true)
+        submitRequests()
+        awaitCompleted(setOf(1))
+
+        assertEquals(2, attempts.get())
+        assertArrayEquals(longerB, play(chapters.first()))
+        assertEquals(sha256(longerB), record.current()[1])
+        assertTrue(scanner.staleChapters.value.isEmpty())
+    }
+
+    @Test
+    fun `a verified replacement clears stale after the server reverts to recorded A`() {
+        seed(listOf(chapters.first()))
+        bodies = mapOf(1 to longerB, 2 to a)
+        markStale()
+        bodies = mapOf(1 to a, 2 to a)
+        hashes = bodies.mapValues { sha256(it.value) }
+        scan()
+        assertEquals(setOf(1), scanner.staleChapters.value)
+
+        downloads.download(chapters.first(), server.url("/").toString(), replaceExisting = true)
+        submitRequests()
+        awaitCompleted(setOf(1))
+
+        assertArrayEquals(a, play(chapters.first()))
+        assertEquals(sha256(a), record.current()[1])
+        assertTrue(scanner.staleChapters.value.isEmpty())
+        scan()
+        assertTrue(scanner.staleChapters.value.isEmpty())
+    }
+
+    @Test
+    fun `final removal forgets a replacement that completes after cancellation was requested`() {
+        seed(listOf(chapters.first()))
+        bodies = mapOf(1 to longerB, 2 to a)
+        markStale()
+        val gate = CountDownLatch(1).also { responseGate = it }
+        val requestsBefore = requests.get()
+        downloads.download(chapters.first(), server.url("/").toString(), replaceExisting = true)
+        submitRequests()
+        await {
+            requests.get() > requestsBefore && downloads.downloads.value["chapter:1"]?.state == ChapterDownloadState.Downloading
+        }
+
+        downloads.remove(1)
+        assertEquals(DownloadService.ACTION_REMOVE_DOWNLOAD, context.intents.single().action)
+        assertEquals(sha256(a), record.current()[1])
+        gate.countDown()
+        awaitCompleted(setOf(1))
+        assertEquals(sha256(longerB), record.current()[1])
+        submitRequests()
+        await { "chapter:1" !in downloads.downloads.value }
+
+        assertTrue(record.current().isEmpty())
+        assertTrue(AudioHashRecord(context).current().isEmpty())
+        assertTrue(scanner.staleChapters.value.isEmpty())
+        assertEquals(null, scanner.replacementHash(1))
+        record.merge(mapOf(1 to "orphan", 2 to sha256(a)))
+        runBlocking { scanner.scan(9, setOf(2)) }
+        assertEquals(mapOf(2 to sha256(a)), record.current())
+        assertTrue(scanner.staleChapters.value.isEmpty())
+
+        bodies = mapOf(1 to shorterB, 2 to a)
+        hashes = bodies.mapValues { sha256(it.value) }
+        downloads.download(chapters.first(), server.url("/").toString())
+        submitRequests()
+        awaitCompleted(setOf(1))
+        scan()
+        assertEquals(sha256(shorterB), record.current()[1])
+        assertTrue(scanner.staleChapters.value.isEmpty())
+        assertArrayEquals(shorterB, play(chapters.first()))
     }
 
     @Test

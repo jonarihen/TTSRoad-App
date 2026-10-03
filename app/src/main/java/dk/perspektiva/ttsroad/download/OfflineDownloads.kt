@@ -124,6 +124,7 @@ class OfflineDownloads(
     private var readAlongSupported: Boolean = false
 
     private val _downloads = MutableStateFlow<Map<String, ChapterDownload>>(emptyMap())
+    private val unfinishedReplacementDownloads = mutableSetOf<String>()
 
     /**
      * Keep-ahead's off-switch release could not reach the download service, most likely because the
@@ -227,6 +228,11 @@ class OfflineDownloads(
                         downloadManager: DownloadManager,
                         download: Download,
                     ) {
+                        val ids = decodeDownloadIds(download.request.data)
+                        val unfinishedReplacement = unfinishedReplacementDownloads.remove(download.request.id)
+                        if (ids?.replacementHash == null || !unfinishedReplacement) {
+                            (ids?.chapterId ?: TtsRoadMediaIds.chapterId(download.request.id))?.let(forgetAudioHash)
+                        }
                         _downloads.value = _downloads.value - download.request.id
                     }
                 },
@@ -452,10 +458,6 @@ class OfflineDownloads(
     /** Delete a chapter's audio and its read-along document, or cancel it if it is still downloading. */
     fun remove(chapterId: Int) {
         unpinReadAlong(chapterId)
-        val download = _downloads.value[TtsRoadMediaIds.chapter(chapterId)]
-        if (download?.isReplacement != true || !download.state.isBusy) {
-            forgetAudioHash(chapterId)
-        }
         DownloadService.sendRemoveDownload(
             context,
             TtsRoadDownloadService::class.java,
@@ -700,9 +702,15 @@ class OfflineDownloads(
     }
 
     private fun recordReplacement(download: Download) {
-        if (download.state != Download.STATE_COMPLETED) return
-        decodeDownloadIds(download.request.data)?.let { ids ->
-            ids.replacementHash?.let { replacementCompleted(ids.chapterId, it) }
+        val ids = decodeDownloadIds(download.request.data)
+        val hash = ids?.replacementHash
+        when {
+            hash == null -> unfinishedReplacementDownloads.remove(download.request.id)
+            download.state == Download.STATE_COMPLETED -> {
+                unfinishedReplacementDownloads.remove(download.request.id)
+                replacementCompleted(ids.chapterId, hash)
+            }
+            download.state != Download.STATE_REMOVING -> unfinishedReplacementDownloads.add(download.request.id)
         }
     }
 

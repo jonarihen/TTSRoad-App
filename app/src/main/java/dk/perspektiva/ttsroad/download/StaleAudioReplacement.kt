@@ -86,6 +86,10 @@ private class StaleAudioDownloader(
             source.close()
         }
         if (digest.digest().joinToString("") { "%02x".format(it) } != hash) {
+            val key = request.customCacheKey ?: request.uri.toString()
+            resetAudioResource(downloadCache, key)
+            resetAudioResource(streamingCache, key)
+            delegate = null
             throw IOException("Replacement audio does not match its content hash")
         }
     }
