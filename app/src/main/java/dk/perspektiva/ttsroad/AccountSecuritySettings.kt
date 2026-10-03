@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dk.perspektiva.ttsroad.data.AccountActionResult
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.TwoFactorSetup
@@ -56,7 +57,10 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
     var status by remember { mutableStateOf<TwoFactorStatus?>(null) }
     var note by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
+    var localBusy by remember { mutableStateOf(false) }
+    val recoveryCodesOwner = LocalRecoveryCodesOwner.current
+    val recoveryState by recoveryCodesOwner.state.collectAsStateWithLifecycle()
+    val busy = localBusy || recoveryState.busy
 
     var showPassword by remember { mutableStateOf(false) }
     var currentPassword by remember { mutableStateOf("") }
@@ -68,12 +72,21 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
     var showReissueConfirmation by remember { mutableStateOf(false) }
     var showDisable by remember { mutableStateOf(false) }
     var disablePassword by remember { mutableStateOf("") }
-    var recoveryCodes by remember { mutableStateOf<List<String>?>(null) }
     val authenticationCodeFocus = remember { FocusRequester() }
 
     fun rejected(message: String) {
         error = message
         note = null
+    }
+
+    LaunchedEffect(recoveryState) {
+        if (recoveryState.codes.isNotEmpty()) {
+            setup = null
+            authenticationCode = ""
+            showReissueConfirmation = false
+            status = TwoFactorStatus(enabled = true, recoveryCodesRemaining = recoveryState.codes.size)
+            note = "Two-factor authentication is on."
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -147,7 +160,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
             } else if (status != null) {
                 OutlinedButton(
                     onClick = {
-                        busy = true
+                        localBusy = true
                         error = null
                         scope.launch {
                             when (val result = repository.startTwoFactorSetup()) {
@@ -160,7 +173,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                                     "This server no longer offers account security.",
                                 )
                             }
-                            busy = false
+                            localBusy = false
                         }
                     },
                     enabled = !busy,
@@ -171,6 +184,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
             }
 
             error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            recoveryState.error?.let { MetaText(text = it, color = AarisColor.Danger) }
             note?.let { MetaText(text = it, color = AarisColor.Ok) }
         }
     }
@@ -200,7 +214,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                     enabled = !busy && currentPassword.isNotBlank() && newPassword.isNotBlank() &&
                         newPassword == confirmPassword,
                     onClick = {
-                        busy = true
+                        localBusy = true
                         error = null
                         scope.launch {
                             when (val result = repository.changePassword(currentPassword, newPassword)) {
@@ -216,7 +230,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                                     "This server no longer offers password changes.",
                                 )
                             }
-                            busy = false
+                            localBusy = false
                         }
                     },
                 ) { Text("CHANGE") }
@@ -268,32 +282,15 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                         modifier = Modifier.fillMaxWidth().focusRequester(authenticationCodeFocus),
                     )
                     error?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    recoveryState.error?.let { MetaText(text = it, color = AarisColor.Danger) }
                 }
             },
             confirmButton = {
                 TextButton(
                     enabled = !busy && authenticationCode.length == 6,
                     onClick = {
-                        busy = true
                         error = null
-                        scope.launch {
-                            when (val result = repository.enableTwoFactor(authenticationCode)) {
-                                is AccountActionResult.Done -> {
-                                    setup = null
-                                    recoveryCodes = result.value.recoveryCodes
-                                    status = TwoFactorStatus(
-                                        enabled = true,
-                                        recoveryCodesRemaining = result.value.recoveryCodes.size,
-                                    )
-                                    note = "Two-factor authentication is on."
-                                }
-                                is AccountActionResult.Refused -> rejected(result.message)
-                                AccountActionResult.Unsupported -> rejected(
-                                    "This server no longer offers two-factor setup.",
-                                )
-                            }
-                            busy = false
-                        }
+                        recoveryCodesOwner.enable(authenticationCode)
                     },
                 ) { Text("ENABLE") }
             },
@@ -314,30 +311,15 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                 ) {
                     Text("Every old recovery code will stop working immediately.")
                     error?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    recoveryState.error?.let { MetaText(text = it, color = AarisColor.Danger) }
                 }
             },
             confirmButton = {
                 TextButton(
                     enabled = !busy,
                     onClick = {
-                        busy = true
                         error = null
-                        scope.launch {
-                            when (val result = repository.reissueRecoveryCodes()) {
-                                is AccountActionResult.Done -> {
-                                    showReissueConfirmation = false
-                                    recoveryCodes = result.value.recoveryCodes
-                                    status = status?.copy(
-                                        recoveryCodesRemaining = result.value.recoveryCodes.size,
-                                    )
-                                }
-                                is AccountActionResult.Refused -> rejected(result.message)
-                                AccountActionResult.Unsupported -> rejected(
-                                    "This server no longer offers recovery codes.",
-                                )
-                            }
-                            busy = false
-                        }
+                        recoveryCodesOwner.reissue()
                     },
                 ) { Text("REPLACE") }
             },
@@ -368,7 +350,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                 TextButton(
                     enabled = !busy && disablePassword.isNotBlank(),
                     onClick = {
-                        busy = true
+                        localBusy = true
                         error = null
                         scope.launch {
                             when (val result = repository.disableTwoFactor(disablePassword)) {
@@ -383,7 +365,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                                     "This server no longer offers two-factor changes.",
                                 )
                             }
-                            busy = false
+                            localBusy = false
                         }
                     },
                 ) { Text("TURN OFF") }
@@ -393,12 +375,15 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
             },
         )
     }
+}
 
-    if (hasUnsavedRecoveryCodes(recoveryCodes)) {
-        val codes = recoveryCodes.orEmpty()
+@Composable
+internal fun RecoveryCodesDialog(owner: RecoveryCodesOwner) {
+    val recoveryState by owner.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    if (hasUnsavedRecoveryCodes(recoveryState.codes)) {
+        val codes = recoveryState.codes
         AlertDialog(
-            // The server stores hashes, so these values can never be fetched again. Require an
-            // explicit acknowledgement instead of losing them to a tap outside the dialog.
             onDismissRequest = {},
             title = { Text("Save these recovery codes") },
             text = {
@@ -414,7 +399,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { recoveryCodes = null }) { Text("I SAVED THEM") }
+                TextButton(onClick = owner::acknowledge) { Text("I SAVED THEM") }
             },
         )
     }
