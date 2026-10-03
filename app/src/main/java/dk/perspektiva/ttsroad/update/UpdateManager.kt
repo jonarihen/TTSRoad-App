@@ -9,9 +9,11 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -20,10 +22,10 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -76,7 +78,17 @@ class UpdateManager internal constructor(
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
-    private var downloadJob: Job? = null
+    private val downloadLock = Any()
+    private var downloadAttempt: DownloadAttempt? = null
+
+    private class DownloadAttempt(cacheDir: File) {
+        private val id = UUID.randomUUID().toString()
+        val partial = File(cacheDir, "update-$id.part")
+        val apk = File(cacheDir, "update-$id.apk")
+        lateinit var job: Job
+        var call: Call? = null
+        var installed = false
+    }
 
     /** [manual] checks surface "up to date"/errors; automatic checks fail silently back to Idle. */
     suspend fun check(currentVersionName: String, manual: Boolean = false) {
@@ -98,32 +110,51 @@ class UpdateManager internal constructor(
         }
     }
 
-    fun downloadAndInstall(context: Context, release: ReleaseInfo): Job {
-        downloadJob?.let { if (it.isActive) return it }
+    fun downloadAndInstall(context: Context, release: ReleaseInfo): Job = synchronized(downloadLock) {
+        downloadAttempt?.let { if (it.job.isActive) return@synchronized it.job }
         val appContext = context.applicationContext
-        val job = scope.launch {
-            _state.value = UpdateState.Downloading(0)
+        val attempt = DownloadAttempt(appContext.cacheDir)
+        attempt.job = scope.launch(start = CoroutineStart.LAZY) {
             try {
-                val apk = download(appContext, release.apkUrl)
-                installer(appContext, apk)
-                _state.value = UpdateState.Idle
+                val apk = download(attempt, release.apkUrl)
+                currentCoroutineContext().ensureActive()
+                synchronized(downloadLock) {
+                    if (downloadAttempt === attempt) {
+                        attempt.job.ensureActive()
+                        installer(appContext, apk)
+                        attempt.installed = true
+                        _state.value = UpdateState.Idle
+                    }
+                }
             } catch (e: Exception) {
-            if (e is CancellationException || !currentCoroutineContext().isActive) {
-                    _state.value = UpdateState.Idle
-                } else {
-                    _state.value = UpdateState.Failed(e.message ?: "Download failed")
+                synchronized(downloadLock) {
+                    if (downloadAttempt === attempt) {
+                        _state.value = if (e is CancellationException || !attempt.job.isActive) {
+                            UpdateState.Idle
+                        } else {
+                            UpdateState.Failed(e.message ?: "Download failed")
+                        }
+                    }
                 }
             } finally {
-                downloadJob = null
+                attempt.partial.delete()
+                if (!attempt.installed) attempt.apk.delete()
+                synchronized(downloadLock) {
+                    if (downloadAttempt === attempt) downloadAttempt = null
+                }
             }
         }
-        downloadJob = job
-        return job
+        downloadAttempt = attempt
+        _state.value = UpdateState.Downloading(0)
+        attempt.job.start()
+        attempt.job
     }
 
-    fun cancelDownload() {
-        downloadJob?.cancel()
-        downloadJob = null
+    fun cancelDownload() = synchronized(downloadLock) {
+        val attempt = downloadAttempt
+        downloadAttempt = null
+        attempt?.job?.cancel()
+        attempt?.call?.cancel()
         _state.value = UpdateState.Idle
     }
 
@@ -155,41 +186,50 @@ class UpdateManager internal constructor(
         }
     }
 
-    private suspend fun download(context: Context, url: String): File = withContext(Dispatchers.IO) {
+    private suspend fun download(attempt: DownloadAttempt, url: String): File = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).build()
         val call = client.newCall(request)
+        synchronized(downloadLock) {
+            if (downloadAttempt !== attempt) throw CancellationException("Obsolete download")
+            attempt.call = call
+        }
         coroutineContext.job.invokeOnCompletion { cause ->
             if (cause is CancellationException) {
                 call.cancel()
             }
         }
-        val out = File(context.cacheDir, "update.apk")
-        try {
-            call.execute().use { response ->
-                if (!response.isSuccessful) throw IOException("Download failed (${response.code})")
-                val body = response.body ?: throw IOException("Empty download")
-                val total = body.contentLength()
-                body.byteStream().use { input ->
-                    FileOutputStream(out).use { output ->
-                        val buffer = ByteArray(64 * 1024)
-                        var downloaded = 0L
-                        var read: Int
-                        while (input.read(buffer).also { read = it } != -1) {
-                            currentCoroutineContext().ensureActive()
-                            output.write(buffer, 0, read)
-                            downloaded += read
-                            if (total > 0) {
-                                _state.value = UpdateState.Downloading((downloaded * 100 / total).toInt())
+        currentCoroutineContext().ensureActive()
+        call.execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Download failed (${response.code})")
+            val body = response.body ?: throw IOException("Empty download")
+            val total = body.contentLength()
+            var downloaded = 0L
+            body.byteStream().use { input ->
+                FileOutputStream(attempt.partial).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var read: Int
+                    while (input.read(buffer).also { read = it } != -1) {
+                        currentCoroutineContext().ensureActive()
+                        output.write(buffer, 0, read)
+                        downloaded += read
+                        if (total > 0) {
+                            synchronized(downloadLock) {
+                                if (downloadAttempt === attempt && attempt.job.isActive) {
+                                    _state.value = UpdateState.Downloading((downloaded * 100 / total).toInt())
+                                }
                             }
                         }
                     }
                 }
             }
-            out
-        } catch (e: Throwable) {
-            runCatching { out.delete() }
-            throw e
+            currentCoroutineContext().ensureActive()
+            if (downloaded == 0L || (total >= 0 && downloaded != total)) {
+                throw IOException("Incomplete download")
+            }
         }
+        currentCoroutineContext().ensureActive()
+        if (!attempt.partial.renameTo(attempt.apk)) throw IOException("Could not finish download")
+        attempt.apk
     }
 
     private fun installApk(context: Context, file: File) {
