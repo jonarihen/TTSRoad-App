@@ -6,14 +6,18 @@ import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** A point on the playback timeline: where the audio was at a given wall-clock moment. */
 data class HistorySnapshot(
@@ -106,6 +110,7 @@ class PlaybackHistoryStore internal constructor(
     /** Guarded by [lock]: the newest intent, and how many mutations have been ordered. */
     private var generation = 0L
     private var pending: PendingPersist? = null
+    private var persistJob: Job? = null
 
     /** Guarded by [writeMutex]: the newest generation that has actually reached the disk. */
     private var persistedGeneration = 0L
@@ -135,20 +140,38 @@ class PlaybackHistoryStore internal constructor(
             val list = if (updated.size > MAX_SNAPSHOTS) updated.takeLast(MAX_SNAPSHOTS) else updated
             _snapshots.value = list
             pending = PendingPersist.Write(++generation, list)
+            schedulePersist()
         }
-        schedulePersist()
     }
 
     fun clear() {
         synchronized(lock) {
             _snapshots.value = emptyList()
             pending = PendingPersist.Delete(++generation)
+            persistJob?.cancel()
+            persistJob = null
         }
-        schedulePersist()
+        scope.launch { persistPending() }
+    }
+
+    suspend fun flush() {
+        synchronized(lock) {
+            persistJob?.cancel()
+            persistJob = null
+        }
+        withContext(scope.coroutineContext.minusKey(Job)) { persistPending() }
     }
 
     private fun schedulePersist() {
-        scope.launch { persistPending() }
+        if (persistJob != null) return
+        persistJob = scope.launch(start = CoroutineStart.LAZY) {
+            delay(PERSIST_INTERVAL_MS)
+            synchronized(lock) {
+                if (persistJob !== coroutineContext[Job]) return@launch
+                persistJob = null
+            }
+            persistPending()
+        }.also { it.start() }
     }
 
     /**
@@ -177,5 +200,6 @@ class PlaybackHistoryStore internal constructor(
     private companion object {
         // ~8 hours of overnight listening at the service's 15s tick granularity.
         const val MAX_SNAPSHOTS = 2000
+        const val PERSIST_INTERVAL_MS = 300_000L
     }
 }
