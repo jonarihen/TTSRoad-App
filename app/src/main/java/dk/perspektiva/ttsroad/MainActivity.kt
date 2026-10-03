@@ -372,16 +372,24 @@ class MainActivity : ComponentActivity() {
         // activity because the process is in the foreground here, so starting the service is allowed.
         ServiceLocator.offlineDownloads(this).resumeUnfinished()
         val startOnPlayer = consumeOpenPlayer(intent)
+        val tokenStore = ServiceLocator.tokenStore(this)
+        val recoveryCodesOwner = recoveryCodesOwner(
+            repository = ServiceLocator.repository(this),
+            sessions = tokenStore.session,
+            currentSession = tokenStore::current,
+        )
         setContent {
             TtsRoadTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = AarisColor.Bg,
                 ) {
-                    TtsRoadApp(
-                        startOnPlayer = startOnPlayer,
-                        openPlayerRequests = openPlayerRequests,
-                    )
+                    CompositionLocalProvider(LocalRecoveryCodesOwner provides recoveryCodesOwner) {
+                        TtsRoadApp(
+                            startOnPlayer = startOnPlayer,
+                            openPlayerRequests = openPlayerRequests,
+                        )
+                    }
                 }
             }
         }
@@ -431,6 +439,8 @@ private fun TtsRoadApp(
     val playbackController = remember { ServiceLocator.playbackController(context) }
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val recoveryCodesOwner = LocalRecoveryCodesOwner.current
+    val recoveryCodesState by recoveryCodesOwner.state.collectAsStateWithLifecycle()
     var backStack by remember { mutableStateOf(rootBackStack) }
     var openPlayerPending by remember { mutableStateOf(startOnPlayer) }
 
@@ -509,6 +519,9 @@ private fun TtsRoadApp(
                 repository = repository,
                 playbackController = playbackController,
             )
+        }
+        if (session != null && recoveryCodesState.codes.isNotEmpty() && recoveryCodesOwner.owns(session)) {
+            RecoveryCodesDialog(recoveryCodesOwner)
         }
     }
 

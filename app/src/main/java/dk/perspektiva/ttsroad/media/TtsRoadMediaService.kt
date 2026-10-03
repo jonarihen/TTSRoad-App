@@ -13,6 +13,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -232,6 +233,11 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .collect { skipIntervalMs = it }
         }
         player.addListener(
+            departingChapterProgressListener(player, serviceScope) { item, position, duration, completed, flushHistory ->
+                saveProgressFor(item, position, duration, queueEnded = completed, flushHistory = flushHistory)
+            },
+        )
+        player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_IDLE) {
@@ -267,24 +273,6 @@ class TtsRoadMediaService : MediaLibraryService() {
                  * the case that matters, since the car and the notification can both do it.
                  */
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    // The chapter just left never gets another tick, pause or queue-end: by the time
-                    // this fires the player already points at the new item, so saveCurrentProgress
-                    // can no longer see it. Persist its last known position first, keyed to the item
-                    // that ended rather than re-reading the player — otherwise an auto-advanced
-                    // chapter keeps only its last pre-boundary tick and is never marked played.
-                    val finished = transitionFinishedItem(lastProgressItem, mediaItem?.mediaId)
-                    if (finished != null) {
-                        lastProgressItem = null
-                        serviceScope.launch {
-                            saveProgressFor(
-                                finished,
-                                lastProgressPositionMs,
-                                lastProgressDurationMs,
-                                queueEnded = false,
-                                flushHistory = mediaItem == null,
-                            )
-                        }
-                    }
                     currentFictionId.value = mediaItem?.mediaMetadata?.extras
                         ?.getInt("fiction_id")
                         ?.takeIf { it > 0 }
@@ -855,10 +843,6 @@ class TtsRoadMediaService : MediaLibraryService() {
         runCatching { NowPlayingWidget().updateAll(this) }
     }
 
-    private var lastProgressItem: MediaItem? = null
-    private var lastProgressPositionMs: Long = 0L
-    private var lastProgressDurationMs: Long? = null
-
     private fun recordHistory(mediaItem: MediaItem, position: Long) {
         val extras = mediaItem.mediaMetadata.extras
         ServiceLocator.playbackHistory(this).record(
@@ -890,9 +874,6 @@ class TtsRoadMediaService : MediaLibraryService() {
         queueEnded: Boolean,
         flushHistory: Boolean = queueEnded,
     ) {
-        lastProgressItem = mediaItem
-        lastProgressPositionMs = position
-        lastProgressDurationMs = duration
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 }
         val chapterId = extras?.getInt("chapter_id")?.takeIf { it > 0 }
@@ -1499,6 +1480,51 @@ internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition
  */
 internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): MediaItem? =
     if (previous != null && previous.mediaId != newMediaId) previous else null
+
+@OptIn(UnstableApi::class)
+internal fun departingChapterProgressListener(
+    player: Player,
+    scope: CoroutineScope,
+    save: suspend (MediaItem, Long, Long?, Boolean, Boolean) -> Unit,
+): DepartingChapterProgressListener = DepartingChapterProgressListener(player) { item, position, duration, completed ->
+    val flushHistory = completed || player.currentMediaItem == null
+    scope.launch { save(item, position, duration, completed, flushHistory) }
+}
+
+@OptIn(UnstableApi::class)
+internal class DepartingChapterProgressListener(
+    private val player: Player,
+    private val save: (MediaItem, Long, Long?, Boolean) -> Unit,
+) : Player.Listener {
+    var lastProgressItem: MediaItem? = player.currentMediaItem
+        private set
+
+    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        lastProgressItem = mediaItem
+    }
+
+    override fun onPositionDiscontinuity(
+        oldPosition: Player.PositionInfo,
+        newPosition: Player.PositionInfo,
+        reason: Int,
+    ) {
+        val departed = transitionFinishedItem(
+            oldPosition.mediaItem ?: lastProgressItem,
+            newPosition.mediaItem?.mediaId,
+        )
+        lastProgressItem = newPosition.mediaItem
+        if (departed == null) return
+        val timeline = player.currentTimeline
+        val window = Timeline.Window()
+        val duration = (0 until timeline.windowCount).firstNotNullOfOrNull { index ->
+            timeline.getWindow(index, window)
+            window.durationMs.takeIf { window.uid == oldPosition.windowUid && it > 0 }
+        } ?: departed.mediaMetadata.durationMs?.takeIf { it > 0 }
+        val completed = reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION
+        val position = if (completed && duration != null) duration else oldPosition.positionMs
+        save(departed, position.coerceAtLeast(0L), duration, completed)
+    }
+}
 
 /** Items found by one search, tagged with the generation of the library they were built from. */
 internal data class SearchResult(val items: List<MediaItem>, val generation: Long)
