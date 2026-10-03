@@ -44,9 +44,10 @@ data class ChapterDownloadSpec(
      * existing record as manual rather than orphaning it — and "manual" is the reading that cannot
      * cause a deletion.
      */
-    fun encodedIds(): ByteArray = when (origin) {
-        DownloadOrigin.Manual -> "$fictionId:$chapterId"
-        DownloadOrigin.Auto -> "$fictionId:$chapterId:$AutoMarker"
+    fun encodedIds(replacementHash: String? = null): ByteArray = when {
+        replacementHash != null -> "$fictionId:$chapterId:${origin.name.lowercase()}:$ReplacementMarker:$replacementHash"
+        origin == DownloadOrigin.Auto -> "$fictionId:$chapterId:$AutoMarker"
+        else -> "$fictionId:$chapterId"
     }.toByteArray(Charsets.UTF_8)
 }
 
@@ -55,9 +56,11 @@ data class DownloadIds(
     val fictionId: Int,
     val chapterId: Int,
     val origin: DownloadOrigin = DownloadOrigin.Manual,
+    val replacementHash: String? = null,
 )
 
 private const val AutoMarker = "auto"
+private const val ReplacementMarker = "replace"
 
 /**
  * Build the download for [chapter], or null when there is nothing to download yet — a chapter still
@@ -101,10 +104,10 @@ fun decodeDownloadIds(data: ByteArray?): DownloadIds? {
     val parts = data?.takeIf { it.isNotEmpty() }
         ?.toString(Charsets.UTF_8)
         ?.split(':')
-        ?.takeIf { it.size == 2 || it.size == 3 }
+        ?.takeIf { it.size == 2 || it.size == 3 || (it.size == 5 && it[3] == ReplacementMarker) }
         ?: return null
     val fictionId = parts[0].toIntOrNull() ?: return null
     val chapterId = parts[1].toIntOrNull() ?: return null
     val origin = if (parts.getOrNull(2) == AutoMarker) DownloadOrigin.Auto else DownloadOrigin.Manual
-    return DownloadIds(fictionId, chapterId, origin)
+    return DownloadIds(fictionId, chapterId, origin, replacementHash = parts.getOrNull(4)?.takeIf { it.isNotBlank() })
 }

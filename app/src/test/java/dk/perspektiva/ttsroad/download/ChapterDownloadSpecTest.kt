@@ -151,6 +151,18 @@ class ChapterDownloadSpecTest {
     }
 
     @Test
+    fun `replacement hashes and origins survive the persisted download request`() {
+        DownloadOrigin.entries.forEach { origin ->
+            val spec = chapterDownloadSpec(chapter(id = 42, fictionId = 7), serverUrl, origin = origin)!!
+            assertEquals(
+                DownloadIds(7, 42, origin, replacementHash = "a".repeat(64)),
+                decodeDownloadIds(spec.encodedIds("a".repeat(64))),
+            )
+        }
+        assertNull(decodeDownloadIds("7:42:manual:unknown:hash".toByteArray()))
+    }
+
+    @Test
     fun `an unusable serverUrl returns null`() {
         assertNull(chapterDownloadSpec(chapter(), serverUrl = null))
         assertNull(chapterDownloadSpec(chapter(), serverUrl = ""))
