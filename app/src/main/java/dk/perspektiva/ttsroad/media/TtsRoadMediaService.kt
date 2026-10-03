@@ -87,6 +87,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 // Media3 marks much of its session and data-source surface @UnstableApi. The whole class works
@@ -233,6 +234,9 @@ class TtsRoadMediaService : MediaLibraryService() {
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_IDLE) {
+                        serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
+                    }
                     if (playbackState != Player.STATE_ENDED) {
                         // READY is when duration first becomes trustworthy; BUFFERING also matters
                         // after restoring a queue before isPlaying has changed.
@@ -248,7 +252,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (!isPlaying) {
-                        serviceScope.launch { saveCurrentProgress(queueEnded = false) }
+                        serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
                     } else {
                         // Do not wait for the first 15-second progress tick to turn Play into Pause.
                         serviceScope.launch { publishNowPlaying(forcePlaying = true) }
@@ -277,6 +281,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                                 lastProgressPositionMs,
                                 lastProgressDurationMs,
                                 queueEnded = false,
+                                flushHistory = mediaItem == null,
                             )
                         }
                     }
@@ -364,6 +369,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
+        serviceScope.cancel()
+        player.currentMediaItem?.let { mediaItem ->
+            recordHistory(mediaItem, player.currentPosition.coerceAtLeast(0L))
+        }
+        runBlocking { ServiceLocator.playbackHistory(this@TtsRoadMediaService).flush() }
         shakeDetector?.stop()
         sleepTimer.cancel()
         // Release the effect before the player: it is attached to the player's audio session, and
@@ -373,7 +383,6 @@ class TtsRoadMediaService : MediaLibraryService() {
         session.release()
         InProcessPlayer.detach(player)
         player.release()
-        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -850,11 +859,28 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var lastProgressPositionMs: Long = 0L
     private var lastProgressDurationMs: Long? = null
 
-    private suspend fun saveCurrentProgress(queueEnded: Boolean) {
-        val mediaItem = player.currentMediaItem ?: return
+    private fun recordHistory(mediaItem: MediaItem, position: Long) {
+        val extras = mediaItem.mediaMetadata.extras
+        ServiceLocator.playbackHistory(this).record(
+            timestamp = System.currentTimeMillis(),
+            mediaId = mediaItem.mediaId,
+            fictionId = extras?.getInt("fiction_id") ?: 0,
+            chapterId = extras?.getInt("chapter_id") ?: 0,
+            title = mediaItem.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: "Chapter",
+            fictionTitle = mediaItem.mediaMetadata.albumTitle?.toString(),
+            positionMs = position,
+        )
+    }
+
+    private suspend fun saveCurrentProgress(queueEnded: Boolean, flushHistory: Boolean = queueEnded) {
+        val mediaItem = player.currentMediaItem
+        if (mediaItem == null) {
+            if (flushHistory) ServiceLocator.playbackHistory(this).flush()
+            return
+        }
         val position = player.currentPosition.coerceAtLeast(0L)
         val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }
-        saveProgressFor(mediaItem, position, duration, queueEnded)
+        saveProgressFor(mediaItem, position, duration, queueEnded, flushHistory)
     }
 
     private suspend fun saveProgressFor(
@@ -862,6 +888,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         position: Long,
         duration: Long?,
         queueEnded: Boolean,
+        flushHistory: Boolean = queueEnded,
     ) {
         lastProgressItem = mediaItem
         lastProgressPositionMs = position
@@ -873,15 +900,8 @@ class TtsRoadMediaService : MediaLibraryService() {
         // Record a wall-clock → position snapshot so the user can jump back to where they fell
         // asleep. Done here because this runs on the 15s tick, on pause, and at chapter end. The
         // fiction/chapter ids let "jump back" reload the fiction even after playback has stopped.
-        ServiceLocator.playbackHistory(this).record(
-            timestamp = System.currentTimeMillis(),
-            mediaId = mediaItem.mediaId,
-            fictionId = fictionId ?: 0,
-            chapterId = chapterId ?: 0,
-            title = mediaItem.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: "Chapter",
-            fictionTitle = mediaItem.mediaMetadata.albumTitle?.toString(),
-            positionMs = position,
-        )
+        recordHistory(mediaItem, position)
+        if (flushHistory) ServiceLocator.playbackHistory(this).flush()
 
         // The home-screen widget reads a note rather than a player, because the launcher draws it
         // in a process where this one is usually dead (#150). Written from here so it rides the
