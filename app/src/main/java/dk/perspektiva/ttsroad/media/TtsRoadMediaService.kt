@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.media.audiofx.LoudnessEnhancer
 import android.os.Bundle
 import androidx.annotation.OptIn
+import androidx.core.net.toUri
 import androidx.glance.appwidget.updateAll
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -32,6 +33,7 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
+import dk.perspektiva.ttsroad.core.AudioAuthSnapshot
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
@@ -44,6 +46,7 @@ import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.QueueStatusPlaying
+import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
@@ -491,7 +494,16 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // the JSON API, so go through the repository rather than clearing the token here:
                 // that is what carries the reason to the login screen instead of dropping the user
                 // there with no explanation.
-                serviceScope.launch { endAudioSession(repository, httpFailure) }
+                serviceScope.launch {
+                    handleAudioRejection(repository, httpFailure, tokenStore::current) { rejected, current ->
+                        if (player.playerError !== error) return@handleAudioRejection
+                        scheduleRetry {
+                            recoverAudioPlaybackIfCurrent(player, error, rejected, current, tokenStore::current) {
+                                audioAuth = it
+                            }
+                        }
+                    }
+                }
             }
 
             is PlaybackFailure.Transient -> scheduleRetry()
@@ -508,13 +520,13 @@ class TtsRoadMediaService : MediaLibraryService() {
      * anything. Deliberately does not call play(): prepare() resumes on its own when playWhenReady
      * was set, so a stream that died while paused stays paused.
      */
-    private fun scheduleRetry() {
+    private fun scheduleRetry(recover: suspend () -> Unit = { player.prepare() }) {
         val delayMs = retryDelayMs(retryAttempt + 1) ?: return
         retryAttempt++
         retryJob?.cancel()
         retryJob = serviceScope.launch {
             delay(delayMs)
-            player.prepare()
+            recover()
         }
     }
 
@@ -1562,7 +1574,7 @@ internal suspend fun endAudioSession(
 ): Boolean {
     if (failure == null || failure.responseCode !in listOf(401, 403)) return false
     val request = failure.dataSpec
-    val snapshot = request.customData as? dk.perspektiva.ttsroad.core.AudioAuthSnapshot ?: return false
+    val snapshot = request.customData as? AudioAuthSnapshot ?: return false
     val authorizationHeader = snapshot.authorizationHeader ?: return false
     if (!ServerUrls.isSameOrigin(request.uri.toString(), snapshot.serverUrl) ||
         request.httpRequestHeaders["Authorization"] != authorizationHeader
@@ -1574,5 +1586,71 @@ internal suspend fun endAudioSession(
         authorizationHeader,
         parseSessionEnd(failure.responseBody.toString(Charsets.UTF_8)),
     )
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun handleAudioRejection(
+    repository: TtsRoadRepository,
+    failure: HttpDataSource.InvalidResponseCodeException?,
+    currentSession: suspend () -> SessionState,
+    scheduleRecovery: (AudioAuthSnapshot, AudioAuthSnapshot) -> Unit,
+) {
+    if (endAudioSession(repository, failure)) return
+    if (failure == null || failure.responseCode !in listOf(401, 403)) return
+    val rejected = failure.dataSpec.customData as? AudioAuthSnapshot ?: return
+    if (rejected.authorizationHeader == null ||
+        !ServerUrls.isSameOrigin(failure.dataSpec.uri.toString(), rejected.serverUrl) ||
+        failure.dataSpec.httpRequestHeaders["Authorization"] != rejected.authorizationHeader
+    ) {
+        return
+    }
+    val session = currentSession()
+    if (!session.isLoggedIn) return
+    val current = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+    if (current != rejected) scheduleRecovery(rejected, current)
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun recoverAudioPlaybackIfCurrent(
+    player: Player,
+    error: PlaybackException,
+    rejected: AudioAuthSnapshot,
+    expected: AudioAuthSnapshot,
+    currentSession: suspend () -> SessionState,
+    publishAuth: (AudioAuthSnapshot) -> Unit,
+) {
+    val session = currentSession()
+    if (player.playerError !== error || !session.isLoggedIn ||
+        AudioAuthSnapshot(session.serverUrl, session.authorizationHeader) != expected
+    ) {
+        return
+    }
+    publishAuth(expected)
+    recoverAudioPlayback(player, rejected, expected)
+}
+
+@OptIn(UnstableApi::class)
+internal fun recoverAudioPlayback(player: Player, rejected: AudioAuthSnapshot, current: AudioAuthSnapshot) {
+    if (current.authorizationHeader == null || player.mediaItemCount == 0) return
+    if (!ServerUrls.isSameOrigin(rejected.serverUrl, current.serverUrl)) {
+        var changed = false
+        val items = (0 until player.mediaItemCount).map { index ->
+            val item = player.getMediaItemAt(index)
+            val uri = item.localConfiguration?.uri
+            if (uri == null || !ServerUrls.isSameOrigin(uri.toString(), rejected.serverUrl)) {
+                item
+            } else {
+                val rewritten = ServerUrls.rewriteAudioUrlOrNull(uri.toString(), current.serverUrl)?.toUri()
+                    ?: return
+                changed = true
+                item.buildUpon()
+                    .setUri(rewritten)
+                    .setRequestMetadata(item.requestMetadata.buildUpon().setMediaUri(rewritten).build())
+                    .build()
+            }
+        }
+        if (changed) player.setMediaItems(items, player.currentMediaItemIndex, player.currentPosition)
+    }
+    player.prepare()
 }
 
