@@ -56,6 +56,7 @@ data class ChapterDownload(
      */
     val origin: DownloadOrigin = DownloadOrigin.Manual,
     val fictionId: Int = 0,
+    val isReplacement: Boolean = false,
 )
 
 /**

@@ -25,6 +25,9 @@ class StaleDownloadScanner(
     private val fetchHashes: suspend (Int) -> AudioHashesResponse?,
 ) {
     private val _staleChapters = MutableStateFlow<Set<Int>>(emptySet())
+    private val serverHashes = mutableMapOf<Int, String>()
+    private val completedReplacements = mutableSetOf<Int>()
+    private var generation = 0L
 
     /** Chapter ids whose downloaded audio is provably not what the server has now. */
     val staleChapters: StateFlow<Set<Int>> = _staleChapters.asStateFlow()
@@ -37,48 +40,56 @@ class StaleDownloadScanner(
      * would buy nothing and add a second place to get it wrong — and the prune below needs the
      * whole store to tell a record with no file from a record for another book.
      */
-    suspend fun scan(fictionId: Int, downloaded: Set<Int>) {
-        if (downloaded.isEmpty()) return
+    suspend fun scan(fictionId: Int, downloaded: Set<Int>, retained: Set<Int> = downloaded) {
+        val present = retained + _staleChapters.value + completedReplacements
+        if (present.isEmpty()) return
+        val scanGeneration = generation
         val response = fetchHashes(fictionId) ?: return
+        if (scanGeneration != generation) return
         val check = staleDownloadCheck(
-            downloaded = downloaded,
+            downloaded = present,
             recorded = record.current(),
             server = response.chapters,
         )
-        record.merge(check.adopt)
+        response.chapters.forEach { entry ->
+            entry.audioSha256?.takeIf { it.isNotBlank() }?.let { serverHashes[entry.chapterId] = it }
+        }
+        record.merge(check.adopt.filterKeys { it in downloaded })
         // Every ordinary delete already forgets its hash through OfflineDownloads.remove, but a
         // download can also leave the index without passing through it — a cache upgrade, a row
         // the store drops, an install restored onto a phone whose files did not come with it. The
         // scan is the one place that sees the download store and the record side by side, so it is
         // where a record for bytes that are not there gets dropped.
-        record.prune(downloaded)
-        // Replace this fiction's verdict rather than merging into it: a chapter that was stale and
-        // has since been updated has to be able to stop being stale, and a chapter whose download
-        // was deleted must not stay in the set.
-        val scanned = response.chapters.mapTo(mutableSetOf()) { it.chapterId }
-        _staleChapters.value = (_staleChapters.value - scanned) + check.stale
+        record.prune(present)
+        _staleChapters.value = _staleChapters.value + check.stale
     }
 
-    /**
-     * The user has asked for these to be fetched again.
-     *
-     * Forgetting the recorded hash is what makes this work rather than merely look like it: the next
-     * scan then has nothing to compare against, adopts whatever the server now has, and the chapter
-     * is fresh by the same rule that made it stale. Clearing the flag optimistically means the row
-     * stops nagging the moment the download is queued rather than after the next scan.
-     */
-    fun markUpdating(chapterIds: Collection<Int>) {
-        chapterIds.forEach(record::forget)
-        _staleChapters.value = _staleChapters.value - chapterIds
+    fun replacementHash(chapterId: Int): String? = serverHashes[chapterId]?.takeIf { chapterId in _staleChapters.value }
+
+    fun replacementCompleted(chapterId: Int, hash: String) {
+        generation++
+        completedReplacements += chapterId
+        record.merge(mapOf(chapterId to hash))
+        _staleChapters.value = if (serverHashes[chapterId]?.let { it != hash } == true) {
+            _staleChapters.value + chapterId
+        } else {
+            _staleChapters.value - chapterId
+        }
     }
 
     /** A download that is gone cannot be stale, and its hash describes bytes no longer on disk. */
     fun forget(chapterId: Int) {
+        generation++
+        serverHashes.remove(chapterId)
+        completedReplacements -= chapterId
         record.forget(chapterId)
         _staleChapters.value = _staleChapters.value - chapterId
     }
 
     fun clear() {
+        generation++
+        serverHashes.clear()
+        completedReplacements.clear()
         record.clear()
         _staleChapters.value = emptySet()
     }
