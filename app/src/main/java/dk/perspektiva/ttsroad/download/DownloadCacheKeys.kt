@@ -1,5 +1,8 @@
 package dk.perspektiva.ttsroad.download
 
+import dk.perspektiva.ttsroad.data.ServerCapabilities
+import dk.perspektiva.ttsroad.data.normalizeBaseUrl
+
 /**
  * How a piece of chapter audio is identified inside the media cache.
  *
@@ -77,5 +80,32 @@ object DownloadCacheKeys {
         val authority = origin.value.substringAfter("://").takeIf { it.isNotEmpty() } ?: return null
         val prefix = value.substring(origin.value.length).substringBefore('#').substringBefore('?')
         return (authority + prefix).trimEnd('/').lowercase()
+    }
+}
+
+internal class SessionCacheIdentity(
+    knownIdentities: Map<String, String> = emptyMap(),
+    private val remember: (String, String) -> Unit = { _, _ -> },
+) {
+    private val identities = knownIdentities.toMutableMap()
+
+    @Synchronized
+    fun forServer(serverUrl: String, capabilities: ServerCapabilities): String? {
+        val address = runCatching { normalizeBaseUrl(serverUrl) }.getOrNull() ?: return null
+        val reported = advertisedForServer(address, capabilities)
+        if (reported != null && identities[address] != reported) {
+            identities[address] = reported
+            remember(address, reported)
+        }
+        return identities[address] ?: fallbackForServer(address)
+    }
+
+    fun fallbackForServer(serverUrl: String): String? =
+        runCatching { normalizeBaseUrl(serverUrl) }.getOrNull()?.let { "address:$it" }
+
+    fun advertisedForServer(serverUrl: String, capabilities: ServerCapabilities): String? {
+        val address = runCatching { normalizeBaseUrl(serverUrl) }.getOrNull() ?: return null
+        val source = runCatching { normalizeBaseUrl(capabilities.discoveryBaseUrl.orEmpty()) }.getOrNull()
+        return if (source == address) DownloadCacheKeys.serverIdentity(capabilities.serverBaseUrl) else null
     }
 }
