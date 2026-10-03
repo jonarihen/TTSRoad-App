@@ -54,10 +54,6 @@ class NewChapterNotifier(private val context: Context) {
 
     /**
      * Posts one notification for [fresh], or nothing when it is empty.
-     *
-     * Several chapters collapse into one line rather than one notification each — see
-     * [dk.perspektiva.ttsroad.data.readyNotificationText]. A single chapter's notification opens
-     * straight into it; a batch opens the list.
      */
     fun notifyReady(title: String, body: String, single: ChapterNotificationEntry?) {
         // Checked rather than assumed: POST_NOTIFICATIONS is denied by default on Android 13+, and
@@ -72,7 +68,16 @@ class NewChapterNotifier(private val context: Context) {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
             .setAutoCancel(true)
-            .setContentIntent(openIntent(single))
+            .setContentIntent(openIntent())
+            .apply {
+                if (single?.playable == true && single.fiction.id > 0 && single.chapter.id > 0) {
+                    addAction(
+                        0,
+                        "Play",
+                        openIntent(single),
+                    )
+                }
+            }
             .build()
 
         runCatching {
@@ -87,11 +92,12 @@ class NewChapterNotifier(private val context: Context) {
         runCatching { NotificationManagerCompat.from(context).cancel(Tag, NotificationId) }
     }
 
-    private fun openIntent(single: ChapterNotificationEntry?): PendingIntent {
+    private fun openIntent(single: ChapterNotificationEntry? = null): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(ExtraOpenNotifications, true)
             single?.let {
+                action = ActionPlay
                 putExtra(ExtraFictionId, it.fiction.id)
                 putExtra(ExtraChapterId, it.chapter.id)
             }
@@ -110,6 +116,7 @@ class NewChapterNotifier(private val context: Context) {
         const val ChannelId: String = "ttsroad_new_chapters"
         const val Tag: String = "ttsroad-new-chapter"
         const val NotificationId: Int = 4175
+        internal const val ActionPlay: String = "dk.perspektiva.ttsroad.PLAY_NEW_CHAPTER"
 
         /** Set on the launch intent so the activity knows to open the notices list. */
         const val ExtraOpenNotifications: String = "dk.perspektiva.ttsroad.OPEN_NOTIFICATIONS"
