@@ -102,14 +102,19 @@ class OfflineDownloads(
     @Volatile
     private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
 
-    private val serverUrl: String get() = audioAuth.serverUrl
-
     /**
      * Which server the cache entries belong to, once it has said so. Null until capabilities come
      * back, and on a server too old to report a `base_url` at all — see [DownloadCacheKeys].
      */
+    private val identityMigration = DownloadIdentityMigration()
+    private val identityMigrationLock = Any()
+    private val serverIdentity: String? get() = identityMigration.readIdentity
+
     @Volatile
-    private var serverIdentity: String? = null
+    private var pendingServerIdentity: String? = null
+
+    @Volatile
+    private var identitySession: dk.perspektiva.ttsroad.core.AudioAuthSnapshot? = null
 
     /**
      * Whether this server can serve read-along documents at all.
@@ -179,7 +184,7 @@ class OfflineDownloads(
      * all and the URL is the only thing left to derive one from.
      */
     private val cacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
-        dataSpec.key ?: DownloadCacheKeys.forUrl(dataSpec.uri.toString(), serverIdentity)
+        identityMigration.cacheKey(dataSpec, downloadCache)
     }
 
     /** Auth-injecting HTTP source used to fetch bytes the cache does not have. */
@@ -233,7 +238,13 @@ class OfflineDownloads(
     init {
         scope.launch {
             tokenStore.session.collectLatest {
-                audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(it.serverUrl, it.authorizationHeader)
+                val snapshot = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(it.serverUrl, it.authorizationHeader)
+                if (snapshot != audioAuth) {
+                    pendingServerIdentity = null
+                    identitySession = null
+                    identityMigration.selectIdentity(null)
+                }
+                audioAuth = snapshot
             }
         }
         scope.launch {
@@ -494,6 +505,10 @@ class OfflineDownloads(
         if (keepAheadReleasePending) keepAheadRetry.value++
     }
 
+    fun retryPendingIdentityMigration() {
+        if (identitySession == audioAuth) pendingServerIdentity?.let(::adoptServerIdentity)
+    }
+
     /**
      * Restart whatever was still in flight when the app was last killed.
      *
@@ -503,6 +518,7 @@ class OfflineDownloads(
      */
     fun resumeUnfinished() {
         retryPendingKeepAheadRelease()
+        retryPendingIdentityMigration()
         runCatching {
             DownloadService.sendResumeDownloads(
                 context,
@@ -592,53 +608,38 @@ class OfflineDownloads(
      * start the whole library downloading a second time.
      */
     private fun adoptServerIdentity(identity: String?) {
-        if (!shouldAdoptIdentity(current = serverIdentity, incoming = identity)) return
-        serverIdentity = identity
+        if (identity == null) {
+            pendingServerIdentity = null
+            return
+        }
+        val session = audioAuth
+        identitySession = session
+        identityMigration.selectIdentity(identity)
+        if (!shouldAdoptIdentity(current = identityMigration.identity, incoming = identity)) {
+            pendingServerIdentity = null
+            return
+        }
+        pendingServerIdentity = identity
         scope.launch(Dispatchers.IO) {
-            // Only unscoped entries move. One already carrying a different identity belongs to
-            // another server the user also downloaded from, and re-keying it here would hand its
-            // audio to this one — the very collision the identity exists to prevent.
-            val stale = runCatching {
-                downloadManager.downloadIndex.getDownloads().use { cursor ->
-                    buildList {
-                        while (cursor.moveToNext()) {
-                            val request = cursor.download.request
-                            val key = request.customCacheKey ?: continue
-                            if (!DownloadCacheKeys.isScoped(key)) add(request)
-                        }
-                    }
-                }
-            }.getOrDefault(emptyList())
-
-            // Unscoped spans belonging to no download record are what streaming left behind.
-            // Nothing will ever read them again, so they are dropped rather than re-fetched — the
-            // chapter simply streams once more if it is played.
-            val indexed = stale.mapTo(mutableSetOf()) { it.customCacheKey }
-            runCatching {
-                orphanedCacheKeys(downloadCache.keys, indexed)
-                    .forEach(downloadCache::removeResource)
-            }
-
-            // Wrapped like resumeUnfinished: this can run while the process is in the background
-            // (the media service builds this class too) and starting the download service from
-            // there is not always allowed. A row that does not make it keeps the honest state —
-            // not downloaded — rather than taking the process down.
-            runCatching {
-                stale.forEach { request ->
-                    // Removed before it is re-added, so the manager has nothing to merge the new
-                    // key into; both go through the one service queue, so they stay in order.
+            synchronized(identityMigrationLock) {
+                if (pendingServerIdentity != identity || audioAuth != session) return@synchronized
+                val migrated = identityMigration.migrate(
+                    incoming = identity,
+                    index = downloadManager.downloadIndex,
+                    cache = downloadCache,
+                    isCurrent = { pendingServerIdentity == identity && audioAuth == session },
+                ) { request ->
+                    check(audioAuth == session && pendingServerIdentity == identity)
                     DownloadService.sendRemoveDownload(
                         context,
                         TtsRoadDownloadService::class.java,
                         request.id,
-                        /* foreground= */ false,
+                        false,
                     )
-                    // The recorded URL may name an address this phone can no longer reach, so it is
-                    // put back on the one signed in — the rewrite a fresh download would do.
                     send(
                         DownloadRequest.Builder(
                             request.id,
-                            ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), serverUrl)?.toUri() ?: request.uri,
+                            ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), session.serverUrl)?.toUri() ?: request.uri,
                         )
                             .setCustomCacheKey(
                                 DownloadCacheKeys.forUrl(request.uri.toString(), identity),
@@ -647,8 +648,9 @@ class OfflineDownloads(
                             .build(),
                     )
                 }
+                if (migrated && pendingServerIdentity == identity) pendingServerIdentity = null
+                if (migrated) refreshCacheBytes()
             }
-            refreshCacheBytes()
         }
     }
 
