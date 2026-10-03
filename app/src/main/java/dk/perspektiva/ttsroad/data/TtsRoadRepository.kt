@@ -37,6 +37,7 @@ private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
  * connection is reported rather than left spinning.
  */
 private const val SlowUploadTimeoutMinutes = 5
+private const val ApiCacheServerLimit = 4
 
 /**
  * Batch size to use when the server advertises `batch_progress` but names no limit.
@@ -182,7 +183,17 @@ class TtsRoadRepository(
         }
         .build()
 
-    private val apiCache = HashMap<String, Retrofit>()
+    private class CachedApi(val retrofit: Retrofit) {
+        val unauthenticated: TtsRoadApi = retrofit.create(TtsRoadApi::class.java)
+        var authenticated: CachedAuthenticatedApi? = null
+    }
+
+    private class CachedAuthenticatedApi(
+        val auth: RequestAuth,
+        val service: TtsRoadApi,
+    )
+
+    private val apiCache = LinkedHashMap<String, CachedApi>(ApiCacheServerLimit, 0.75f, true)
 
     /**
      * Discovered capabilities per normalized base URL. Kept in memory rather than on disk: it is one
@@ -1788,22 +1799,40 @@ class TtsRoadRepository(
 
     private fun api(baseUrl: String, session: SessionState? = null): TtsRoadApi {
         val normalized = normalizeBaseUrl(baseUrl)
-        val retrofit = synchronized(apiCache) {
-            apiCache.getOrPut(normalized) {
-                Retrofit.Builder()
-                    .baseUrl(normalized)
-                    .client(client)
-                    .addConverterFactory(MoshiConverterFactory.create(moshi))
-                    .build()
+        return synchronized(apiCache) {
+            val cached = apiCache.getOrPut(normalized) {
+                CachedApi(
+                    Retrofit.Builder()
+                        .baseUrl(normalized)
+                        .client(client)
+                        .addConverterFactory(MoshiConverterFactory.create(moshi))
+                        .build(),
+                )
             }
+            if (apiCache.size > ApiCacheServerLimit) {
+                val oldest = apiCache.entries.iterator()
+                oldest.next()
+                oldest.remove()
+            }
+            if (session == null) return@synchronized cached.unauthenticated
+            val authServerUrl = normalizeBaseUrl(session.serverUrl)
+            val authorizationHeader = session.authorizationHeader
+            cached.authenticated?.let {
+                if (it.auth.serverUrl == authServerUrl &&
+                    it.auth.authorizationHeader == authorizationHeader
+                ) {
+                    return@synchronized it.service
+                }
+            }
+            val auth = RequestAuth(authServerUrl, authorizationHeader)
+            val service = cached.retrofit.newBuilder()
+                .callFactory(Call.Factory { request ->
+                    client.newCall(request.newBuilder().tag(RequestAuth::class.java, auth).build())
+                })
+                .build()
+                .create(TtsRoadApi::class.java)
+            cached.authenticated = CachedAuthenticatedApi(auth, service)
+            service
         }
-        if (session == null) return retrofit.create(TtsRoadApi::class.java)
-        val auth = RequestAuth(session.serverUrl, session.authorizationHeader)
-        return retrofit.newBuilder()
-            .callFactory(Call.Factory { request ->
-                client.newCall(request.newBuilder().tag(RequestAuth::class.java, auth).build())
-            })
-            .build()
-            .create(TtsRoadApi::class.java)
     }
 }
