@@ -1280,10 +1280,10 @@ class TtsRoadMediaService : MediaLibraryService() {
         // exist, then the browser asks for the page it wants. The result is cached between the two
         // so the library is not fetched and matched twice per spoken search, and so the pages come
         // from the same result set whose count was announced.
-        private val searchCache = SearchResultCache()
+        private val searchCache = BrowserSearchResultCache()
 
         // Every browser that has been told a result count, so an account change can retract it.
-        private val activeSearches = mutableMapOf<MediaSession.ControllerInfo, Pair<String, LibraryParams?>>()
+        private val activeSearches = mutableMapOf<Pair<MediaSession.ControllerInfo, String>, LibraryParams?>()
 
         /**
          * Withdraw every search result a connected car is showing. Called on sign-out and account
@@ -1292,23 +1292,30 @@ class TtsRoadMediaService : MediaLibraryService() {
          */
         fun retractSearches(session: MediaLibrarySession) {
             searchCache.invalidate()
-            for ((browser, search) in activeSearches) {
-                session.notifySearchResultChanged(browser, search.first, 0, search.second)
+            for ((search, params) in activeSearches) {
+                session.notifySearchResultChanged(search.first, search.second, 0, params)
             }
             activeSearches.clear()
         }
 
-        private suspend fun results(query: String, fresh: Boolean): List<MediaItem> {
+        override fun onDisconnected(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ) {
+            searchCache.invalidate(controller)
+            activeSearches.keys.removeAll { it.first == controller }
+        }
+
+        private suspend fun results(
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            fresh: Boolean,
+        ): List<MediaItem>? {
             val session = service.librarySessionGeneration
-            val found = if (fresh) {
-                searchCache.invalidate()
-                searchCache.results(query, service.searchCacheGeneration) { service.searchItems(query) }
-            } else {
-                searchCache.held(query) ?: searchCache.results(query, service.searchCacheGeneration) {
-                    service.searchItems(query)
-                }
-            } ?: return emptyList()
-            return if (service.sessionStillCurrent(session)) found else emptyList()
+            val found = searchCache.results(browser, query, service.searchCacheGeneration, fresh) {
+                service.searchItems(query)
+            } ?: return null
+            return found.takeIf { service.sessionStillCurrent(session) }
         }
 
         override fun onSearch(
@@ -1318,8 +1325,9 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<Void>> =
             service.serviceScope.future {
-                val found = results(query, fresh = true)
-                activeSearches[browser] = query to params
+                val found = results(browser, query, fresh = true)
+                    ?: return@future LibraryResult.ofVoid()
+                activeSearches[browser to query] = params
                 session.notifySearchResultChanged(browser, query, found.size, params)
                 LibraryResult.ofVoid()
             }
@@ -1333,7 +1341,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
             service.serviceScope.future {
-                LibraryResult.ofItemList(page(results(query, fresh = false), page, pageSize), params)
+                val found = results(browser, query, fresh = false).orEmpty()
+                LibraryResult.ofItemList(page(found, page, pageSize), params)
             }
 
         override fun onGetChildren(
@@ -1524,6 +1533,35 @@ internal class SearchResultCache {
         cachedQuery = null
         cachedGeneration = -1L
         cachedResults = emptyList()
+    }
+}
+
+internal class BrowserSearchResultCache {
+    private val caches = mutableMapOf<Pair<MediaSession.ControllerInfo, String>, SearchResultCache>()
+
+    suspend fun results(
+        browser: MediaSession.ControllerInfo,
+        query: String,
+        generation: Long,
+        fresh: Boolean,
+        search: suspend () -> SearchResult?,
+    ): List<MediaItem>? {
+        val key = browser to query
+        val cache = if (fresh) {
+            SearchResultCache().also { caches[key] = it }
+        } else {
+            caches.getOrPut(key) { SearchResultCache() }
+        }
+        val found = cache.held(query) ?: cache.results(query, generation, search).orEmpty()
+        return found.takeIf { caches[key] === cache }
+    }
+
+    fun invalidate(browser: MediaSession.ControllerInfo) {
+        caches.keys.removeAll { it.first == browser }
+    }
+
+    fun invalidate() {
+        caches.clear()
     }
 }
 
