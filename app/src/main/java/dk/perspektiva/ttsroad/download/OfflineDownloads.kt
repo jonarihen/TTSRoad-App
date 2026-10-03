@@ -43,8 +43,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -104,18 +102,19 @@ class OfflineDownloads(
     @Volatile
     private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
 
-    private val serverUrl: String get() = audioAuth.serverUrl
-
     /**
      * Which server the cache entries belong to, once it has said so. Null until capabilities come
      * back, and on a server too old to report a `base_url` at all — see [DownloadCacheKeys].
      */
     private val identityMigration = DownloadIdentityMigration()
-    private val identityMigrationMutex = Mutex()
-    private val serverIdentity: String? get() = identityMigration.identity
+    private val identityMigrationLock = Any()
+    private val serverIdentity: String? get() = identityMigration.readIdentity
 
     @Volatile
     private var pendingServerIdentity: String? = null
+
+    @Volatile
+    private var identitySession: dk.perspektiva.ttsroad.core.AudioAuthSnapshot? = null
 
     /**
      * Whether this server can serve read-along documents at all.
@@ -185,7 +184,7 @@ class OfflineDownloads(
      * all and the URL is the only thing left to derive one from.
      */
     private val cacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
-        dataSpec.key ?: DownloadCacheKeys.forUrl(dataSpec.uri.toString(), serverIdentity)
+        identityMigration.cacheKey(dataSpec, downloadCache)
     }
 
     /** Auth-injecting HTTP source used to fetch bytes the cache does not have. */
@@ -239,7 +238,13 @@ class OfflineDownloads(
     init {
         scope.launch {
             tokenStore.session.collectLatest {
-                audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(it.serverUrl, it.authorizationHeader)
+                val snapshot = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(it.serverUrl, it.authorizationHeader)
+                if (snapshot != audioAuth) {
+                    pendingServerIdentity = null
+                    identitySession = null
+                    identityMigration.selectIdentity(null)
+                }
+                audioAuth = snapshot
             }
         }
         scope.launch {
@@ -500,6 +505,10 @@ class OfflineDownloads(
         if (keepAheadReleasePending) keepAheadRetry.value++
     }
 
+    fun retryPendingIdentityMigration() {
+        if (identitySession == audioAuth) pendingServerIdentity?.let(::adoptServerIdentity)
+    }
+
     /**
      * Restart whatever was still in flight when the app was last killed.
      *
@@ -509,7 +518,7 @@ class OfflineDownloads(
      */
     fun resumeUnfinished() {
         retryPendingKeepAheadRelease()
-        pendingServerIdentity?.let(::adoptServerIdentity)
+        retryPendingIdentityMigration()
         runCatching {
             DownloadService.sendResumeDownloads(
                 context,
@@ -599,16 +608,28 @@ class OfflineDownloads(
      * start the whole library downloading a second time.
      */
     private fun adoptServerIdentity(identity: String?) {
-        if (!shouldAdoptIdentity(current = serverIdentity, incoming = identity)) return
+        if (identity == null) {
+            pendingServerIdentity = null
+            return
+        }
+        val session = audioAuth
+        identitySession = session
+        identityMigration.selectIdentity(identity)
+        if (!shouldAdoptIdentity(current = identityMigration.identity, incoming = identity)) {
+            pendingServerIdentity = null
+            return
+        }
         pendingServerIdentity = identity
         scope.launch(Dispatchers.IO) {
-            identityMigrationMutex.withLock {
-                if (pendingServerIdentity != identity) return@withLock
+            synchronized(identityMigrationLock) {
+                if (pendingServerIdentity != identity || audioAuth != session) return@synchronized
                 val migrated = identityMigration.migrate(
-                    incoming = identity ?: return@withLock,
+                    incoming = identity,
                     index = downloadManager.downloadIndex,
                     cache = downloadCache,
+                    isCurrent = { pendingServerIdentity == identity && audioAuth == session },
                 ) { request ->
+                    check(audioAuth == session && pendingServerIdentity == identity)
                     DownloadService.sendRemoveDownload(
                         context,
                         TtsRoadDownloadService::class.java,
@@ -618,7 +639,7 @@ class OfflineDownloads(
                     send(
                         DownloadRequest.Builder(
                             request.id,
-                            ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), serverUrl)?.toUri() ?: request.uri,
+                            ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), session.serverUrl)?.toUri() ?: request.uri,
                         )
                             .setCustomCacheKey(
                                 DownloadCacheKeys.forUrl(request.uri.toString(), identity),

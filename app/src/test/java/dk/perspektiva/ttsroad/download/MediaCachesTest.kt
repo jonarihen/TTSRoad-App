@@ -278,9 +278,9 @@ class MediaCachesTest {
             )
         }
 
-        assertFalse(migration.migrate(incoming, index, downloadCache, rekey))
+        assertFalse(migration.migrate(incoming, index, downloadCache, rekey = rekey))
         unavailable = false
-        assertTrue(migration.migrate(incoming, index, downloadCache, rekey))
+        assertTrue(migration.migrate(incoming, index, downloadCache, rekey = rekey))
 
         assertEquals(incoming, migration.identity)
         assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.toSet())
@@ -291,7 +291,7 @@ class MediaCachesTest {
             assertTrue(download.request.customCacheKey!!.startsWith("$incoming "))
         }
         assertEquals(Download.STATE_COMPLETED, downloadIndex.getDownload("chapter:3")!!.state)
-        assertTrue(migration.migrate(incoming, index, downloadCache, rekey))
+        assertTrue(migration.migrate(incoming, index, downloadCache, rekey = rekey))
         assertEquals(2, rekeyed.size)
     }
 
@@ -303,7 +303,7 @@ class MediaCachesTest {
         val rekeyed = mutableListOf<DownloadRequest>()
 
         assertTrue(
-            migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekeyed::add),
+            migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekeyed::add),
         )
 
         assertEquals(
@@ -322,12 +322,107 @@ class MediaCachesTest {
         val rekeyed = mutableListOf<DownloadRequest>()
 
         assertTrue(
-            DownloadIdentityMigration().migrate("ttsroad.example", downloadIndex, downloadCache, rekeyed::add),
+            DownloadIdentityMigration().migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekeyed::add),
         )
 
         assertEquals(setOf("other.example /audio/chapter.mp3"), downloadCache.keys)
         assertTrue(rekeyed.isEmpty())
         assertTrue(indexedRecords().isEmpty())
+    }
+
+    @Test
+    fun `scoped downloads remain playable offline after an identity index read failure`() {
+        val migration = DownloadIdentityMigration()
+        migration.selectIdentity("ttsroad.example")
+        writeInto(downloadCache, "ttsroad.example $DefaultKey")
+        writeInto(downloadCache, DefaultKey)
+        val request = DownloadRequest.Builder("chapter:1", Uri.parse(Url))
+            .setCustomCacheKey("ttsroad.example $DefaultKey")
+            .build()
+        downloadIndex.putDownload(Download(request, Download.STATE_COMPLETED, 0, 0, body.size.toLong(), 0, 0))
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor = throw IOException("index unavailable")
+        }
+
+        assertFalse(migration.migrate("ttsroad.example", index, downloadCache) { error("must not rekey") })
+        val factory = CacheKeyFactory { spec -> migration.cacheKey(spec, downloadCache) }
+        val spec = DataSpec.Builder().setUri(Uri.parse(Url)).build()
+        assertEquals("ttsroad.example $DefaultKey", factory.buildCacheKey(spec))
+        serverReachable = false
+        assertArrayEquals(body, readThroughChain(cacheKeyFactory = factory))
+    }
+
+    @Test
+    fun `legacy downloads remain playable while the identity migration is pending`() {
+        val migration = DownloadIdentityMigration()
+        migration.selectIdentity("ttsroad.example")
+        writeInto(downloadCache)
+        writeInto(downloadCache, "other.example $DefaultKey")
+        val factory = CacheKeyFactory { spec -> migration.cacheKey(spec, downloadCache) }
+        serverReachable = false
+
+        assertArrayEquals(body, readThroughChain(cacheKeyFactory = factory))
+        assertEquals(null, migration.identity)
+    }
+
+    @Test
+    fun `a session reset during the index read aborts cleanup and rekeying`() {
+        seedMigrationLibrary()
+        val records = indexedRecords()
+        val spans = cachedSpans()
+        val migration = DownloadIdentityMigration()
+        migration.selectIdentity("ttsroad.example")
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        migration.selectIdentity(null)
+                    }
+                }
+            }
+        }
+
+        assertFalse(
+            migration.migrate("ttsroad.example", index, downloadCache, isCurrent = { migration.readIdentity != null }) {
+                error("must not rekey a previous session")
+            },
+        )
+
+        assertEquals(null, migration.identity)
+        assertEquals(null, migration.readIdentity)
+        assertEquals(records, indexedRecords())
+        assertEquals(spans, cachedSpans())
+    }
+
+    @Test
+    fun `a download queued during the snapshot uses the selected identity and survives migration`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        migration.selectIdentity("ttsroad.example")
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        val key = DownloadCacheKeys.forUrl(Url, migration.readIdentity)
+                        writeInto(downloadCache, key)
+                        val request = DownloadRequest.Builder("chapter:4", Uri.parse(Url)).setCustomCacheKey(key).build()
+                        downloadIndex.putDownload(Download(request, Download.STATE_COMPLETED, 0, 0, body.size.toLong(), 0, 0))
+                    }
+                }
+            }
+        }
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertTrue(migration.migrate("ttsroad.example", index, downloadCache, rekey = rekeyed::add))
+
+        assertEquals("ttsroad.example $DefaultKey", downloadIndex.getDownload("chapter:4")!!.request.customCacheKey)
+        assertFalse(rekeyed.any { it.id == "chapter:4" })
+        serverReachable = false
+        assertArrayEquals(body, readThroughChain(cacheKeyFactory = CacheKeyFactory { migration.cacheKey(it, downloadCache) }))
     }
 
     private fun assertFailedMigrationRetainsLibrary(index: DownloadIndex) {
@@ -338,7 +433,7 @@ class MediaCachesTest {
         val migration = DownloadIdentityMigration()
         val rekeyed = mutableListOf<DownloadRequest>()
 
-        assertFalse(migration.migrate("ttsroad.example", index, downloadCache, rekeyed::add))
+        assertFalse(migration.migrate("ttsroad.example", index, downloadCache, rekey = rekeyed::add))
 
         assertEquals(null, migration.identity)
         assertTrue(rekeyed.isEmpty())
@@ -379,12 +474,12 @@ class MediaCachesTest {
 
     // --- helpers ---------------------------------------------------------------------------
 
-    private fun readThroughChain(url: String = Url): ByteArray {
+    private fun readThroughChain(url: String = Url, cacheKeyFactory: CacheKeyFactory = KeyFactory): ByteArray {
         val source = readThroughFactory(
             downloadCache = downloadCache,
             streamingCache = streamingCache,
             upstream = FakeUpstreamFactory(),
-            cacheKeyFactory = KeyFactory,
+            cacheKeyFactory = cacheKeyFactory,
         ).createDataSource()
 
         val spec = DataSpec.Builder().setUri(Uri.parse(url)).build()
