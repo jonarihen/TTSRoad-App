@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.media
 
 import android.os.Bundle
 import android.os.Looper
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -29,8 +30,11 @@ class GrowingPlaybackQueueTest {
             putInt("chapter_id", id)
         }).build()).build()
 
-    private class QueuePlayer(items: List<MediaItem>) : SimpleBasePlayer(Looper.getMainLooper()) {
-        var entries = items.map { data(it) }
+    private class QueuePlayer(
+        items: List<MediaItem>,
+        private val durationMs: Long = 600_000,
+    ) : SimpleBasePlayer(Looper.getMainLooper()) {
+        var entries = items.map { data(it, durationMs) }
         var index = 0
         var position = 321L
         var ready = true
@@ -38,7 +42,7 @@ class GrowingPlaybackQueueTest {
         var seeks = 0
         fun publish() = invalidateState()
         fun replace(items: List<MediaItem>) {
-            entries = items.map { data(it) }
+            entries = items.map { data(it, durationMs) }
             index = 0
             publish()
         }
@@ -49,7 +53,7 @@ class GrowingPlaybackQueueTest {
             .setPlayWhenReady(ready, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
             .setPlaybackState(state).build()
         override fun handleAddMediaItems(index: Int, mediaItems: List<MediaItem>): ListenableFuture<*> {
-            entries = entries.toMutableList().apply { addAll(index, mediaItems.map { data(it) }) }
+            entries = entries.toMutableList().apply { addAll(index, mediaItems.map { data(it, durationMs) }) }
             if (index <= this.index) this.index += mediaItems.size
             return Futures.immediateVoidFuture()
         }
@@ -67,7 +71,7 @@ class GrowingPlaybackQueueTest {
         override fun handleSetMediaItems(
             mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long,
         ): ListenableFuture<*> {
-            entries = mediaItems.map { data(it) }
+            entries = mediaItems.map { data(it, durationMs) }
             index = startIndex.coerceAtLeast(0)
             position = startPositionMs
             state = Player.STATE_READY
@@ -75,30 +79,235 @@ class GrowingPlaybackQueueTest {
         }
         override fun handlePrepare(): ListenableFuture<*> = Futures.immediateVoidFuture()
         companion object {
-            fun data(item: MediaItem) = MediaItemData.Builder(Any()).setMediaItem(item).build()
+            fun data(item: MediaItem, durationMs: Long) = MediaItemData.Builder(Any())
+                .setMediaItem(item)
+                .setDurationUs(if (durationMs > 0) durationMs * 1000 else C.TIME_UNSET)
+                .build()
         }
+    }
+
+    @Test fun `paused early queue does not load over an hour of polling`() = runTest {
+        val player = QueuePlayer((1..100).map { item(it) })
+        player.ready = false
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; listOf(item(101)) }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(0, loads)
+        assertEquals(100, player.mediaItemCount)
+        assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+        assertEquals(321L, player.currentPosition)
+        assertFalse(player.playWhenReady)
+    }
+
+    @Test fun `playing far from queue boundary does not load over an hour of polling`() = runTest {
+        for (index in listOf(0, 50, 99)) {
+            val player = QueuePlayer((1..100).map { item(it) })
+            player.index = index
+            player.position = if (index == 99) 321L else 590_000L
+            var loads = 0
+            val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+                { loads++; emptyList() }, { fail("Must not advance"); null }, { true })
+            queue.start()
+            testScheduler.runCurrent()
+            assertTrue(player.isPlaying)
+            testScheduler.advanceTimeBy(3_600_000)
+            testScheduler.runCurrent()
+            assertEquals(0, loads)
+            assertEquals(100, player.mediaItemCount)
+            assertEquals(index, player.currentMediaItemIndex)
+            assertEquals(0, player.seeks)
+        }
+    }
+
+    @Test fun `last chapter polls in final minute and stops after queue grows`() = runTest {
+        val chapters = listOf(item(1), item(2))
+        val player = QueuePlayer(chapters)
+        player.index = 1
+        player.position = 539_000
+        var loaded = chapters
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; loaded }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(0, loads)
+        player.position = 540_000
+        player.publish()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(2, loads)
+        loaded = chapters + item(3)
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(3, loads)
+        assertEquals(listOf("chapter:1", "chapter:2", "chapter:3"), player.entries.map { it.mediaItem.mediaId })
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+        assertEquals(540_000L, player.currentPosition)
+        assertEquals(0, player.seeks)
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(3, loads)
+    }
+
+    @Test fun `pausing near boundary stops polling and resuming restarts it`() = runTest {
+        val player = QueuePlayer(listOf(item(1)))
+        player.position = 590_000
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; listOf(item(1)) }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        player.pause()
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        player.play()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(2, loads)
+        assertEquals(590_000L, player.currentPosition)
+        assertEquals(0, player.seeks)
+    }
+
+    @Test fun `unknown duration waits for ended event rather than polling while playing`() = runTest {
+        val player = QueuePlayer(listOf(item(1)), durationMs = C.TIME_UNSET)
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; listOf(item(1), item(2)) }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(0, loads)
+        player.state = Player.STATE_ENDED
+        player.publish()
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
     }
 
     @Test fun `service loop polls while ended and listener checks local queue first`() = runTest {
         val player = QueuePlayer(listOf(item(1)))
         var loaded = listOf(item(1))
+        var loads = 0
         var advances = 0
-        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 }, { loaded },
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 }, { loads++; loaded },
             { advances++; null }, { true })
         queue.start()
         assertEquals(Player.STATE_READY, player.playbackState)
         testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(0, loads)
         player.state = Player.STATE_ENDED
         player.publish()
         org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
         testScheduler.runCurrent()
+        assertEquals(1, loads)
         assertEquals(1, advances)
         loaded = listOf(item(1), item(2))
         testScheduler.advanceTimeBy(15_000)
         testScheduler.runCurrent()
+        assertEquals(2, loads)
+        assertEquals(2, player.mediaItemCount)
         assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
         assertEquals(1, advances)
         assertEquals(1, player.seeks)
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(2, loads)
+    }
+
+    @Test fun `ended listener refreshes paused queue once without recurring loads or continuation`() = runTest {
+        val player = QueuePlayer(listOf(item(1)))
+        player.ready = false
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; listOf(item(1), item(2)) }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        assertEquals(Player.STATE_READY, player.playbackState)
+        player.state = Player.STATE_ENDED
+        player.publish()
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        assertEquals(2, player.mediaItemCount)
+        assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        assertEquals(0, player.seeks)
+        assertFalse(player.playWhenReady)
+    }
+
+    @Test fun `ended poll retries offline failure and discovers late chapter without advancing`() = runTest {
+        val player = QueuePlayer(listOf(item(1)))
+        var offline = true
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 }, {
+            loads++
+            if (offline) throw java.io.IOException()
+            listOf(item(1), item(2))
+        }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        assertEquals(Player.STATE_READY, player.playbackState)
+        player.state = Player.STATE_ENDED
+        player.publish()
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(2, loads)
+        assertEquals(1, player.mediaItemCount)
+        assertEquals(321L, player.currentPosition)
+        assertTrue(player.playWhenReady)
+        assertEquals(0, player.seeks)
+        offline = false
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(3, loads)
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+        assertEquals(1, player.seeks)
+    }
+
+    @Test fun `boundary poll discards response after replacement or session change`() = runTest {
+        for (replace in listOf(false, true)) {
+            val player = QueuePlayer(listOf(item(1)))
+            player.position = 590_000
+            var session = 1
+            val response = CompletableDeferred<List<MediaItem>>()
+            var loads = 0
+            val queue = GrowingPlaybackQueue(player, backgroundScope, { session },
+                { loads++; response.await() }, { fail("Must not advance"); null }, { true })
+            queue.start()
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(15_000)
+            testScheduler.runCurrent()
+            assertEquals(1, loads)
+            if (replace) player.replace(listOf(item(1))) else session++
+            response.complete(listOf(item(1), item(2)))
+            testScheduler.runCurrent()
+            assertEquals(1, player.mediaItemCount)
+            assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+            assertEquals(590_000L, player.currentPosition)
+            assertEquals(0, player.seeks)
+        }
     }
 
     @Test fun `inserts gaps in server order without changing current position or pause`() = runTest {

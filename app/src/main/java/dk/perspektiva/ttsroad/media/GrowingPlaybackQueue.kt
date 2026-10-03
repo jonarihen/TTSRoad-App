@@ -39,6 +39,15 @@ internal class GrowingPlaybackQueue(
         }
     }
 
+    private fun shouldPoll(): Boolean {
+        if (!player.playWhenReady || player.mediaItemCount == 0 ||
+            player.currentMediaItemIndex != player.mediaItemCount - 1
+        ) return false
+        if (player.playbackState == Player.STATE_ENDED) return true
+        return player.isPlaying && player.duration > 0 &&
+            player.duration - player.currentPosition <= 60_000
+    }
+
     fun start() {
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -52,7 +61,7 @@ internal class GrowingPlaybackQueue(
         scope.launch {
             while (isActive) {
                 delay(15_000)
-                refresh()
+                if (shouldPoll()) refresh()
             }
         }
     }
