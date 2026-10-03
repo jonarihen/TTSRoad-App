@@ -17,7 +17,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ServerLogLevels
 import dk.perspektiva.ttsroad.data.ServerLogRow
+import dk.perspektiva.ttsroad.data.ServerLogsResponse
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.canReadServerLogs
@@ -47,6 +50,9 @@ import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
 import dk.perspektiva.ttsroad.ui.ThinProgress
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /**
@@ -92,73 +98,25 @@ internal fun ServerLogsScreen(
         library.value?.fictions.orEmpty().associate { it.id to it.title }
     }
 
-    var rows by remember { mutableStateOf<List<ServerLogRow>>(emptyList()) }
-    var nextBeforeId by remember { mutableStateOf<Int?>(null) }
-    var hasMore by remember { mutableStateOf(false) }
-    var level by remember { mutableStateOf<String?>(null) }
-    var fictionId by remember { mutableStateOf<Int?>(null) }
-    var fictionLabel by remember { mutableStateOf<String?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
-    var isLoadingMore by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var loadedOnce by remember { mutableStateOf(false) }
-
-    /** Load the newest page, replacing whatever is on screen. Used on entry and on every filter. */
-    fun refresh() {
-        scope.launch {
-            isLoading = true
-            error = null
-            runCatching { repository.serverLogs(level = level, fictionId = fictionId) }
-                .onSuccess { page ->
-                    rows = serverLogRows(page, titles)
-                    hasMore = page?.hasMore == true
-                    nextBeforeId = page?.nextBeforeId
-                    loadedOnce = true
-                }
-                .onFailure { error = it.message ?: "Could not load the server log" }
-            isLoading = false
+    val state = remember(repository) {
+        ServerLogsState(scope) { level, fictionId, beforeId ->
+            repository.serverLogs(level = level, fictionId = fictionId, beforeId = beforeId)
         }
     }
+    state.updateAccess(session, allowed)
+    state.titles = titles
+    DisposableEffect(state) { onDispose { state.invalidate() } }
+    LaunchedEffect(state, session, allowed) { if (allowed) state.refresh() }
 
-    /**
-     * Fetch the page below the one on screen.
-     *
-     * Guarded on the cursor rather than on `hasMore` alone: `next_before_id` is null exactly when
-     * there is nothing older, and asking without one would re-fetch the first page and append it to
-     * itself.
-     */
-    fun loadMore() {
-        val cursor = nextBeforeId ?: return
-        scope.launch {
-            isLoadingMore = true
-            error = null
-            runCatching {
-                repository.serverLogs(level = level, fictionId = fictionId, beforeId = cursor)
-            }
-                .onSuccess { page ->
-                    rows = mergeServerLogPages(rows, serverLogRows(page, titles))
-                    hasMore = page?.hasMore == true
-                    nextBeforeId = page?.nextBeforeId
-                }
-                .onFailure { error = it.message ?: "Could not load more of the log" }
-            isLoadingMore = false
-        }
-    }
-
-    /** Every filter change starts a new walk: the old cursor belongs to a different query. */
-    fun applyFilters(nextLevel: String?, nextFiction: Int?, nextFictionLabel: String?) {
-        level = nextLevel
-        fictionId = nextFiction
-        fictionLabel = nextFictionLabel
-        rows = emptyList()
-        nextBeforeId = null
-        hasMore = false
-        if (allowed) refresh()
-    }
-
-    // Keyed on the gate so a server discovered after this screen opened still loads, and an account
-    // that would be refused is never asked.
-    LaunchedEffect(allowed) { if (allowed) refresh() }
+    val rows = state.rows
+    val hasMore = state.hasMore
+    val level = state.level
+    val fictionId = state.fictionId
+    val fictionLabel = state.fictionLabel
+    val isLoading = state.isLoading
+    val isLoadingMore = state.isLoadingMore
+    val error = state.error
+    val loadedOnce = state.loadedOnce
 
     Column(
         modifier = Modifier
@@ -190,7 +148,7 @@ internal fun ServerLogsScreen(
                     options = LogLevelChoices,
                     selected = level,
                     label = { it ?: "ALL" },
-                    onSelect = { applyFilters(it, fictionId, fictionLabel) },
+                    onSelect = { state.applyFilters(it, fictionId, fictionLabel) },
                 )
                 if (fictionId != null) {
                     MetaText(
@@ -198,7 +156,7 @@ internal fun ServerLogsScreen(
                         color = AarisColor.Dim,
                     )
                     OutlinedButton(
-                        onClick = { applyFilters(level, null, null) },
+                        onClick = { state.applyFilters(level, null, null) },
                         modifier = Modifier.heightIn(min = MinTouchTargetSize),
                         shape = RectangleShape,
                     ) {
@@ -235,7 +193,7 @@ internal fun ServerLogsScreen(
                             ServerLogListItem(
                                 row = row,
                                 onFilterFiction = { id, label ->
-                                    applyFilters(level, id, label)
+                                    state.applyFilters(level, id, label)
                                 },
                             )
                         }
@@ -243,7 +201,7 @@ internal fun ServerLogsScreen(
                 }
                 if (hasMore) {
                     OutlinedButton(
-                        onClick = ::loadMore,
+                        onClick = state::loadMore,
                         enabled = !isLoadingMore && !isLoading,
                         modifier = Modifier.heightIn(min = MinTouchTargetSize),
                         shape = RectangleShape,
@@ -267,12 +225,133 @@ internal fun ServerLogsScreen(
         }
 
         OutlinedButton(
-            onClick = ::refresh,
+            onClick = state::refresh,
             enabled = !isLoading && !isLoadingMore,
             modifier = Modifier.heightIn(min = MinTouchTargetSize),
             shape = RectangleShape,
         ) {
             Text("REFRESH")
+        }
+    }
+}
+
+@Stable
+internal class ServerLogsState(
+    private val scope: CoroutineScope,
+    private val loadPage: suspend (String?, Int?, Int?) -> ServerLogsResponse?,
+) {
+    var rows by mutableStateOf<List<ServerLogRow>>(emptyList())
+        private set
+    var nextBeforeId by mutableStateOf<Int?>(null)
+        private set
+    var hasMore by mutableStateOf(false)
+        private set
+    var level by mutableStateOf<String?>(null)
+        private set
+    var fictionId by mutableStateOf<Int?>(null)
+        private set
+    var fictionLabel by mutableStateOf<String?>(null)
+        private set
+    var isLoading by mutableStateOf(false)
+        private set
+    var isLoadingMore by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
+    var loadedOnce by mutableStateOf(false)
+        private set
+    var titles: Map<Int, String> = emptyMap()
+
+    private var session: SessionState? = null
+    private var allowed = false
+    private var generation = 0L
+    private var activeRequest: Any? = null
+
+    fun updateAccess(nextSession: SessionState, nextAllowed: Boolean) {
+        val canRead = nextAllowed && nextSession.isLoggedIn
+        if (session == nextSession && allowed == canRead) return
+        val sessionChanged = session != nextSession
+        session = nextSession
+        allowed = canRead
+        resetWalk()
+        if (sessionChanged) {
+            level = null
+            fictionId = null
+            fictionLabel = null
+        }
+    }
+
+    fun invalidate() {
+        allowed = false
+        resetWalk()
+    }
+
+    private fun resetWalk() {
+        generation++
+        activeRequest = null
+        rows = emptyList()
+        nextBeforeId = null
+        hasMore = false
+        isLoading = false
+        isLoadingMore = false
+        error = null
+        loadedOnce = false
+    }
+
+    fun applyFilters(nextLevel: String?, nextFiction: Int?, nextFictionLabel: String?) {
+        level = nextLevel
+        fictionId = nextFiction
+        fictionLabel = nextFictionLabel
+        resetWalk()
+        refresh()
+    }
+
+    fun refresh() {
+        if (!allowed) return
+        generation++
+        nextBeforeId = null
+        hasMore = false
+        loadedOnce = false
+        requestPage(null)
+    }
+
+    fun loadMore() {
+        if (!allowed || isLoading || isLoadingMore || !hasMore) return
+        val cursor = nextBeforeId ?: return
+        requestPage(cursor)
+    }
+
+    private fun requestPage(cursor: Int?) {
+        val request = Any()
+        val requestGeneration = generation
+        val requestLevel = level
+        val requestFiction = fictionId
+        activeRequest = request
+        isLoading = cursor == null
+        isLoadingMore = cursor != null
+        error = null
+        fun isCurrent() = allowed && generation == requestGeneration && activeRequest === request
+        scope.launch {
+            if (!isCurrent()) return@launch
+            val result = runCatching { loadPage(requestLevel, requestFiction, cursor) }
+            currentCoroutineContext().ensureActive()
+            if (!isCurrent()) return@launch
+            result.onSuccess { page ->
+                val pageRows = serverLogRows(page, titles)
+                rows = if (cursor == null) pageRows else mergeServerLogPages(rows, pageRows)
+                hasMore = page?.hasMore == true
+                nextBeforeId = page?.nextBeforeId
+                loadedOnce = true
+            }.onFailure {
+                error = it.message ?: if (cursor == null) {
+                    "Could not load the server log"
+                } else {
+                    "Could not load more of the log"
+                }
+            }
+            isLoading = false
+            isLoadingMore = false
+            activeRequest = null
         }
     }
 }
