@@ -7,6 +7,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
+import androidx.media3.session.MediaController
+import androidx.media3.session.MediaSession
+import androidx.test.core.app.ApplicationProvider
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CompletableDeferred
@@ -121,6 +124,179 @@ class GrowingPlaybackQueueTest {
             assertEquals(index, player.currentMediaItemIndex)
             assertEquals(0, player.seeks)
         }
+    }
+
+    @Test fun `early controller Next reconciles new gap chapter before either next command`() = runTest {
+        for (chapterOnly in listOf(false, true)) {
+            val player = QueuePlayer(listOf(item(1), item(3)))
+            var loaded = listOf(item(1), item(3))
+            var loads = 0
+            val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+                { loads++; loaded }, { fail("Must not advance"); null }, { true })
+            queue.start()
+            val session = MediaSession.Builder(ApplicationProvider.getApplicationContext(), queue.sessionPlayer).build()
+            val controller = MediaController.Builder(ApplicationProvider.getApplicationContext(), session.token)
+                .buildAsync().get()
+            try {
+                testScheduler.runCurrent()
+                testScheduler.advanceTimeBy(3_600_000)
+                testScheduler.runCurrent()
+                assertEquals(0, loads)
+                loaded = listOf(item(1), item(2), item(3))
+                if (chapterOnly) controller.seekToNextMediaItem() else controller.seekToNext()
+                org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+                testScheduler.runCurrent()
+                assertEquals(1, loads)
+                assertEquals(listOf("chapter:1", "chapter:2", "chapter:3"), player.entries.map { it.mediaItem.mediaId })
+                assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+                assertEquals(1, player.currentMediaItemIndex)
+                assertEquals(0L, player.currentPosition)
+                assertTrue(player.playWhenReady)
+                assertEquals(1, player.seeks)
+                testScheduler.advanceTimeBy(3_600_000)
+                testScheduler.runCurrent()
+                assertEquals(1, loads)
+            } finally {
+                controller.release()
+                session.release()
+            }
+        }
+    }
+
+    @Test fun `early Next remains paused after suspended gap reconciliation`() = runTest {
+        val player = QueuePlayer(listOf(item(1), item(3)))
+        val response = CompletableDeferred<List<MediaItem>>()
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { response.await() }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        queue.sessionPlayer.seekToNextMediaItem()
+        assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+        assertEquals(321L, player.currentPosition)
+        player.pause()
+        response.complete(listOf(item(0), item(1), item(2), item(3)))
+        testScheduler.runCurrent()
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+        assertEquals(2, player.currentMediaItemIndex)
+        assertEquals(0L, player.currentPosition)
+        assertFalse(player.playWhenReady)
+        assertEquals(1, player.seeks)
+    }
+
+    @Test fun `explicit Next while paused loads once and keeps successor paused`() = runTest {
+        val player = QueuePlayer(listOf(item(1), item(3)))
+        player.ready = false
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; listOf(item(1), item(2), item(3)) }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        queue.sessionPlayer.seekToNext()
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+        assertFalse(player.playWhenReady)
+        testScheduler.advanceTimeBy(3_600_000)
+        testScheduler.runCurrent()
+        assertEquals(1, loads)
+    }
+
+    @Test fun `Next offline error or timeout falls back to local successor`() = runTest {
+        for (timeout in listOf(false, true)) {
+            val player = QueuePlayer(listOf(item(1), item(3)))
+            val response = CompletableDeferred<List<MediaItem>>()
+            val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 }, {
+                if (timeout) response.await() else throw java.io.IOException()
+            }, { fail("Must not advance"); null }, { true })
+            queue.start()
+            testScheduler.runCurrent()
+            queue.sessionPlayer.seekToNextMediaItem()
+            if (timeout) {
+                testScheduler.advanceTimeBy(2_999)
+                testScheduler.runCurrent()
+                assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+                testScheduler.advanceTimeBy(1)
+            }
+            testScheduler.runCurrent()
+            assertEquals("chapter:3", player.currentMediaItem!!.mediaId)
+            assertTrue(player.playWhenReady)
+            assertEquals(1, player.seeks)
+            response.complete(listOf(item(1), item(2), item(3)))
+            testScheduler.runCurrent()
+            assertEquals(2, player.mediaItemCount)
+        }
+    }
+
+    @Test fun `Next discards suspended response and transition after replacement or session change`() = runTest {
+        for (replace in listOf(false, true)) {
+            val player = QueuePlayer(listOf(item(1), item(3)))
+            var session = 1
+            val response = CompletableDeferred<List<MediaItem>>()
+            val queue = GrowingPlaybackQueue(player, backgroundScope, { session },
+                { response.await() }, { fail("Must not advance"); null }, { true })
+            queue.start()
+            testScheduler.runCurrent()
+            queue.sessionPlayer.seekToNext()
+            if (replace) player.replace(listOf(item(1), item(3))) else session++
+            response.complete(listOf(item(1), item(2), item(3)))
+            testScheduler.runCurrent()
+            assertEquals(2, player.mediaItemCount)
+            assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+            assertEquals(321L, player.currentPosition)
+            assertEquals(0, player.seeks)
+        }
+    }
+
+    @Test fun `manual seek during Next request supersedes pending navigation`() = runTest {
+        val player = QueuePlayer(listOf(item(1), item(3)))
+        val response = CompletableDeferred<List<MediaItem>>()
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { response.await() }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        queue.sessionPlayer.seekToNextMediaItem()
+        queue.sessionPlayer.seekTo(0, 100L)
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+        response.complete(listOf(item(1), item(2), item(3)))
+        testScheduler.runCurrent()
+        assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+        assertEquals(100L, player.currentPosition)
+        assertEquals(1, player.seeks)
+    }
+
+    @Test fun `rapid Next requests preserve number of forward transitions`() = runTest {
+        val player = QueuePlayer(listOf(item(1), item(3), item(4)))
+        val response = CompletableDeferred<List<MediaItem>>()
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; response.await() }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        queue.sessionPlayer.seekToNextMediaItem()
+        queue.sessionPlayer.seekToNextMediaItem()
+        assertEquals(1, loads)
+        response.complete(listOf(item(1), item(2), item(3), item(4)))
+        testScheduler.runCurrent()
+        assertEquals("chapter:3", player.currentMediaItem!!.mediaId)
+        assertEquals(2, player.seeks)
+        assertTrue(player.playWhenReady)
+    }
+
+    @Test fun `ended during explicit Next does not cause a double transition`() = runTest {
+        val player = QueuePlayer(listOf(item(1), item(3)))
+        val response = CompletableDeferred<List<MediaItem>>()
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { response.await() }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        queue.sessionPlayer.seekToNextMediaItem()
+        player.state = Player.STATE_ENDED
+        player.publish()
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+        response.complete(listOf(item(1), item(2), item(3)))
+        testScheduler.runCurrent()
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+        assertEquals(1, player.seeks)
     }
 
     @Test fun `near-end poll fills gap before imminent queued transition`() = runTest {
