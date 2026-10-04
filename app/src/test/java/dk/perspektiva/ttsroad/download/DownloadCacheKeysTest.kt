@@ -253,6 +253,72 @@ class DownloadCacheKeysTest {
     }
 
     @Test
+    fun `equivalent origins normalize case default ports and trailing slashes`() {
+        val identities = SessionCacheIdentity()
+        val equivalent = listOf(
+            "https://TTSRoad.Example/Books/",
+            "HTTPS://ttsroad.example:443/Books",
+            " https://ttsroad.example/Books/// ",
+        )
+        assertEquals(1, equivalent.map { identities.fallbackForServer(it) }.toSet().size)
+        assertEquals("address:https://ttsroad.example/Books/", identities.fallbackForServer(equivalent.first()))
+        assertEquals(identities.fallbackForServer("http://host/"), identities.fallbackForServer("http://HOST:80"))
+    }
+
+    @Test
+    fun `address normalization does not conflate schemes nondefault ports or path namespaces`() {
+        val identities = SessionCacheIdentity()
+        val addresses = listOf(
+            "https://host/Books/", "http://host/Books/", "https://host:444/Books/",
+            "https://host/books/", "https://host/Books2/", "https://other/Books/",
+        )
+        assertEquals(addresses.size, addresses.map { identities.fallbackForServer(it) }.toSet().size)
+    }
+
+    @Test
+    fun `persisted canonical identities and discovery ownership normalize equivalent addresses`() {
+        val identities = SessionCacheIdentity(mapOf("https://HOST:443/Books" to "canonical.example"))
+        assertEquals("canonical.example", identities.forServer("https://host/Books/", ServerCapabilities.Baseline))
+        assertEquals(
+            "canonical.example",
+            identities.advertisedForServer(
+                "https://HOST:443/Books/",
+                ServerCapabilities(discoveryBaseUrl = "https://host/Books", serverBaseUrl = "https://canonical.example/"),
+            ),
+        )
+        assertNull(
+            identities.advertisedForServer(
+                "https://host/books/",
+                ServerCapabilities(discoveryBaseUrl = "https://host/Books/", serverBaseUrl = "https://canonical.example/"),
+            ),
+        )
+    }
+
+    @Test
+    fun `legacy ownership requires matching origin and exact audio namespace`() {
+        val identities = SessionCacheIdentity()
+        assertTrue(identities.ownsLegacyUrl("https://HOST:443/Books/", "https://host/Books/audio/chapter.mp3", ServerCapabilities.Baseline))
+        listOf(
+            "https://host/books/", "https://host/", "https://host/Books2/", "https://other/Books/",
+            "https://host:444/Books/", "http://host/Books/",
+        ).forEach { address ->
+            assertFalse(identities.ownsLegacyUrl(address, "https://host/Books/audio/chapter.mp3", ServerCapabilities.Baseline))
+        }
+    }
+
+    @Test
+    fun `new canonical mappings are persisted under a normalized address`() {
+        val remembered = mutableMapOf<String, String>()
+        val identities = SessionCacheIdentity(remember = { address, identity -> remembered[address] = identity })
+        identities.forServer(
+            "https://HOST:443/Books",
+            ServerCapabilities(discoveryBaseUrl = "https://host/Books/", serverBaseUrl = "https://canonical.example/"),
+        )
+        assertEquals(mapOf("https://host/Books/" to "canonical.example"), remembered)
+        assertEquals("canonical.example", SessionCacheIdentity(remembered).forServer("https://HOST/Books", ServerCapabilities.Baseline))
+    }
+
+    @Test
     fun `unidentified servers get separate scoped keys including port and mount point`() {
         val identities = SessionCacheIdentity()
         val addresses = listOf("https://host.example:8000/", "https://host.example:8001/", "https://host.example/books/")

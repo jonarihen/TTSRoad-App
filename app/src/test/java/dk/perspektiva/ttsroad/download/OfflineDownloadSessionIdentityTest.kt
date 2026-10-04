@@ -8,6 +8,9 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.cache.Cache
+import androidx.media3.exoplayer.offline.DefaultDownloadIndex
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadProgress
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
 import dk.perspektiva.ttsroad.data.AudioInfo
@@ -172,6 +175,177 @@ class OfflineDownloadSessionIdentityTest {
         assertEquals(0, upstreamOpens)
     }
 
+    @Test
+    fun `legacy downloads are readable offline before discovery and after an old-server 404`() = runTest {
+        assertLegacyPlayback(MockResponse().setResponseCode(404))
+    }
+
+    @Test
+    fun `legacy downloads remain readable offline when discovery omits identity`() = runTest {
+        assertLegacyPlayback(MockResponse().setBody("""{"capabilities":{}}"""))
+    }
+
+    @Test
+    fun `legacy downloads remain readable offline during transient discovery failure`() = runTest {
+        assertLegacyPlayback(MockResponse().setResponseCode(503))
+    }
+
+    @Test
+    fun `legacy downloads never leak to another server with failed discovery`() = runTest {
+        assertLegacyServerSwitch(MockResponse().setResponseCode(503))
+    }
+
+    @Test
+    fun `legacy downloads never leak to another server with 404 discovery`() = runTest {
+        assertLegacyServerSwitch(MockResponse().setResponseCode(404))
+    }
+
+    @Test
+    fun `legacy downloads never leak to another server without identity`() = runTest {
+        assertLegacyServerSwitch(MockResponse().setBody("""{"capabilities":{}}"""))
+    }
+
+    private suspend fun TestScope.assertLegacyServerSwitch(discovery: MockResponse) {
+        val first = server().url("/").toString()
+        val secondServer = server()
+        val second = secondServer.url("/").toString()
+        legacyDownload(first)
+        session.value = SessionState(serverUrl = second, token = "b")
+        secondServer.enqueue(discovery)
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        reachable = false
+        assertTrue(runCatching { read(second) }.isFailure)
+        reachable = true
+        assertArrayEquals(bodyB, read(second))
+        assertEquals(setOf("/audio/chapter.mp3"), downloadCache.keys)
+        assertEquals(setOf(queue(second).customCacheKey), streamingCache.keys)
+    }
+
+    @Test
+    fun `unindexed legacy spans are not attributed to the current server`() = runTest {
+        val address = server().url("/").toString()
+        write(downloadCache, "/audio/chapter.mp3", bodyA)
+        session.value = SessionState(serverUrl = address, token = "a")
+        runCurrent()
+        reachable = false
+        assertTrue(runCatching { read(address) }.isFailure)
+    }
+
+    @Test
+    fun `ambiguous legacy ownership cannot hand either servers audio to the other`() = runTest {
+        val first = server().url("/").toString()
+        val second = server().url("/").toString()
+        legacyDownload(first)
+        val request = DownloadRequest.Builder("chapter:8", Uri.parse(second + "audio/chapter.mp3"))
+            .setCustomCacheKey("/audio/chapter.mp3").build()
+        DefaultDownloadIndex(databaseProvider).putDownload(
+            Download(request, Download.STATE_COMPLETED, 0, 0, bodyA.size.toLong(), 0, Download.FAILURE_REASON_NONE, DownloadProgress()),
+        )
+        session.value = SessionState(serverUrl = first, token = "a")
+        runCurrent()
+        reachable = false
+        assertTrue(runCatching { read(first) }.isFailure)
+    }
+
+    @Test
+    fun `partial legacy downloads never cause unscoped streaming writes`() = runTest {
+        val address = server().url("/").toString()
+        legacyDownload(address, bytes = bodyA.copyOf(8))
+        session.value = SessionState(serverUrl = address, token = "a")
+        runCurrent()
+        assertArrayEquals(bodyA.copyOf(8) + bodyB.copyOfRange(8, bodyB.size), read(address))
+        assertEquals(setOf(queue(address).customCacheKey), streamingCache.keys)
+        assertEquals(setOf("/audio/chapter.mp3"), downloadCache.keys)
+    }
+
+    @Test
+    fun `equivalent server spellings preserve address downloads offline`() = runTest {
+        val first = "https://TTSRoad.Example:443/Books/"
+        val second = "https://ttsroad.example/Books"
+        session.value = SessionState(serverUrl = first, token = "a")
+        runCurrent()
+        val request = queue(first)
+        write(downloadCache, request.customCacheKey!!, bodyA)
+
+        session.value = SessionState(serverUrl = second, token = "b")
+        runCurrent()
+        reachable = false
+        assertEquals(request.customCacheKey, queue(second).customCacheKey)
+        assertArrayEquals(bodyA, read(second))
+        closeOfflineDownloads()
+        openOfflineDownloads()
+        runCurrent()
+        assertArrayEquals(bodyA, read(second))
+        assertEquals(0, upstreamOpens)
+    }
+
+    @Test
+    fun `legacy downloads stay offline across equivalent origins but not mount namespaces`() = runTest {
+        val first = "https://TTSRoad.Example:443/Books/"
+        val equivalent = "https://ttsroad.example/Books/"
+        legacyDownload(first)
+        session.value = SessionState(serverUrl = equivalent, token = "a")
+        runCurrent()
+        reachable = false
+        assertArrayEquals(bodyA, read(equivalent))
+
+        session.value = SessionState(serverUrl = "https://ttsroad.example/", token = "b")
+        runCurrent()
+        assertTrue(runCatching { read(first) }.isFailure)
+    }
+
+    @Test
+    fun `legacy downloads survive verified canonical address aliases`() = runTest {
+        val firstServer = server()
+        val secondServer = server()
+        val first = firstServer.url("/").toString()
+        val second = secondServer.url("/").toString()
+        legacyDownload(first)
+        session.value = SessionState(serverUrl = first, token = "a")
+        firstServer.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        session.value = SessionState(serverUrl = second, token = "b")
+        secondServer.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        reachable = false
+        assertArrayEquals(bodyA, read(second))
+        assertEquals(0, upstreamOpens)
+    }
+
+    private suspend fun TestScope.assertLegacyPlayback(discovery: MockResponse) {
+        val server = server()
+        val address = server.url("/").toString()
+        legacyDownload(address)
+        session.value = SessionState(serverUrl = address, token = "a")
+        runCurrent()
+        reachable = false
+        assertArrayEquals(bodyA, read(address))
+        server.enqueue(discovery)
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        assertArrayEquals(bodyA, read(address))
+        assertTrue(DownloadCacheKeys.isScoped(queue(address).customCacheKey!!))
+        closeOfflineDownloads()
+        openOfflineDownloads()
+        runCurrent()
+        assertArrayEquals(bodyA, read(address))
+        assertEquals(setOf("/audio/chapter.mp3"), downloadCache.keys)
+        assertEquals(0, upstreamOpens)
+    }
+
+    private fun legacyDownload(address: String, bytes: ByteArray = bodyA) {
+        val url = address.trimEnd('/') + "/audio/chapter.mp3"
+        val key = DownloadCacheKeys.forUrl(url)
+        val request = DownloadRequest.Builder("chapter:7", Uri.parse(url)).setCustomCacheKey(key).build()
+        DefaultDownloadIndex(databaseProvider).putDownload(
+            Download(request, Download.STATE_COMPLETED, 0, 0, bodyA.size.toLong(), 0, Download.FAILURE_REASON_NONE, DownloadProgress()),
+        )
+        write(downloadCache, key, bytes)
+    }
+
     private suspend fun TestScope.assertServerSwitch(discovery: MockResponse) {
         val first = server()
         val second = server()
@@ -247,8 +421,9 @@ class OfflineDownloadSessionIdentityTest {
     )
 
     private fun queue(address: String): DownloadRequest {
+        val url = address.trimEnd('/') + "/audio/chapter.mp3"
         offline.download(
-            ChapterSummary(id = 7, fictionId = 1, audio = AudioInfo(url = "${address}audio/chapter.mp3")),
+            ChapterSummary(id = 7, fictionId = 1, audio = AudioInfo(url = url)),
             address,
         )
         val intent = shadowOf(RuntimeEnvironment.getApplication()).nextStartedService
@@ -264,6 +439,7 @@ class OfflineDownloadSessionIdentityTest {
     }
 
     private fun read(address: String): ByteArray {
+        val url = address.trimEnd('/') + "/audio/chapter.mp3"
         val source = offline.readThroughFactory(DataSource.Factory { object : DataSource {
             private var position = 0
             override fun addTransferListener(transferListener: TransferListener) = Unit
@@ -280,11 +456,11 @@ class OfflineDownloadSessionIdentityTest {
                 position += count
                 return count
             }
-            override fun getUri(): Uri = Uri.parse("${address}audio/chapter.mp3")
+            override fun getUri(): Uri = Uri.parse(url)
             override fun close() = Unit
         } }).createDataSource()
         return try {
-            source.open(DataSpec.Builder().setUri("${address}audio/chapter.mp3").build())
+            source.open(DataSpec.Builder().setUri(url).build())
             val result = ByteArray(bodyB.size)
             var filled = 0
             while (filled < result.size) {

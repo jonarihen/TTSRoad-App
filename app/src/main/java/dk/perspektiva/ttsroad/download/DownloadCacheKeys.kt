@@ -1,7 +1,7 @@
 package dk.perspektiva.ttsroad.download
 
 import dk.perspektiva.ttsroad.data.ServerCapabilities
-import dk.perspektiva.ttsroad.data.normalizeBaseUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * How a piece of chapter audio is identified inside the media cache.
@@ -87,11 +87,13 @@ internal class SessionCacheIdentity(
     knownIdentities: Map<String, String> = emptyMap(),
     private val remember: (String, String) -> Unit = { _, _ -> },
 ) {
-    private val identities = knownIdentities.toMutableMap()
+    private val identities = knownIdentities.mapNotNull { (address, identity) ->
+        canonicalAddress(address)?.let { it to identity }
+    }.toMap().toMutableMap()
 
     @Synchronized
     fun forServer(serverUrl: String, capabilities: ServerCapabilities): String? {
-        val address = runCatching { normalizeBaseUrl(serverUrl) }.getOrNull() ?: return null
+        val address = canonicalAddress(serverUrl) ?: return null
         val reported = advertisedForServer(address, capabilities)
         if (reported != null && identities[address] != reported) {
             identities[address] = reported
@@ -101,11 +103,37 @@ internal class SessionCacheIdentity(
     }
 
     fun fallbackForServer(serverUrl: String): String? =
-        runCatching { normalizeBaseUrl(serverUrl) }.getOrNull()?.let { "address:$it" }
+        canonicalAddress(serverUrl)?.let { "address:$it" }
 
     fun advertisedForServer(serverUrl: String, capabilities: ServerCapabilities): String? {
-        val address = runCatching { normalizeBaseUrl(serverUrl) }.getOrNull() ?: return null
-        val source = runCatching { normalizeBaseUrl(capabilities.discoveryBaseUrl.orEmpty()) }.getOrNull()
+        val address = canonicalAddress(serverUrl) ?: return null
+        val source = canonicalAddress(capabilities.discoveryBaseUrl.orEmpty())
         return if (source == address) DownloadCacheKeys.serverIdentity(capabilities.serverBaseUrl) else null
+    }
+
+    @Synchronized
+    fun ownsLegacyUrl(serverUrl: String, downloadUrl: String, capabilities: ServerCapabilities): Boolean {
+        val address = canonicalAddress(serverUrl) ?: return false
+        val download = downloadUrl.toHttpUrlOrNull() ?: return false
+        val server = address.toHttpUrlOrNull() ?: return false
+        if (download.scheme == server.scheme && download.host == server.host && download.port == server.port &&
+            download.encodedPath.startsWith(server.encodedPath + "audio/")
+        ) return true
+        val identity = forServer(address, capabilities)
+        return identities.any { (knownAddress, knownIdentity) ->
+            val known = knownAddress.toHttpUrlOrNull() ?: return@any false
+            knownIdentity == identity && download.scheme == known.scheme && download.host == known.host &&
+                download.port == known.port && download.encodedPath.startsWith(known.encodedPath + "audio/")
+        }
+    }
+
+    private fun canonicalAddress(serverUrl: String): String? {
+        val parsed = serverUrl.trim().toHttpUrlOrNull() ?: return null
+        if (parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) return null
+        return parsed.newBuilder()
+            .encodedPath(parsed.encodedPath.trimEnd('/') + "/")
+            .query(null)
+            .fragment(null)
+            .build().toString()
     }
 }

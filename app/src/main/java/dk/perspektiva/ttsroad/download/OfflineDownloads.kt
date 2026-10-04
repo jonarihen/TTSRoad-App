@@ -14,6 +14,7 @@ import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheKeyFactory
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.offline.DefaultDownloadIndex
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
@@ -186,8 +187,8 @@ class OfflineDownloads(
      * binder stripped of their local configuration, so a played item often arrives with no key at
      * all and the URL is the only thing left to derive one from.
      */
-    private val cacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
-        dataSpec.key ?: run {
+    private val scopedCacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
+        dataSpec.key?.takeIf(DownloadCacheKeys::isScoped) ?: run {
             val address = serverUrl
             val url = dataSpec.uri.toString()
             val key = DownloadCacheKeys.forUrl(url, cacheIdentities.forServer(address, activeCapabilities))
@@ -196,6 +197,37 @@ class OfflineDownloads(
                 streamingCache.isCached(candidate, dataSpec.position, 1)
             if (key != fallback && !cached(key) && cached(fallback)) fallback else key
         }
+    }
+
+    private val cacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
+        val key = scopedCacheKeyFactory.buildCacheKey(dataSpec)
+        if (downloadCache.isCached(key, dataSpec.position, 1) || streamingCache.isCached(key, dataSpec.position, 1)) {
+            key
+        } else {
+            legacyDownloadKey(dataSpec.uri.toString(), serverUrl, dataSpec.position) ?: key
+        }
+    }
+
+    private fun legacyDownloadKey(url: String, address: String, position: Long): String? {
+        if (cacheIdentities.fallbackForServer(address) == null) return null
+        val key = DownloadCacheKeys.forUrl(url)
+        if (!downloadCache.isCached(key, position, 1)) return null
+        return runCatching {
+            DefaultDownloadIndex(databaseProvider).getDownloads().use { cursor ->
+                val owners = buildList {
+                    while (cursor.moveToNext()) {
+                        val request = cursor.download.request
+                        val requestKey = request.customCacheKey ?: request.uri.toString()
+                        if (requestKey == key) add(request.uri.toString())
+                    }
+                }
+                key.takeIf {
+                    owners.isNotEmpty() && owners.all { owner ->
+                        cacheIdentities.ownsLegacyUrl(address, owner, activeCapabilities)
+                    }
+                }
+            }
+        }.getOrNull()
     }
 
     /** Auth-injecting HTTP source used to fetch bytes the cache does not have. */
@@ -349,6 +381,7 @@ class OfflineDownloads(
             streamingCache = streamingCache,
             upstream = upstream,
             cacheKeyFactory = cacheKeyFactory,
+            streamingCacheKeyFactory = scopedCacheKeyFactory,
         )
 
     /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
