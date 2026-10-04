@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.player
 import android.content.ComponentName
 import android.content.Context
 import android.os.Looper
+import android.os.Bundle
 import androidx.annotation.MainThread
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -22,6 +23,7 @@ import dk.perspektiva.ttsroad.media.PlaybackFeedbackCommand
 import dk.perspektiva.ttsroad.media.PlaybackFeedbackMessage
 import dk.perspektiva.ttsroad.media.TtsRoadMediaItems
 import dk.perspektiva.ttsroad.media.TtsRoadMediaService
+import dk.perspektiva.ttsroad.media.TtsRoadSessionCommands
 import kotlin.math.roundToLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -36,6 +38,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class QueueItem(
     val mediaId: String,
@@ -238,7 +241,7 @@ class PlaybackController internal constructor(
         startChapterId: Int,
         fiction: FictionSummary? = null,
         startPositionMsOverride: Long? = null,
-    ) {
+    ): Boolean {
         val serverUrl = tokenStore.current().serverUrl
         val built = chapters
             .filter { it.audio != null }
@@ -246,7 +249,7 @@ class PlaybackController internal constructor(
                 TtsRoadMediaItems.chapter(chapter, fiction ?: chapter.fiction, serverUrl)
                     ?.let { chapter to it }
             }
-        if (built.isEmpty()) return
+        if (built.isEmpty()) return false
 
         val startIndex = built.indexOfFirst { it.first.resolvedChapterId == startChapterId }
             .coerceAtLeast(0)
@@ -257,12 +260,24 @@ class PlaybackController internal constructor(
                 ?.let { (it * 1000).roundToLong() }
             ?: 0L
 
-        val controller = controllerOrNull() ?: return
+        val controller = withTimeoutOrNull(10_000) { controllerOrNull() } ?: return false
+        if (!controller.isConnected || !controller.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS) ||
+            !controller.isCommandAvailable(Player.COMMAND_PREPARE) || !controller.isCommandAvailable(Player.COMMAND_PLAY_PAUSE)
+        ) return false
         queueSnapshot.invalidate()
         controller.setMediaItems(built.map { it.second }, startIndex, startPositionMs)
         controller.prepare()
         controller.play()
+        val args = Bundle().apply {
+            putStringArrayList("media_ids", ArrayList(built.map { it.second.mediaId }))
+            putString("start_media_id", built[startIndex].second.mediaId)
+        }
+        val installed = withTimeoutOrNull(10_000) {
+            controller.sendCustomCommand(TtsRoadSessionCommands.verifyQueueCommand, args).await().resultCode ==
+                SessionResult.RESULT_SUCCESS
+        } ?: false
         publishState(controller)
+        return installed
     }
 
     fun togglePlayPause() {

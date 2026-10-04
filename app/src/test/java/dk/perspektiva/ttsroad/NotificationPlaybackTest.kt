@@ -8,6 +8,10 @@ import androidx.media3.common.SimpleBasePlayer
 import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionToken
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import android.os.Bundle
+import dk.perspektiva.ttsroad.media.TtsRoadSessionCommands
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.core.ServiceLocator
@@ -25,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -86,7 +91,7 @@ class NotificationPlaybackTest {
         var start = 0
         assertTrue(playNotificationChapter(route, session,
             load = { assertEquals(7, it); response }, stillAllowed = { true },
-            playQueue = { queue, id -> queued = queue; start = id }))
+            playQueue = { queue, id -> queued = queue; start = id; true }))
         assertEquals(102, start)
         assertEquals(listOf(101, 102, 104), queued?.chapters?.map { it.resolvedChapterId })
         assertEquals(response.fiction, queued?.fiction)
@@ -105,13 +110,35 @@ class NotificationPlaybackTest {
     }
 
     @Test
-    fun `notification queue reaches shared PlaybackController and media session at exact chapter`() {
+    fun `notification queue reaches shared PlaybackController and media session at exact chapter`() =
+        verifyPlayback(refuseQueue = false)
+
+    @Test
+    fun `session rejecting queue installation returns failure despite optimistic controller updates`() =
+        verifyPlayback(refuseQueue = true)
+
+    private fun verifyPlayback(refuseQueue: Boolean) {
         val context = RuntimeEnvironment.getApplication()
         val store = ServiceLocator.tokenStore(context)
         runBlocking { store.saveLogin(session.serverUrl, LoginResponse(token = "test-token", user = MobileUser(id = 1, username = "listener"))) }
         val player = NotificationQueuePlayer()
-        val mediaSession = MediaSession.Builder(context, player).build()
         val scope = CoroutineScope(Dispatchers.Main.immediate)
+        val mediaSession = MediaSession.Builder(context, player).setCallback(object : MediaSession.Callback {
+            override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
+                MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailableSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                        .add(TtsRoadSessionCommands.verifyQueueCommand).build(),
+                ).build()
+
+            override fun onSetMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo,
+                mediaItems: MutableList<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+                if (refuseQueue) Futures.immediateFailedFuture(IllegalStateException("Queue refused"))
+                else Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
+
+            override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo,
+                customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> =
+                scope.future { TtsRoadSessionCommands.awaitQueue(player, args) }
+        }).build()
         val controller = PlaybackController(
             context, store, ServiceLocator.playbackPreferences(context), ServiceLocator.fictionSpeedPreferences(context),
             object : ControllerConnector {
@@ -120,22 +147,67 @@ class NotificationPlaybackTest {
             }, scope,
         )
         try {
+            var installed = false
             val operation = scope.launch {
-                playNotificationChapter(route, session, { response }, { true }) { queue, id ->
+                installed = playNotificationChapter(route, session, { response }, { true }) { queue, id ->
                     controller.playQueue(queue.chapters, id, queue.fiction)
                 }
             }
-            repeat(20) { shadowOf(Looper.getMainLooper()).idle() }
+            repeat(120) { shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(50)) }
             assertTrue(operation.isCompleted)
-            assertEquals(listOf("chapter:101", "chapter:102", "chapter:104"), player.items.map { it.mediaId })
-            assertEquals("chapter:102", player.currentMediaItem?.mediaId)
-            assertTrue(player.playWhenReady)
+            assertEquals(!refuseQueue, installed)
+            if (refuseQueue) {
+                assertTrue(player.items.isEmpty())
+            } else {
+                assertEquals(listOf("chapter:101", "chapter:102", "chapter:104"), player.items.map { it.mediaId })
+                assertEquals("chapter:102", player.currentMediaItem?.mediaId)
+                assertTrue(player.playWhenReady)
+            }
         } finally {
             controller.release()
             scope.cancel()
             mediaSession.release()
             player.release()
             runBlocking { store.clearToken() }
+        }
+    }
+
+    @Test
+    fun `failed controller connection is propagated instead of optimistic queue success`() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val store = ServiceLocator.tokenStore(context)
+        store.saveLogin(session.serverUrl, LoginResponse(token = "test-token", user = MobileUser(id = 1, username = "listener")))
+        val scope = CoroutineScope(Dispatchers.Main.immediate)
+        val controller = PlaybackController(
+            context, store, ServiceLocator.playbackPreferences(context), ServiceLocator.fictionSpeedPreferences(context),
+            object : ControllerConnector {
+                override fun connect(context: Context, token: SessionToken, listener: MediaController.Listener): ListenableFuture<MediaController> =
+                    Futures.immediateFailedFuture(SecurityException("Session rejected connection"))
+            }, scope,
+        )
+        try {
+            assertFalse(playNotificationChapter(route, session, { response }, { true }) { queue, id ->
+                controller.playQueue(queue.chapters, id, queue.fiction)
+            })
+        } finally {
+            controller.release()
+            scope.cancel()
+            store.clearToken()
+        }
+    }
+
+    @Test
+    fun `queue verification rejects server refusal or different chapter despite optimistic controller state`() = runTest {
+        assertFalse(playNotificationChapter(route, session, { response }, { true }, { _, _ -> false }))
+        val player = NotificationQueuePlayer()
+        try {
+            val args = Bundle().apply {
+                putStringArrayList("media_ids", arrayListOf("chapter:102"))
+                putString("start_media_id", "chapter:102")
+            }
+            assertEquals(SessionResult.RESULT_ERROR_INVALID_STATE, TtsRoadSessionCommands.verifyQueue(player, args).resultCode)
+        } finally {
+            player.release()
         }
     }
 

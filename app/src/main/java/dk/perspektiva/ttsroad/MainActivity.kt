@@ -362,7 +362,7 @@ import kotlinx.coroutines.withContext
  */
 private val LocalServerUrl = staticCompositionLocalOf { "" }
 
-class MainActivity : ComponentActivity() {
+open class MainActivity : ComponentActivity() {
     // Notification taps that arrive while the activity is already running come through
     // onNewIntent, so they are relayed to the composition rather than read from the start intent.
     private val openPlayerRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -374,7 +374,7 @@ class MainActivity : ComponentActivity() {
         // activity because the process is in the foreground here, so starting the service is allowed.
         ServiceLocator.offlineDownloads(this).resumeUnfinished()
         val startOnPlayer = consumeOpenPlayer(intent)
-        notificationRoutes.accept(intent)
+        notificationRoutes.accept(intent, allowPlay = this is NotificationPlayActivity)
         val tokenStore = ServiceLocator.tokenStore(this)
         val recoveryCodesOwner = recoveryCodesOwner(
             repository = ServiceLocator.repository(this),
@@ -408,7 +408,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (consumeOpenPlayer(intent)) openPlayerRequests.tryEmit(Unit)
-        notificationRoutes.accept(intent)
+        notificationRoutes.accept(intent, allowPlay = this is NotificationPlayActivity)
     }
 
     companion object {
@@ -512,7 +512,7 @@ private fun TtsRoadApp(
                 stillAllowed = {
                     val current = tokenStore.current()
                     current.serverUrl == owner.serverUrl && current.token == owner.token &&
-                        canUseChapterNotifications(repository.currentCapabilities.value, current)
+                        canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
                 },
                 playQueue = { response, chapterId ->
                     playbackController.playQueue(response.chapters, chapterId, response.fiction)
@@ -520,10 +520,17 @@ private fun TtsRoadApp(
             )
         },
         navigate = { backStack = backStack.navigateTo(it) },
+        retryDiscovery = {
+            repository.refreshCurrentCapabilities(forceRefresh = true)
+            repository.currentCapabilitiesResolved.value
+        },
     )
-    val newChapters = rememberNewChapters(repository, session, notificationCapabilities, tokenStore::current)
-    LaunchedEffect(notificationCapabilities, session?.isLoggedIn) {
-        if (session != null && !canUseChapterNotifications(notificationCapabilities, session)) {
+    val newChapters = rememberNewChapters(
+        repository, session, notificationCapabilities, tokenStore::current,
+        notificationCapabilitiesResolved, notificationRoutes.lifetime,
+    )
+    LaunchedEffect(notificationCapabilities, notificationCapabilitiesResolved, session?.isLoggedIn) {
+        if (session != null && !canUseChapterNotifications(notificationCapabilities, session, notificationCapabilitiesResolved)) {
             backStack = backStack.filterNot { it == AppScreen.NewChapters }.ifEmpty { rootBackStack }
         }
     }
@@ -956,6 +963,7 @@ private fun MainScaffold(
     BackHandler(enabled = canGoBack, onBack = requestBack)
     val scaffoldScope = rememberCoroutineScope()
     val scaffoldCapabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    val scaffoldCapabilitiesResolved by repository.currentCapabilitiesResolved.collectAsStateWithLifecycle()
     val playerState by playbackController.state.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val skipIntervalMs by remember(preferences) {
@@ -1139,7 +1147,7 @@ private fun MainScaffold(
                     repository = repository,
                 )
 
-                AppScreen.NewChapters -> if (canUseChapterNotifications(scaffoldCapabilities, session)) NewChaptersScreen(
+                AppScreen.NewChapters -> if (canUseChapterNotifications(scaffoldCapabilities, session, scaffoldCapabilitiesResolved)) NewChaptersScreen(
                     padding = padding,
                     state = newChapters,
                     repository = repository,
@@ -1153,7 +1161,7 @@ private fun MainScaffold(
                                     stillAllowed = {
                                         val current = ServiceLocator.tokenStore(context).current()
                                         current.serverUrl == session.serverUrl && current.token == session.token &&
-                                            canUseChapterNotifications(repository.currentCapabilities.value, current)
+                                            canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
                                     },
                                     playQueue = { response, chapterId ->
                                         playbackController.playQueue(response.chapters, chapterId, response.fiction)
@@ -3770,6 +3778,7 @@ private fun ListeningScreen(
 ) {
     val context = LocalContext.current
     val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    val capabilitiesResolved by repository.currentCapabilitiesResolved.collectAsStateWithLifecycle()
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val hasHistory by remember(historyStore) {
         historyStore.snapshots.map { it.isNotEmpty() }.distinctUntilChanged()
@@ -3783,7 +3792,7 @@ private fun ListeningScreen(
         canOpenBookmarks = capabilities.bookmarks,
         canOpenPronunciationReports = capabilities.pronunciationReports,
         canOpenLogs = canReadServerLogs(capabilities, session.isAdmin),
-        canOpenNewChapters = canUseChapterNotifications(capabilities, session),
+        canOpenNewChapters = canUseChapterNotifications(capabilities, session, capabilitiesResolved),
         unreadNewChapters = unreadNewChapters,
         onOpenPlayer = onOpenPlayer,
         onOpenBookmarks = onOpenBookmarks,

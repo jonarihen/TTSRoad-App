@@ -1143,6 +1143,9 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .setAvailableSessionCommands(
                     MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
                         .buildUpon()
+                        .apply {
+                            if (controller.uid == android.os.Process.myUid()) add(TtsRoadSessionCommands.verifyQueueCommand)
+                        }
                         .add(TtsRoadSessionCommands.skipBackCommand)
                         .add(TtsRoadSessionCommands.skipForwardCommand)
                         // Granted regardless of the bookmarks capability: whether the *button* is
@@ -1164,6 +1167,12 @@ class TtsRoadMediaService : MediaLibraryService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == TtsRoadSessionCommands.verifyQueueCommand.customAction) {
+                if (controller.uid != android.os.Process.myUid()) {
+                    return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                }
+                return service.serviceScope.future { TtsRoadSessionCommands.awaitQueue(session.player, args) }
+            }
             // Handled apart from the seeks below: these write to the server rather than the player,
             // so they answer asynchronously and never touch the playback position.
             if (customCommand.customAction == TtsRoadSessionCommands.Bookmark) {

@@ -15,6 +15,7 @@ import dk.perspektiva.ttsroad.nav.AppScreen
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -23,7 +24,9 @@ internal sealed interface NotificationRoute {
     data class Play(val fictionId: Int, val chapterId: Int) : NotificationRoute
 }
 
-internal fun consumeNotificationRoute(intent: Intent?): NotificationRoute? {
+class NotificationPlayActivity : MainActivity()
+
+internal fun consumeNotificationRoute(intent: Intent?, allowPlay: Boolean = false): NotificationRoute? {
     if (intent?.getBooleanExtra(NewChapterNotifier.ExtraOpenNotifications, false) != true) return null
     val fictionId = intent.getIntExtra(NewChapterNotifier.ExtraFictionId, 0)
     val chapterId = intent.getIntExtra(NewChapterNotifier.ExtraChapterId, 0)
@@ -31,6 +34,7 @@ internal fun consumeNotificationRoute(intent: Intent?): NotificationRoute? {
     intent.removeExtra(NewChapterNotifier.ExtraOpenNotifications)
     intent.removeExtra(NewChapterNotifier.ExtraFictionId)
     intent.removeExtra(NewChapterNotifier.ExtraChapterId)
+    if (play && !allowPlay) return null
     return if (play && fictionId > 0 && chapterId > 0) {
         NotificationRoute.Play(fictionId, chapterId)
     } else {
@@ -38,18 +42,22 @@ internal fun consumeNotificationRoute(intent: Intent?): NotificationRoute? {
     }
 }
 
-internal fun canUseChapterNotifications(capabilities: ServerCapabilities, session: SessionState?): Boolean =
-    capabilities.notifications && capabilities.follows && session?.isLoggedIn == true
+internal fun canUseChapterNotifications(
+    capabilities: ServerCapabilities,
+    session: SessionState?,
+    capabilitiesResolved: Boolean,
+): Boolean = capabilitiesResolved && capabilities.notifications && capabilities.follows && session?.isLoggedIn == true
 
 internal class NotificationRouteOwner : ViewModel() {
+    val lifetime = ChapterNotificationLifetime()
     internal class Request(val route: NotificationRoute) {
         var session: SessionState? = null
     }
     private val mutablePending = MutableStateFlow<Request?>(null)
     val pending = mutablePending.asStateFlow()
 
-    fun accept(intent: Intent?) {
-        consumeNotificationRoute(intent)?.let { mutablePending.value = Request(it) }
+    fun accept(intent: Intent?, allowPlay: Boolean = false) {
+        consumeNotificationRoute(intent, allowPlay)?.let { mutablePending.value = Request(it) }
     }
 
     fun consume(request: Request) {
@@ -66,11 +74,13 @@ internal fun NotificationRouting(
     currentSession: suspend () -> SessionState,
     play: suspend (NotificationRoute.Play, SessionState) -> Boolean,
     navigate: (AppScreen) -> Unit,
+    retryDiscovery: suspend () -> Boolean = { false },
 ) {
     val request by owner.pending.collectAsStateWithLifecycle()
     val latestNavigate by rememberUpdatedState(navigate)
     val latestPlay by rememberUpdatedState(play)
     val latestCurrentSession by rememberUpdatedState(currentSession)
+    val latestRetryDiscovery by rememberUpdatedState(retryDiscovery)
     LaunchedEffect(request, session?.serverUrl, session?.token, capabilities.notifications, capabilities.follows, capabilitiesResolved) {
         val pending = request ?: return@LaunchedEffect
         val signedIn = session ?: return@LaunchedEffect
@@ -84,8 +94,31 @@ internal fun NotificationRouting(
             return@LaunchedEffect
         }
         pending.session = signedIn
-        if (!capabilitiesResolved) return@LaunchedEffect
-        if (!canUseChapterNotifications(capabilities, signedIn)) {
+        if (!capabilitiesResolved) {
+            repeat(3) {
+                delay(5_000)
+                val live = latestCurrentSession()
+                if (live.serverUrl != signedIn.serverUrl || live.token != signedIn.token || !live.isLoggedIn) {
+                    owner.consume(pending)
+                    return@LaunchedEffect
+                }
+                try {
+                    if (latestRetryDiscovery()) return@LaunchedEffect
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    Unit
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            val finished = latestCurrentSession()
+            if (finished.isLoggedIn && finished.serverUrl == signedIn.serverUrl && finished.token == signedIn.token) {
+                latestNavigate(AppScreen.Listening)
+            }
+            owner.consume(pending)
+            return@LaunchedEffect
+        }
+        if (!canUseChapterNotifications(capabilities, signedIn, capabilitiesResolved)) {
             owner.consume(pending)
             return@LaunchedEffect
         }
@@ -121,7 +154,7 @@ internal suspend fun playNotificationChapter(
     session: SessionState,
     load: suspend (Int) -> ChaptersResponse,
     stillAllowed: suspend () -> Boolean,
-    playQueue: suspend (ChaptersResponse, Int) -> Unit,
+    playQueue: suspend (ChaptersResponse, Int) -> Boolean,
 ): Boolean {
     if (!session.isLoggedIn || !stillAllowed()) return false
     val response = load(route.fictionId)
@@ -131,6 +164,5 @@ internal suspend fun playNotificationChapter(
         TtsRoadMediaItems.chapter(it, response.fiction, session.serverUrl) != null
     }
     if (chapters.none { it.resolvedChapterId == route.chapterId }) return false
-    playQueue(response.copy(chapters = chapters), route.chapterId)
-    return true
+    return playQueue(response.copy(chapters = chapters), route.chapterId)
 }

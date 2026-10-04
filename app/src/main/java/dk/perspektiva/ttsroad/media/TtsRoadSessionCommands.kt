@@ -2,10 +2,15 @@ package dk.perspektiva.ttsroad.media
 
 import android.os.Bundle
 import androidx.annotation.OptIn
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
+import androidx.media3.session.SessionError
 import com.google.common.collect.ImmutableList
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The transport controls offered to everything outside the app UI: the notification, the lockscreen,
@@ -20,6 +25,27 @@ object TtsRoadSessionCommands {
     const val SkipForward = "dk.perspektiva.ttsroad.SKIP_FORWARD"
     const val Bookmark = "dk.perspektiva.ttsroad.BOOKMARK"
     const val ReportPronunciation = "dk.perspektiva.ttsroad.REPORT_PRONUNCIATION"
+
+    internal val verifyQueueCommand = SessionCommand("dk.perspektiva.ttsroad.VERIFY_QUEUE", Bundle.EMPTY)
+
+    @OptIn(UnstableApi::class)
+    internal fun verifyQueue(player: Player, args: Bundle): SessionResult {
+        val expected = args.getStringArrayList("media_ids") ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
+        val matches = expected.size == player.mediaItemCount && expected.indices.all {
+            player.getMediaItemAt(it).mediaId == expected[it]
+        } && player.currentMediaItem?.mediaId == args.getString("start_media_id") && player.playWhenReady
+        return SessionResult(if (matches) SessionResult.RESULT_SUCCESS else SessionError.ERROR_INVALID_STATE)
+    }
+
+    @OptIn(UnstableApi::class)
+    internal suspend fun awaitQueue(player: Player, args: Bundle): SessionResult = withTimeoutOrNull(5_000) {
+        var result = verifyQueue(player, args)
+        while (result.resultCode == SessionError.ERROR_INVALID_STATE) {
+            delay(50)
+            result = verifyQueue(player, args)
+        }
+        result
+    } ?: SessionResult(SessionError.ERROR_INVALID_STATE)
 
     val skipBackCommand = SessionCommand(SkipBack, Bundle.EMPTY)
     val skipForwardCommand = SessionCommand(SkipForward, Bundle.EMPTY)

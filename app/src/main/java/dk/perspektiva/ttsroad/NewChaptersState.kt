@@ -83,16 +83,37 @@ class NewChaptersState internal constructor() {
  * reports `notifications: true` while the login form is still on screen; polling there would fail
  * every minute against a request with no credential to send.
  */
+internal class ChapterNotificationLifetime {
+    private var session: SessionState? = null
+    private var flags: Pair<Boolean, Boolean>? = null
+
+    fun changed(current: SessionState?, capabilities: ServerCapabilities, resolved: Boolean): Boolean {
+        if (current == null) return false
+        val previous = session
+        val accountChanged = previous != null &&
+            (previous.serverUrl != current.serverUrl || previous.token != current.token)
+        session = current
+        if (accountChanged) flags = null
+        if (!current.isLoggedIn || !resolved) return accountChanged
+        val next = capabilities.notifications to capabilities.follows
+        val capabilitiesChanged = flags != null && flags != next
+        flags = next
+        return accountChanged || capabilitiesChanged
+    }
+}
+
 @Composable
 internal fun rememberNewChapters(
     repository: TtsRoadRepository,
     session: SessionState?,
     capabilities: ServerCapabilities,
     currentSession: suspend () -> SessionState,
+    capabilitiesResolved: Boolean,
+    lifetime: ChapterNotificationLifetime,
 ): NewChaptersState {
     val context = LocalContext.current
-    val available = canUseChapterNotifications(capabilities, session)
-    val state = remember(repository, session?.serverUrl, session?.token, capabilities.notifications, capabilities.follows) {
+    val available = canUseChapterNotifications(capabilities, session, capabilitiesResolved)
+    val state = remember(repository, session?.serverUrl, session?.token, capabilities.notifications, capabilities.follows, capabilitiesResolved) {
         NewChaptersState()
     }
     val latestSession by rememberUpdatedState(session)
@@ -115,8 +136,8 @@ internal fun rememberNewChapters(
 
     // Created up front rather than at the first post, so somebody can turn this off in system
     // settings *before* being interrupted rather than only in response to it.
-    LaunchedEffect(state) {
-        notifier.clear()
+    LaunchedEffect(session?.serverUrl, session?.token, capabilities.notifications, capabilities.follows, capabilitiesResolved) {
+        if (lifetime.changed(session, capabilities, capabilitiesResolved)) notifier.clear()
         if (available) notifier.ensureChannel()
     }
 
@@ -134,7 +155,6 @@ internal fun rememberNewChapters(
             state.isLoading = false
             state.error = null
             readySeen = null
-            notifier.clear()
             return@LaunchedEffect
         }
         while (currentCoroutineContext().isActive) {

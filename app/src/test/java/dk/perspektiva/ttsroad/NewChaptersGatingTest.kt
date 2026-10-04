@@ -36,6 +36,59 @@ class NewChaptersGatingTest {
     private val supported = ServerCapabilities(notifications = true, follows = true)
 
     @Test
+    fun `ordinary composition recreation and fresh launch preserve live system notice until actual transition`() {
+        val context = RuntimeEnvironment.getApplication()
+        val notifier = NewChapterNotifier(context)
+        val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
+        val session = SessionState(serverUrl = "https://ttsroad.example.com/", token = "token")
+        val repository = TtsRoadRepository(FakeSessionStore(session))
+        var mounted by mutableStateOf(true)
+        var loadedSession by mutableStateOf<SessionState?>(null)
+        var resolved by mutableStateOf(false)
+        var capabilities by mutableStateOf(supported)
+        var lifetime by mutableStateOf(ChapterNotificationLifetime())
+        notifier.notifyReady("Still unread", "Ready", null)
+        compose.setContent {
+            if (mounted) rememberNewChapters(repository, loadedSession, capabilities, { session }, resolved, lifetime)
+        }
+        compose.waitForIdle()
+        assertEquals(1, manager.allNotifications.size)
+        compose.runOnIdle { loadedSession = session }
+        compose.waitForIdle()
+        assertEquals(1, manager.allNotifications.size)
+        compose.runOnIdle { mounted = false }
+        compose.waitForIdle()
+        compose.runOnIdle { mounted = true }
+        compose.waitForIdle()
+        assertEquals(1, manager.allNotifications.size)
+        compose.runOnIdle { mounted = false }
+        compose.waitForIdle()
+        compose.runOnIdle { lifetime = ChapterNotificationLifetime(); mounted = true }
+        compose.waitForIdle()
+        assertEquals(1, manager.allNotifications.size)
+        compose.runOnIdle { resolved = true; capabilities = ServerCapabilities.Baseline }
+        compose.waitForIdle()
+        assertEquals(1, manager.allNotifications.size)
+        compose.runOnIdle { loadedSession = session.copy(token = null) }
+        compose.waitForIdle()
+        assertEquals(0, manager.allNotifications.size)
+    }
+
+    @Test
+    fun `lifetime compares only actual accounts and resolved capability answers`() {
+        val lifetime = ChapterNotificationLifetime()
+        val session = SessionState(serverUrl = "https://ttsroad.example.com/", token = "token")
+        assertFalse(lifetime.changed(null, supported, false))
+        assertFalse(lifetime.changed(session, supported, false))
+        assertFalse(lifetime.changed(session, supported, true))
+        assertFalse(lifetime.changed(null, supported, false))
+        assertFalse(lifetime.changed(session, supported.copy(notifications = false), false))
+        assertFalse(lifetime.changed(session, supported, true))
+        org.junit.Assert.assertTrue(lifetime.changed(session, supported.copy(follows = false), true))
+        org.junit.Assert.assertTrue(lifetime.changed(session.copy(token = "new-token"), supported, false))
+    }
+
+    @Test
     fun `poller and Listening entry require both capabilities and valid session and reset on changes`() {
         val polls = AtomicInteger()
         var ready = false
@@ -61,14 +114,17 @@ class NewChaptersGatingTest {
             runBlocking { repository.refreshCurrentCapabilities() }
             var session by mutableStateOf<SessionState?>(null)
             var capabilities by mutableStateOf(supported)
+            var resolved by mutableStateOf(false)
+            val lifetime = ChapterNotificationLifetime()
             lateinit var state: NewChaptersState
             compose.setContent {
-                state = rememberNewChapters(repository, session, capabilities, currentSession = { session ?: SessionState() })
+                state = rememberNewChapters(repository, session, capabilities, currentSession = { session ?: SessionState() },
+                    capabilitiesResolved = resolved, lifetime = lifetime)
                 TtsRoadTheme {
                     ListeningScreenBody(
                         padding = PaddingValues(), hasMedia = false, hasHistory = false,
                         canOpenQueue = false, canOpenBookmarks = false, canOpenPronunciationReports = false,
-                        canOpenLogs = false, canOpenNewChapters = canUseChapterNotifications(capabilities, session),
+                        canOpenLogs = false, canOpenNewChapters = canUseChapterNotifications(capabilities, session, resolved),
                         unreadNewChapters = state.unread,
                     )
                 }
@@ -78,6 +134,12 @@ class NewChaptersGatingTest {
             compose.onNodeWithText("New chapters").assertDoesNotExist()
             val initial = state
             compose.runOnIdle { session = original }
+            compose.waitForIdle()
+            compose.mainClock.advanceTimeBy(120_000)
+            compose.waitForIdle()
+            assertEquals(0, polls.get())
+            compose.onNodeWithText("New chapters").assertDoesNotExist()
+            compose.runOnIdle { resolved = true }
             compose.waitForIdle()
             compose.waitUntil(5_000) { state.loadedOnce && !state.isLoading }
             assertNotSame(initial, state)
@@ -113,7 +175,13 @@ class NewChaptersGatingTest {
                 assertEquals(0, manager.allNotifications.size)
                 previous = state
             }
-            compose.runOnIdle { session = original.copy(token = "other-account") }
+            compose.runOnIdle { session = original.copy(token = "other-account"); resolved = false }
+            compose.waitForIdle()
+            compose.mainClock.advanceTimeBy(120_000)
+            compose.waitForIdle()
+            assertEquals(3, polls.get())
+            compose.onNodeWithText("New chapters").assertDoesNotExist()
+            compose.runOnIdle { resolved = true }
             compose.waitForIdle()
             compose.waitUntil(5_000) { state.loadedOnce && !state.isLoading }
             assertEquals(4, polls.get())

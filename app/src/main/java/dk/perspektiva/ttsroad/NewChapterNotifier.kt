@@ -93,7 +93,8 @@ class NewChapterNotifier(private val context: Context) {
     }
 
     private fun openIntent(single: ChapterNotificationEntry? = null): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val destination = if (single == null) MainActivity::class.java else NotificationPlayActivity::class.java
+        val intent = Intent(context, destination).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(ExtraOpenNotifications, true)
             single?.let {

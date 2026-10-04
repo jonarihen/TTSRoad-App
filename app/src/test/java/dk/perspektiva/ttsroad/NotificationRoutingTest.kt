@@ -61,14 +61,14 @@ class NotificationRoutingTest {
         assertEquals("Play", notification.actions.single().title.toString())
         val body = shadowOf(notification.contentIntent).savedIntent
         val action = shadowOf(notification.actions.single().actionIntent).savedIntent
-        assertEquals(MainActivity::class.java.name, action.component?.className)
+        assertEquals(NotificationPlayActivity::class.java.name, action.component?.className)
         assertTrue(action.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
         assertTrue(action.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
         assertTrue(notification.actions.single().actionIntent.isImmutable)
         assertFalse(notification.contentIntent == notification.actions.single().actionIntent)
         assertEquals(NotificationRoute.List, consumeNotificationRoute(body))
-        assertEquals(NotificationRoute.Play(7, 102), consumeNotificationRoute(action))
-        assertNull(consumeNotificationRoute(action))
+        assertEquals(NotificationRoute.Play(7, 102), consumeNotificationRoute(action, allowPlay = true))
+        assertNull(consumeNotificationRoute(action, allowPlay = true))
         assertFalse(action.hasExtra(NewChapterNotifier.ExtraChapterId))
     }
 
@@ -86,7 +86,7 @@ class NotificationRoutingTest {
 
     @Test
     fun `malformed play is list only and legacy single body never starts playback`() {
-        assertEquals(NotificationRoute.List, consumeNotificationRoute(intent(true, chapter = 0)))
+        assertEquals(NotificationRoute.List, consumeNotificationRoute(intent(true, chapter = 0), allowPlay = true))
         assertEquals(NotificationRoute.List, consumeNotificationRoute(intent().putExtra(NewChapterNotifier.ExtraChapterId, 102)))
         assertNull(consumeNotificationRoute(Intent()))
         assertNull(consumeNotificationRoute(null))
@@ -105,7 +105,7 @@ class NotificationRoutingTest {
             owner.consume(requireNotNull(owner.pending.value))
             val warm = intent(true)
             activity.newIntent(warm)
-            assertEquals(NotificationRoute.Play(7, 102), owner.pending.value?.route)
+            assertNull(owner.pending.value)
             assertNull(consumeNotificationRoute(warm))
         } finally {
             activity.destroy()
@@ -114,8 +114,94 @@ class NotificationRoutingTest {
     }
 
     @Test
+    @Config(application = Application::class)
+    fun `real Play PendingIntent targets nonexported activity and works with fresh route owner`() {
+        val info = context.packageManager.getActivityInfo(android.content.ComponentName(context, NotificationPlayActivity::class.java), 0)
+        assertFalse(info.exported)
+        ServiceLocator.disableDownloadManagerForTest()
+        val notifier = NewChapterNotifier(context)
+        notifier.notifyReady("Ready", "Chapter", ChapterNotificationEntry(
+            playable = true, fiction = ChapterNotificationFiction(id = 7), chapter = ChapterNotificationChapter(id = 102),
+        ))
+        val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
+        val action = manager.getNotification(NewChapterNotifier.Tag, NewChapterNotifier.NotificationId).actions.single().actionIntent
+        action.send()
+        val delivered = shadowOf(context).nextStartedActivity
+        val activity = Robolectric.buildActivity(NotificationPlayActivity::class.java, delivered).create()
+        try {
+            val owner = activity.get().notificationRoutes
+            assertEquals(NotificationRoute.Play(7, 102), owner.pending.value?.route)
+            owner.consume(requireNotNull(owner.pending.value))
+            activity.newIntent(intent(true, chapter = 104))
+            assertEquals(NotificationRoute.Play(7, 104), owner.pending.value?.route)
+        } finally {
+            activity.destroy()
+            ServiceLocator.restoreDownloadManagerAfterTest()
+        }
+    }
+
+    @Test
+    fun `forged privileged extras are rejected even with a forged private component name`() {
+        assertNull(consumeNotificationRoute(intent(true)))
+        assertNull(consumeNotificationRoute(intent(true).setClass(context, NotificationPlayActivity::class.java)))
+    }
+
+    @Test
+    fun `transient discovery failure retries and routes when later discovery succeeds`() {
+        val owner = NotificationRouteOwner().apply { accept(intent(true), allowPlay = true) }
+        var resolved by mutableStateOf(false)
+        var attempts = 0
+        val destinations = mutableListOf<AppScreen>()
+        compose.setContent {
+            NotificationRouting(owner, signedIn, supported, resolved, { signedIn },
+                play = { _, _ -> true }, navigate = { destinations += it },
+                retryDiscovery = { attempts++; if (attempts == 2) resolved = true; resolved })
+        }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(5_100)
+        compose.waitForIdle()
+        assertEquals(1, attempts)
+        assertTrue(destinations.isEmpty())
+        compose.mainClock.advanceTimeBy(5_100)
+        compose.waitForIdle()
+        assertEquals(2, attempts)
+        assertEquals(listOf(AppScreen.Player), destinations)
+        assertNull(owner.pending.value)
+    }
+
+    @Test
+    fun `persistent discovery failure ends at usable Listening fallback rather than stuck pending`() {
+        val owner = NotificationRouteOwner().apply { accept(intent()) }
+        var attempts = 0
+        val destinations = mutableListOf<AppScreen>()
+        compose.setContent {
+            NotificationRouting(owner, signedIn, supported, false, { signedIn },
+                play = { _, _ -> error("Unresolved must not play") }, navigate = { destinations += it },
+                retryDiscovery = { attempts++; throw java.io.IOException("offline") })
+        }
+        compose.waitForIdle()
+        repeat(3) { compose.mainClock.advanceTimeBy(5_100); compose.waitForIdle() }
+        assertEquals(3, attempts)
+        assertEquals(listOf(AppScreen.Listening), destinations)
+        assertNull(owner.pending.value)
+    }
+
+    @Test
+    fun `failed queue startup opens New chapters not empty Player`() {
+        val owner = NotificationRouteOwner().apply { accept(intent(true), allowPlay = true) }
+        val destinations = mutableListOf<AppScreen>()
+        compose.setContent {
+            NotificationRouting(owner, signedIn, supported, true, { signedIn },
+                play = { _, _ -> false }, navigate = { destinations += it })
+        }
+        compose.waitForIdle()
+        assertEquals(listOf(AppScreen.NewChapters), destinations)
+        assertNull(owner.pending.value)
+    }
+
+    @Test
     fun `cold request waits for session and discovery then navigates once and warm tap can repeat`() {
-        val owner = NotificationRouteOwner().apply { accept(intent(true)) }
+        val owner = NotificationRouteOwner().apply { accept(intent(true), allowPlay = true) }
         var session by mutableStateOf<SessionState?>(null)
         var resolved by mutableStateOf(false)
         val played = mutableListOf<NotificationRoute.Play>()
@@ -133,7 +219,7 @@ class NotificationRoutingTest {
         compose.runOnIdle { owner.accept(intent()) }
         compose.waitForIdle()
         assertEquals(AppScreen.NewChapters, destinations.last())
-        compose.runOnIdle { owner.accept(intent(true)) }
+        compose.runOnIdle { owner.accept(intent(true), allowPlay = true) }
         compose.waitForIdle()
         assertEquals(2, played.size)
     }
@@ -154,7 +240,7 @@ class NotificationRoutingTest {
             signedIn to supported.copy(follows = false),
             signedIn to supported.copy(notifications = false),
         )) {
-            compose.runOnIdle { session = s; capabilities = c; owner.accept(intent(true)) }
+            compose.runOnIdle { session = s; capabilities = c; owner.accept(intent(true), allowPlay = true) }
             compose.waitForIdle()
             assertNull(owner.pending.value)
         }
@@ -165,7 +251,7 @@ class NotificationRoutingTest {
 
     @Test
     fun `session switch during suspended playback cannot navigate for the previous account`() {
-        val owner = NotificationRouteOwner().apply { accept(intent(true)) }
+        val owner = NotificationRouteOwner().apply { accept(intent(true), allowPlay = true) }
         var session by mutableStateOf<SessionState?>(signedIn)
         val started = CompletableDeferred<Unit>()
         val finish = CompletableDeferred<Boolean>()
