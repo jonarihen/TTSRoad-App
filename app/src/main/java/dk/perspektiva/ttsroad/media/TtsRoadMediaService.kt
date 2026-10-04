@@ -238,12 +238,10 @@ class TtsRoadMediaService : MediaLibraryService() {
                 saveProgressFor(item, position, duration, queueEnded = completed, flushHistory = flushHistory)
             },
         )
+        player.addListener(idleHistoryFlushListener(ServiceLocator.playbackHistory(this), serviceScope))
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_IDLE) {
-                        serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
-                    }
                     if (playbackState != Player.STATE_ENDED) {
                         // READY is when duration first becomes trustworthy; BUFFERING also matters
                         // after restoring a queue before isPlaying has changed.
@@ -1480,6 +1478,13 @@ internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition
  */
 internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): MediaItem? =
     if (previous != null && previous.mediaId != newMediaId) previous else null
+
+internal fun idleHistoryFlushListener(history: PlaybackHistoryStore, scope: CoroutineScope): Player.Listener =
+    object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_IDLE) scope.launch { history.flush() }
+        }
+    }
 
 @OptIn(UnstableApi::class)
 internal suspend fun flushHistoryForTeardown(

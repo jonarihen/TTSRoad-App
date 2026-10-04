@@ -317,6 +317,68 @@ class TransitionFinishedItemTest {
         assertEquals(2, restarted.snapshots.value.size)
     }
 
+    @Test
+    fun `stop after a long pause only flushes the actual pause timestamp`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        player.addListener(idleHistoryFlushListener(history, this))
+        player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying) {
+                    recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+                    launch { history.flush() }
+                }
+            }
+        })
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+        advanceTimeBy(10_000L)
+        player.elapse(10_000L)
+        player.pause()
+        testScheduler.runCurrent()
+        val pausedHistory = history.snapshots.value
+        advanceTimeBy(3_600_000L)
+
+        player.stop()
+        testScheduler.runCurrent()
+
+        assertEquals(Player.STATE_IDLE, player.playbackState)
+        assertTrue(player.currentMediaItem != null)
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals(pausedHistory, history.snapshots.value)
+        assertEquals(pausedHistory, restarted.snapshots.value)
+        assertEquals(10_000L, recentListeningSummary(restarted.snapshots.value, testScheduler.currentTime).newestAt)
+    }
+
+    @Test
+    fun `active stop still records the latest advancing position before idle flush`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        player.addListener(idleHistoryFlushListener(history, this))
+        player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying) {
+                    recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+                    launch { history.flush() }
+                }
+            }
+        })
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+        advanceTimeBy(10_000L)
+        player.elapse(10_000L)
+        assertFalse(file.exists())
+
+        player.stop()
+        testScheduler.runCurrent()
+
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals(history.snapshots.value, restarted.snapshots.value)
+        assertEquals(111_000L, restarted.snapshots.value.last().positionMs)
+        assertEquals(10_000L, restarted.snapshots.value.last().timestamp)
+        assertEquals(2, restarted.snapshots.value.size)
+    }
+
     private fun recordHistory(history: PlaybackHistoryStore, item: MediaItem, position: Long, timestamp: Long) {
         history.record(timestamp, item.mediaId, 10, item.mediaId.substringAfter(":").toInt(), "C", "F", position)
     }
@@ -339,6 +401,7 @@ class TransitionFinishedItemTest {
         private var position = 91_000L
         private var discontinuity: Int? = null
         private var playing = true
+        private var stopped = false
 
         override fun getState(): State = State.Builder()
             .setAvailableCommands(Player.Commands.Builder().addAllCommands().build())
@@ -346,7 +409,7 @@ class TransitionFinishedItemTest {
             .setCurrentMediaItemIndex(index)
             .setContentPositionMs(PositionSupplier.getConstant(position))
             .setPlayWhenReady(playing, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
-            .setPlaybackState(if (entries.isEmpty()) Player.STATE_IDLE else Player.STATE_READY)
+            .setPlaybackState(if (stopped || entries.isEmpty()) Player.STATE_IDLE else Player.STATE_READY)
             .setPlaybackParameters(PlaybackParameters(2f))
             .apply { discontinuity?.let { setPositionDiscontinuity(it, position) } }
             .build()
@@ -362,6 +425,11 @@ class TransitionFinishedItemTest {
             discontinuity = Player.DISCONTINUITY_REASON_AUTO_TRANSITION
             invalidateState()
             discontinuity = null
+        }
+
+        override fun handleStop(): ListenableFuture<*> {
+            stopped = true
+            return Futures.immediateVoidFuture()
         }
 
         override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
