@@ -57,6 +57,7 @@ import dk.perspektiva.ttsroad.player.InProcessPlayer
 import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.adSkipTarget
 import dk.perspektiva.ttsroad.player.PlaybackFailure
+import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.PlayedThreshold
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.ShakeDetector
@@ -358,10 +359,9 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     override fun onDestroy() {
         serviceScope.cancel()
-        player.currentMediaItem?.let { mediaItem ->
-            recordHistory(mediaItem, player.currentPosition.coerceAtLeast(0L))
+        runBlocking {
+            flushHistoryForTeardown(player, ServiceLocator.playbackHistory(this@TtsRoadMediaService), ::recordHistory)
         }
-        runBlocking { ServiceLocator.playbackHistory(this@TtsRoadMediaService).flush() }
         shakeDetector?.stop()
         sleepTimer.cancel()
         // Release the effect before the player: it is attached to the player's audio session, and
@@ -1480,6 +1480,18 @@ internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition
  */
 internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): MediaItem? =
     if (previous != null && previous.mediaId != newMediaId) previous else null
+
+@OptIn(UnstableApi::class)
+internal suspend fun flushHistoryForTeardown(
+    player: Player,
+    history: PlaybackHistoryStore,
+    record: (MediaItem, Long) -> Unit,
+) {
+    if (player.isPlaying) {
+        player.currentMediaItem?.let { record(it, player.currentPosition.coerceAtLeast(0L)) }
+    }
+    history.flush()
+}
 
 @OptIn(UnstableApi::class)
 internal fun departingChapterProgressListener(
