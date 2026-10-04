@@ -1,7 +1,9 @@
 package dk.perspektiva.ttsroad.core
 
+import android.os.Bundle
 import android.os.Looper
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
@@ -17,9 +19,13 @@ import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.SessionEndReason
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.media.audioItemBelongsToSession
+import dk.perspektiva.ttsroad.media.DepartingChapterProgressListener
+import dk.perspektiva.ttsroad.media.discardCrossServerPlayback
 import dk.perspektiva.ttsroad.media.endAudioSession
 import dk.perspektiva.ttsroad.media.handleAudioRejection
 import dk.perspektiva.ttsroad.media.recoverAudioPlaybackIfCurrent
+import dk.perspektiva.ttsroad.media.sameAudioServer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -336,8 +342,10 @@ class AudioAuthSnapshotTest {
                     }
                 }
                 requireNotNull(scheduled).invoke()
-                assertEquals(1, player.prepares)
-                retryRequest(player.currentMediaItem!!.localConfiguration!!.uri.toString(), snapshot, replacement)
+                assertEquals(0, player.prepares)
+                assertEquals(0, player.mediaItemCount)
+                assertFalse(player.playWhenReady)
+                assertEquals(2, replacement.requestCount)
             } finally {
                 player.release()
             }
@@ -367,6 +375,7 @@ class AudioAuthSnapshotTest {
         var playing = playing
         var prepares = 0
         var replacements = 0
+        var stops = 0
         private var failed = true
 
         override fun getState(): State = State.Builder()
@@ -375,7 +384,7 @@ class AudioAuthSnapshotTest {
             .setCurrentMediaItemIndex(index)
             .setContentPositionMs(position)
             .setPlayWhenReady(playing, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
-            .setPlaybackState(if (failed) Player.STATE_IDLE else Player.STATE_READY)
+            .setPlaybackState(if (failed || items.isEmpty() || stops > 0) Player.STATE_IDLE else Player.STATE_READY)
             .setPlayerError(if (failed) PlaybackException("Rejected", null, PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) else null)
             .build()
 
@@ -395,12 +404,36 @@ class AudioAuthSnapshotTest {
             return Futures.immediateVoidFuture()
         }
 
+        override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
+            playing = playWhenReady
+            return Futures.immediateVoidFuture()
+        }
+
+        override fun handleStop(): ListenableFuture<*> {
+            stops++
+            failed = false
+            return Futures.immediateVoidFuture()
+        }
+
+        override fun handleRemoveMediaItems(fromIndex: Int, toIndex: Int): ListenableFuture<*> {
+            items = items.toMutableList().apply { subList(fromIndex, toIndex).clear() }
+            index = 0
+            position = 0
+            return Futures.immediateVoidFuture()
+        }
+
         override fun handleRelease(): ListenableFuture<*> = Futures.immediateVoidFuture()
     }
 
     private fun recoveryItems(): List<MediaItem> = listOf("first", "chapter", "foreign").map { name ->
         val url = if (name == "foreign") "https://foreign.example/audio/$name.mp3" else server.url("/audio/$name.mp3").toString()
-        MediaItem.Builder().setMediaId(name).setUri(url)
+        val chapterId = when (name) { "chapter" -> 7; "first" -> 8; else -> 9 }
+        MediaItem.Builder().setMediaId("chapter:$chapterId").setUri(url)
+            .setMediaMetadata(MediaMetadata.Builder().setTitle("Server A $name").setDurationMs(60_000)
+                .setExtras(Bundle().apply {
+                    putInt("fiction_id", 1)
+                    putInt("chapter_id", chapterId)
+                }).build())
             .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(android.net.Uri.parse(url)).build())
             .build()
     }
@@ -469,56 +502,149 @@ class AudioAuthSnapshotTest {
     }
 
     @Test
-    fun `delayed old server rejection recovers on the new origin without leaking its token`() = runTest {
-        val replacement = MockWebServer()
-        replacement.start()
-        try {
-            val store = loggedInStore()
-            val repository = TtsRoadRepository(store)
-            val session = store.current()
-            var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
-            val failure = delayedFailure({ snapshot }, responseCode = 403) {
-                replacement.enqueue(MockResponse().setBody(
-                    """{"token":"new-server-token","token_type":"bearer","user":{"id":1,"username":"admin"}}""",
-                ))
-                assertEquals(LoginResult.Success, repository.login(replacement.url("/").toString(), "admin", "password", "Phone"))
-                val fresh = store.current()
-                snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
-            }
-            replacement.takeRequest()
-            val player = RecoveryPlayer(recoveryItems())
-            try {
-                val error = requireNotNull(player.playerError)
-                var scheduled: (suspend () -> Unit)? = null
-                var published: AudioAuthSnapshot? = null
-                handleAudioRejection(repository, failure, store::current) { rejected, current ->
-                    scheduled = {
-                        recoverAudioPlaybackIfCurrent(player, error, rejected, current, store::current) { published = it }
+    fun `cross server stale rejection clears old queue without changing colliding chapter progress`() = runTest {
+        for (code in listOf(401, 403)) {
+            val replacement = MockWebServer()
+            replacement.start()
+            var progress = 456.0
+            var audioRequests = 0
+            var progressRequests = 0
+            replacement.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse = when {
+                    request.path == "/api/mobile/login" -> MockResponse().setBody(
+                        """{"token":"new-server-token","token_type":"bearer","user":{"id":1,"username":"admin"}}""",
+                    )
+                    request.path?.startsWith("/api/mobile/fictions/1/chapters") == true -> MockResponse().setBody(
+                        """{"api_version":1,"fiction":{"id":1,"title":"Server B unrelated book"},"total":1,"chapters":[{"id":7,"fiction_id":1,"title":"Server B different content","playable":true,"audio":{"url":"${replacement.url("/audio/chapter.mp3")}"},"playback":{"position_seconds":$progress}}]}""",
+                    )
+                    request.path == "/api/mobile/playback/progress" -> {
+                        progressRequests++
+                        progress = 12.345
+                        MockResponse().setBody("""{"status":"saved","chapter_id":7}""")
                     }
+                    request.path == "/audio/chapter.mp3" -> {
+                        audioRequests++
+                        MockResponse().setBody("Different server B audio")
+                    }
+                    else -> MockResponse().setResponseCode(404)
                 }
-                assertTrue(scheduled != null)
-                requireNotNull(scheduled).invoke()
-
-                assertEquals(1, player.prepares)
-                assertEquals(1, player.replacements)
-                assertEquals(snapshot, published)
-                assertEquals(1, player.currentMediaItemIndex)
-                assertEquals(12_345L, player.currentPosition)
-                assertTrue(player.playWhenReady)
-                val item = player.currentMediaItem!!
-                assertEquals(replacement.url("/audio/chapter.mp3").toString(), item.localConfiguration!!.uri.toString())
-                assertEquals(item.localConfiguration!!.uri, item.requestMetadata.mediaUri)
-                assertEquals("https://foreign.example/audio/foreign.mp3", player.getMediaItemAt(2).localConfiguration!!.uri.toString())
-                assertFalse(snapshot.resolve(failure.dataSpec).httpRequestHeaders.containsKey("Authorization"))
-                retryRequest(item.localConfiguration!!.uri.toString(), snapshot, replacement)
-                assertEquals(1, server.requestCount)
-                assertEquals("new-server-token", store.current().token)
-                assertNull(repository.sessionEnd.value)
-            } finally {
-                player.release()
             }
+            try {
+                val store = loggedInStore()
+                val repository = TtsRoadRepository(store)
+                val session = store.current()
+                var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+                val failure = delayedFailure({ snapshot }, responseCode = code) {
+                    assertEquals(LoginResult.Success, repository.login(replacement.url("/").toString(), "admin", "password", "Phone"))
+                    val fresh = store.current()
+                    snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+                }
+                replacement.takeRequest()
+                val player = RecoveryPlayer(recoveryItems())
+                try {
+                    val oldItem = requireNotNull(player.currentMediaItem)
+                    val currentSession = store.current()
+                    val before = repository.chapters(1)
+                    replacement.takeRequest()
+                    val newChapter = before.chapters.single()
+                    assertEquals(oldItem.mediaMetadata.extras!!.getInt("chapter_id"), newChapter.resolvedChapterId)
+                    assertEquals(oldItem.mediaMetadata.extras!!.getInt("fiction_id"), newChapter.resolvedFictionId)
+                    assertFalse(oldItem.mediaMetadata.title == newChapter.resolvedTitle)
+                    assertEquals(456.0, newChapter.resolvedPositionSeconds, 0.0)
+                    assertFalse(audioItemBelongsToSession(oldItem, currentSession))
+                    val saves = mutableListOf<MediaItem>()
+                    val departing = mutableListOf<MediaItem>()
+                    player.addListener(DepartingChapterProgressListener(player) { item, _, _, _ ->
+                        departing += item
+                        if (audioItemBelongsToSession(item, currentSession)) saves += item
+                    })
+                    player.addListener(object : Player.Listener {
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            if (!isPlaying && audioItemBelongsToSession(player.currentMediaItem, currentSession)) {
+                                saves += requireNotNull(player.currentMediaItem)
+                            }
+                        }
+                    })
+                    val error = requireNotNull(player.playerError)
+                    var scheduled: (suspend () -> Unit)? = null
+                    handleAudioRejection(repository, failure, store::current) { rejected, current ->
+                        scheduled = {
+                            recoverAudioPlaybackIfCurrent(player, error, rejected, current, store::current) { snapshot = it }
+                        }
+                    }
+                    requireNotNull(scheduled).invoke()
+                    org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+                    for (item in saves) {
+                        repository.saveProgress(item.mediaMetadata.extras!!.getInt("fiction_id"),
+                            item.mediaMetadata.extras!!.getInt("chapter_id"), 12.345, false)
+                    }
+                    assertEquals(0, player.prepares)
+                    assertEquals(0, player.replacements)
+                    assertEquals(1, player.stops)
+                    assertEquals(0, player.mediaItemCount)
+                    assertFalse(player.playWhenReady)
+                    assertTrue(saves.isEmpty())
+                    assertTrue(departing.contains(oldItem))
+                    val after = repository.chapters(1)
+                    replacement.takeRequest()
+                    assertEquals(456.0, after.chapters.single().resolvedPositionSeconds, 0.0)
+                    assertEquals(0, audioRequests)
+                    assertEquals(0, progressRequests)
+                    assertEquals(3, replacement.requestCount)
+                    assertFalse(snapshot.resolve(failure.dataSpec).httpRequestHeaders.containsKey("Authorization"))
+                    assertEquals("new-server-token", store.current().token)
+                    assertEquals(0, store.clearTokenCalls)
+                    assertNull(repository.sessionEnd.value)
+                } finally {
+                    player.release()
+                }
+            } finally {
+                replacement.shutdown()
+            }
+        }
+    }
+
+    @Test
+    fun `audio recovery treats distinct backend prefixes on one origin as different servers`() {
+        val first = AudioAuthSnapshot("https://home.example/first/", "Bearer old")
+        assertFalse(sameAudioServer(first, AudioAuthSnapshot("https://home.example/second/", "Bearer new")))
+        assertTrue(sameAudioServer(first, AudioAuthSnapshot("https://HOME.example:443/first", "Bearer new")))
+        val item = MediaItem.Builder().setUri("https://home.example/first/audio/chapter.mp3").build()
+        assertFalse(audioItemBelongsToSession(item, SessionState(serverUrl = "https://home.example/second/", token = "new")))
+        assertTrue(audioItemBelongsToSession(item, SessionState(serverUrl = first.serverUrl, token = "new")))
+    }
+
+    @Test
+    fun `server switch discards playback before any delayed stream rejection`() {
+        val previous = AudioAuthSnapshot(server.url("/").toString(), "Bearer old")
+        val current = AudioAuthSnapshot("https://other.example/", "Bearer new")
+        val player = RecoveryPlayer(recoveryItems())
+        try {
+            discardCrossServerPlayback(player, previous, current)
+            assertEquals(0, player.mediaItemCount)
+            assertFalse(player.playWhenReady)
+            assertEquals(0, player.prepares)
+            assertEquals(1, player.stops)
         } finally {
-            replacement.shutdown()
+            player.release()
+        }
+    }
+
+    @Test
+    fun `cross server rejection does not clear an already replaced current server queue`() = runTest {
+        val store = loggedInStore()
+        val session = store.current()
+        val current = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+        val rejected = AudioAuthSnapshot("https://old.example/", "Bearer old")
+        val player = RecoveryPlayer(recoveryItems())
+        try {
+            val error = requireNotNull(player.playerError)
+            recoverAudioPlaybackIfCurrent(player, error, rejected, current, store::current) {}
+            assertEquals(3, player.mediaItemCount)
+            assertEquals(0, player.stops)
+            assertEquals(0, player.prepares)
+        } finally {
+            player.release()
         }
     }
 
