@@ -11,9 +11,14 @@ internal data class AudioAuthSnapshot(
         val headers = dataSpec.httpRequestHeaders
             .filterKeys { !it.equals("Authorization", ignoreCase = true) }
             .toMutableMap()
-        if (authorizationHeader != null && ServerUrls.isSameOrigin(dataSpec.uri.toString(), serverUrl)) {
-            headers["Authorization"] = authorizationHeader
+        val authenticated = authorizationHeader != null &&
+            ServerUrls.isSameOrigin(dataSpec.uri.toString(), serverUrl)
+        if (authenticated) {
+            headers["Authorization"] = requireNotNull(authorizationHeader)
         }
-        return dataSpec.buildUpon().setHttpRequestHeaders(headers).build()
+        return dataSpec.buildUpon()
+            .setHttpRequestHeaders(headers)
+            .setCustomData(if (authenticated) this else null)
+            .build()
     }
 }

@@ -33,6 +33,7 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
+import dk.perspektiva.ttsroad.core.AudioAuthSnapshot
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
@@ -45,12 +46,14 @@ import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.QueueStatusPlaying
+import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.effectiveSpeed
 import dk.perspektiva.ttsroad.data.libraryMoved
 import dk.perspektiva.ttsroad.data.mergeLibraryDelta
+import dk.perspektiva.ttsroad.data.normalizeBaseUrl
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.InProcessPlayer
@@ -89,6 +92,7 @@ import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 // Media3 marks much of its session and data-source surface @UnstableApi. The whole class works
 // against it, so opt in once here rather than annotating each member and still missing the
@@ -172,7 +176,9 @@ class TtsRoadMediaService : MediaLibraryService() {
             tokenStore.session.collectLatest { state ->
                 playbackSessionGeneration++
                 playbackSessionActive = state.isLoggedIn
-                audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(state.serverUrl, state.authorizationHeader)
+                val previousAuth = audioAuth
+                audioAuth = AudioAuthSnapshot(state.serverUrl, state.authorizationHeader)
+                if (::player.isInitialized) discardCrossServerPlayback(player, previousAuth, audioAuth)
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
                 // for the instant before its DataStore read finishes.
@@ -482,8 +488,22 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // the JSON API, so go through the repository rather than clearing the token here:
                 // that is what carries the reason to the login screen instead of dropping the user
                 // there with no explanation.
-                val body = httpFailure?.responseBody?.toString(Charsets.UTF_8)
-                serviceScope.launch { repository.endSession(parseSessionEnd(body)) }
+                serviceScope.launch {
+                    handleAudioRejection(repository, httpFailure, tokenStore::current) { rejected, current ->
+                        if (player.playerError !== error) return@handleAudioRejection
+                        if (!sameAudioServer(rejected, current)) {
+                            recoverAudioPlaybackIfCurrent(player, error, rejected, current, tokenStore::current) {
+                                audioAuth = it
+                            }
+                        } else {
+                            scheduleRetry {
+                                recoverAudioPlaybackIfCurrent(player, error, rejected, current, tokenStore::current) {
+                                    audioAuth = it
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             is PlaybackFailure.Transient -> scheduleRetry()
@@ -500,13 +520,13 @@ class TtsRoadMediaService : MediaLibraryService() {
      * anything. Deliberately does not call play(): prepare() resumes on its own when playWhenReady
      * was set, so a stream that died while paused stays paused.
      */
-    private fun scheduleRetry() {
+    private fun scheduleRetry(recover: suspend () -> Unit = { player.prepare() }) {
         val delayMs = retryDelayMs(retryAttempt + 1) ?: return
         retryAttempt++
         retryJob?.cancel()
         retryJob = serviceScope.launch {
             delay(delayMs)
-            player.prepare()
+            recover()
         }
     }
 
@@ -850,6 +870,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         duration: Long?,
         queueEnded: Boolean,
     ) {
+        if (!audioItemBelongsToSession(mediaItem, tokenStore.current())) return
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 }
         val chapterId = extras?.getInt("chapter_id")?.takeIf { it > 0 }
@@ -1632,5 +1653,108 @@ internal fun stopSignedOutPlayback(player: Player) {
     player.pause()
     player.stop()
     player.clearMediaItems()
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun endAudioSession(
+    repository: TtsRoadRepository,
+    failure: HttpDataSource.InvalidResponseCodeException?,
+): Boolean {
+    if (failure == null || failure.responseCode !in listOf(401, 403)) return false
+    val request = failure.dataSpec
+    val snapshot = request.customData as? AudioAuthSnapshot ?: return false
+    val authorizationHeader = snapshot.authorizationHeader ?: return false
+    if (!ServerUrls.isSameOrigin(request.uri.toString(), snapshot.serverUrl) ||
+        request.httpRequestHeaders["Authorization"] != authorizationHeader
+    ) {
+        return false
+    }
+    return repository.endSessionIfCurrent(
+        snapshot.serverUrl,
+        authorizationHeader,
+        parseSessionEnd(failure.responseBody.toString(Charsets.UTF_8)),
+    )
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun handleAudioRejection(
+    repository: TtsRoadRepository,
+    failure: HttpDataSource.InvalidResponseCodeException?,
+    currentSession: suspend () -> SessionState,
+    scheduleRecovery: suspend (AudioAuthSnapshot, AudioAuthSnapshot) -> Unit,
+) {
+    if (endAudioSession(repository, failure)) return
+    if (failure == null || failure.responseCode !in listOf(401, 403)) return
+    val rejected = failure.dataSpec.customData as? AudioAuthSnapshot ?: return
+    if (rejected.authorizationHeader == null ||
+        !ServerUrls.isSameOrigin(failure.dataSpec.uri.toString(), rejected.serverUrl) ||
+        failure.dataSpec.httpRequestHeaders["Authorization"] != rejected.authorizationHeader
+    ) {
+        return
+    }
+    val session = currentSession()
+    if (!session.isLoggedIn) return
+    val current = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+    if (current != rejected) scheduleRecovery(rejected, current)
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun recoverAudioPlaybackIfCurrent(
+    player: Player,
+    error: PlaybackException,
+    rejected: AudioAuthSnapshot,
+    expected: AudioAuthSnapshot,
+    currentSession: suspend () -> SessionState,
+    publishAuth: (AudioAuthSnapshot) -> Unit,
+) {
+    val session = currentSession()
+    if (player.playerError !== error || !session.isLoggedIn ||
+        AudioAuthSnapshot(session.serverUrl, session.authorizationHeader) != expected
+    ) {
+        return
+    }
+    publishAuth(expected)
+    recoverAudioPlayback(player, rejected, expected)
+}
+
+@OptIn(UnstableApi::class)
+internal fun recoverAudioPlayback(player: Player, rejected: AudioAuthSnapshot, current: AudioAuthSnapshot) {
+    if (current.authorizationHeader == null || player.mediaItemCount == 0) return
+    if (!sameAudioServer(rejected, current)) {
+        discardCrossServerPlayback(player, rejected, current)
+        return
+    }
+    if (audioItemBelongsToServer(player.currentMediaItem, current.serverUrl)) player.prepare()
+}
+
+@OptIn(UnstableApi::class)
+internal fun discardCrossServerPlayback(player: Player, previous: AudioAuthSnapshot, current: AudioAuthSnapshot) {
+    if (current.authorizationHeader != null && !sameAudioServer(previous, current) &&
+        audioItemBelongsToServer(player.currentMediaItem, previous.serverUrl)
+    ) {
+        stopSignedOutPlayback(player)
+    }
+}
+
+internal fun sameAudioServer(first: AudioAuthSnapshot, second: AudioAuthSnapshot): Boolean {
+    val firstUrl = runCatching { normalizeBaseUrl(first.serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
+    val secondUrl = runCatching { normalizeBaseUrl(second.serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
+    return firstUrl == secondUrl
+}
+
+@OptIn(UnstableApi::class)
+internal fun audioItemBelongsToSession(item: MediaItem?, session: SessionState): Boolean =
+    session.isLoggedIn && audioItemBelongsToServer(item, session.serverUrl)
+
+@OptIn(UnstableApi::class)
+private fun audioItemBelongsToServer(item: MediaItem?, serverUrl: String): Boolean {
+    val uri = item?.localConfiguration?.uri ?: item?.requestMetadata?.mediaUri ?: return false
+    val request = uri.toString().toHttpUrlOrNull() ?: return false
+    val server = runCatching { normalizeBaseUrl(serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
+    val owner = item?.mediaMetadata?.extras?.getString(AudioServerUrlExtra)
+    if (owner != null && !sameAudioServer(AudioAuthSnapshot(owner), AudioAuthSnapshot(serverUrl))) return false
+    return ServerUrls.isSameOrigin(request.toString(), server.toString()) &&
+        (owner != null || request.encodedPath.startsWith("/audio/") ||
+            request.encodedPath.startsWith(server.encodedPath + "audio/"))
 }
 

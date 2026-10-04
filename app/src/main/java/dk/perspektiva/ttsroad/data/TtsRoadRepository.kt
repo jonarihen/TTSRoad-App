@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -274,6 +276,7 @@ class TtsRoadRepository(
     val currentCapabilitiesResolved: StateFlow<Boolean> = _currentCapabilitiesResolved.asStateFlow()
 
     private val _sessionEnd = MutableStateFlow<SessionEnd?>(null)
+    private val sessionMutation = Mutex()
 
     /**
      * Why the stored token was dropped, or null while the session is still usable.
@@ -303,10 +306,12 @@ class TtsRoadRepository(
                     totpCode = totpCode?.trim()?.ifBlank { null },
                 ),
             )
-            tokenStore.saveLogin(normalized, response)
-            invalidateListeningStats()
-            _sessionEnd.value = null
-            _currentCapabilitiesResolved.value = false
+            sessionMutation.withLock {
+                tokenStore.saveLogin(normalized, response)
+                invalidateListeningStats()
+                _sessionEnd.value = null
+                _currentCapabilitiesResolved.value = false
+            }
             LoginResult.Success
         } catch (e: HttpException) {
             val body = e.response()?.errorBody()?.string()
@@ -329,6 +334,27 @@ class TtsRoadRepository(
      * [dk.perspektiva.ttsroad.media.TtsRoadMediaService].
      */
     suspend fun endSession(end: SessionEnd) = withContext(Dispatchers.IO) {
+        sessionMutation.withLock { clearEndedSession(end) }
+    }
+
+    suspend fun endSessionIfCurrent(
+        serverUrl: String,
+        authorizationHeader: String,
+        end: SessionEnd,
+    ): Boolean = withContext(Dispatchers.IO) {
+        sessionMutation.withLock {
+            val current = tokenStore.current()
+            if (!current.isLoggedIn || normalizeBaseUrl(current.serverUrl) != normalizeBaseUrl(serverUrl) ||
+                current.authorizationHeader != authorizationHeader
+            ) {
+                return@withLock false
+            }
+            clearEndedSession(end)
+            true
+        }
+    }
+
+    private suspend fun clearEndedSession(end: SessionEnd) {
         tokenStore.clearToken()
         invalidateListeningStats()
         invalidateReader()
@@ -344,18 +370,20 @@ class TtsRoadRepository(
                 api(session.serverUrl, session).logout()
             }
         }
-        tokenStore.clearToken()
-        invalidateListeningStats()
-        // Discovery is per server, and the next sign-in may be a different one. Leaving the old
-        // flags in place would show read-along or device management on a server without them.
-        forgetCapabilities(session.serverUrl)
-        _currentCapabilities.value = ServerCapabilities.Baseline
-        _currentCapabilitiesResolved.value = false
-        // Chapter text is account-visible content, and chapter ids are only unique per server, so a
-        // cached read-along must never outlive the session that fetched it.
-        invalidateReader()
-        synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
-        onSessionCleared()
+        sessionMutation.withLock {
+            tokenStore.clearToken()
+            invalidateListeningStats()
+            // Discovery is per server, and the next sign-in may be a different one. Leaving the old
+            // flags in place would show read-along or device management on a server without them.
+            forgetCapabilities(session.serverUrl)
+            _currentCapabilities.value = ServerCapabilities.Baseline
+            _currentCapabilitiesResolved.value = false
+            // Chapter text is account-visible content, and chapter ids are only unique per server, so a
+            // cached read-along must never outlive the session that fetched it.
+            invalidateReader()
+            synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
+            onSessionCleared()
+        }
     }
 
     /**
@@ -1128,23 +1156,25 @@ class TtsRoadRepository(
                     ),
                 )
             }
-            tokenStore.saveLogin(
-                currentSession.serverUrl,
-                LoginResponse(
-                    token = response.token,
-                    tokenType = response.tokenType,
-                    deviceId = response.deviceId,
-                    expiresAt = response.expiresAt,
-                    user = response.user,
-                    // The password response intentionally carries credentials, not server
-                    // discovery metadata. Preserve the name already shown in Settings instead of
-                    // letting saveLogin replace a branded server name with its default.
-                    server = ServerInfo(
-                        name = currentSession.serverName,
-                        baseUrl = currentSession.serverUrl,
+            sessionMutation.withLock {
+                tokenStore.saveLogin(
+                    currentSession.serverUrl,
+                    LoginResponse(
+                        token = response.token,
+                        tokenType = response.tokenType,
+                        deviceId = response.deviceId,
+                        expiresAt = response.expiresAt,
+                        user = response.user,
+                        // The password response intentionally carries credentials, not server
+                        // discovery metadata. Preserve the name already shown in Settings instead of
+                        // letting saveLogin replace a branded server name with its default.
+                        server = ServerInfo(
+                            name = currentSession.serverName,
+                            baseUrl = currentSession.serverUrl,
+                        ),
                     ),
-                ),
-            )
+                )
+            }
             AccountActionResult.Done(Unit)
         } catch (e: HttpException) {
             // A 400 is the server telling the user something: a wrong current password, or a new
@@ -1771,16 +1801,11 @@ class TtsRoadRepository(
                 // just before the rotation can come back 401 just after the fresh token was saved;
                 // it must not erase that newer session. Only the token that actually failed is
                 // allowed to end the session.
-                val current = tokenStore.current()
-                if (current.token == session.token &&
-                    normalizeBaseUrl(current.serverUrl) == normalizeBaseUrl(session.serverUrl)
-                ) {
-                    tokenStore.clearToken()
-                    invalidateListeningStats()
-                    invalidateReader()
-                    onSessionCleared()
-                    _sessionEnd.value = parseSessionEnd(e.response()?.errorBody()?.string())
-                }
+                endSessionIfCurrent(
+                    session.serverUrl,
+                    requireNotNull(session.authorizationHeader),
+                    parseSessionEnd(e.response()?.errorBody()?.string()),
+                )
             }
             throw e
         }
