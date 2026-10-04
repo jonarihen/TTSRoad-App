@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.data
 
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import dk.perspektiva.ttsroad.core.ServerUrls
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -37,6 +39,7 @@ private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
  * connection is reported rather than left spinning.
  */
 private const val SlowUploadTimeoutMinutes = 5
+private const val ApiCacheServerLimit = 4
 
 /**
  * Batch size to use when the server advertises `batch_progress` but names no limit.
@@ -136,27 +139,26 @@ class TtsRoadRepository(
      * next account. A callback rather than a reference: this class must not depend on player.
      */
     private val onSessionCleared: () -> Unit = {},
+    httpClient: OkHttpClient = OkHttpClient(),
 ) {
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
 
-    // One shared client (and one Retrofit per base URL) so connections, the TLS
-    // session, and thread pools are reused across calls — a new OkHttpClient per
-    // request would force a fresh handshake every time (e.g. each progress save).
-    @Volatile
-    internal var authHeader: String? = null
+    private class RequestAuth(
+        val serverUrl: String,
+        val authorizationHeader: String?,
+    )
 
-    private val client = OkHttpClient.Builder()
+    private val client = httpClient.newBuilder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val request = chain.request()
-            val builder = request.newBuilder()
+            val builder = request.newBuilder().removeHeader("Authorization")
             if (request.header(NoAuthHeader) != null) {
                 builder.removeHeader(NoAuthHeader)
-            } else {
-                authHeader?.let { builder.header("Authorization", it) }
+                    .tag(RequestAuth::class.java, null)
             }
             // A file upload borrows a longer clock from the same client rather than getting a
             // client of its own: sharing the connection pool is the whole reason there is one
@@ -172,9 +174,28 @@ class TtsRoadRepository(
             }
             proceed.proceed(builder.build())
         }
+        .addNetworkInterceptor { chain ->
+            val request = chain.request()
+            val auth = request.tag(RequestAuth::class.java)
+            val builder = request.newBuilder().removeHeader("Authorization")
+            if (auth != null && ServerUrls.isSameOrigin(request.url.toString(), auth.serverUrl)) {
+                auth.authorizationHeader?.let { builder.header("Authorization", it) }
+            }
+            chain.proceed(builder.build())
+        }
         .build()
 
-    private val apiCache = HashMap<String, TtsRoadApi>()
+    private class CachedApi(val retrofit: Retrofit) {
+        val unauthenticated: TtsRoadApi = retrofit.create(TtsRoadApi::class.java)
+        var authenticated: CachedAuthenticatedApi? = null
+    }
+
+    private class CachedAuthenticatedApi(
+        val auth: RequestAuth,
+        val service: TtsRoadApi,
+    )
+
+    private val apiCache = LinkedHashMap<String, CachedApi>(ApiCacheServerLimit, 0.75f, true)
 
     /**
      * Discovered capabilities per normalized base URL. Kept in memory rather than on disk: it is one
@@ -273,7 +294,6 @@ class TtsRoadRepository(
         deviceName: String,
         totpCode: String? = null,
     ): LoginResult = withContext(Dispatchers.IO) {
-        authHeader = null
         try {
             // Inside the try: normalizeBaseUrl throws on a missing http:// or https://
             // scheme, and that is a user-correctable typo, not a crash.
@@ -335,7 +355,6 @@ class TtsRoadRepository(
     }
 
     private suspend fun clearEndedSession(end: SessionEnd) {
-        authHeader = null
         tokenStore.clearToken()
         invalidateListeningStats()
         invalidateReader()
@@ -348,14 +367,12 @@ class TtsRoadRepository(
         val session = tokenStore.current()
         runCatching {
             if (session.isLoggedIn) {
-                authHeader = session.authorizationHeader
-                api(session.serverUrl).logout()
+                api(session.serverUrl, session).logout()
             }
         }
         sessionMutation.withLock {
             tokenStore.clearToken()
             invalidateListeningStats()
-            authHeader = null
             // Discovery is per server, and the next sign-in may be a different one. Leaving the old
             // flags in place would show read-along or device management on a server without them.
             forgetCapabilities(session.serverUrl)
@@ -425,8 +442,11 @@ class TtsRoadRepository(
             _currentCapabilitiesResolved.value = false
             return ServerCapabilities.Baseline
         }
-        return capabilities(session.serverUrl, forceRefresh).also {
-            _currentCapabilities.value = it
+        val discovered = capabilities(session.serverUrl, forceRefresh)
+        val current = tokenStore.current()
+        if (current.serverUrl != session.serverUrl || current.token != session.token) return discovered
+        return discovered.also {
+            _currentCapabilities.value = it.copy(discoveryBaseUrl = session.serverUrl)
             val normalized = runCatching { normalizeBaseUrl(session.serverUrl) }.getOrNull()
             // A cache entry exists only after a successful response or a definitive old-server 404.
             // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
@@ -1154,7 +1174,6 @@ class TtsRoadRepository(
                         ),
                     ),
                 )
-                authHeader = "${response.tokenType.replaceFirstChar { it.uppercase() }} ${response.token}"
             }
             AccountActionResult.Done(Unit)
         } catch (e: HttpException) {
@@ -1774,9 +1793,8 @@ class TtsRoadRepository(
     ): T {
         val session = tokenStore.current()
         require(session.isLoggedIn) { "Not logged in" }
-        authHeader = session.authorizationHeader
         return try {
-            block(api(session.serverUrl), session)
+            block(api(session.serverUrl, session), session)
         } catch (e: HttpException) {
             if (e.code() == 401) {
                 // A password change deliberately rotates this credential. A request that began
@@ -1807,17 +1825,42 @@ class TtsRoadRepository(
             ?.trim()
     }
 
-    private fun api(baseUrl: String): TtsRoadApi {
+    private fun api(baseUrl: String, session: SessionState? = null): TtsRoadApi {
         val normalized = normalizeBaseUrl(baseUrl)
         return synchronized(apiCache) {
-            apiCache.getOrPut(normalized) {
-                Retrofit.Builder()
-                    .baseUrl(normalized)
-                    .client(client)
-                    .addConverterFactory(MoshiConverterFactory.create(moshi))
-                    .build()
-                    .create(TtsRoadApi::class.java)
+            val cached = apiCache.getOrPut(normalized) {
+                CachedApi(
+                    Retrofit.Builder()
+                        .baseUrl(normalized)
+                        .client(client)
+                        .addConverterFactory(MoshiConverterFactory.create(moshi))
+                        .build(),
+                )
             }
+            if (apiCache.size > ApiCacheServerLimit) {
+                val oldest = apiCache.entries.iterator()
+                oldest.next()
+                oldest.remove()
+            }
+            if (session == null) return@synchronized cached.unauthenticated
+            val authServerUrl = normalizeBaseUrl(session.serverUrl)
+            val authorizationHeader = session.authorizationHeader
+            cached.authenticated?.let {
+                if (it.auth.serverUrl == authServerUrl &&
+                    it.auth.authorizationHeader == authorizationHeader
+                ) {
+                    return@synchronized it.service
+                }
+            }
+            val auth = RequestAuth(authServerUrl, authorizationHeader)
+            val service = cached.retrofit.newBuilder()
+                .callFactory(Call.Factory { request ->
+                    client.newCall(request.newBuilder().tag(RequestAuth::class.java, auth).build())
+                })
+                .build()
+                .create(TtsRoadApi::class.java)
+            cached.authenticated = CachedAuthenticatedApi(auth, service)
+            service
         }
     }
 }

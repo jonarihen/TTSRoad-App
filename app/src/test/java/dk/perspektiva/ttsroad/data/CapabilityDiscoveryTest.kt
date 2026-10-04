@@ -1,6 +1,12 @@
 package dk.perspektiva.ttsroad.data
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -12,7 +18,7 @@ import org.junit.Before
 import org.junit.Test
 
 /** In-memory [SessionStore] so discovery can be tested without DataStore or an Android context. */
-private class FakeDiscoverySessionStore(private var state: SessionState = SessionState()) : SessionStore {
+private class FakeDiscoverySessionStore(@Volatile private var state: SessionState = SessionState()) : SessionStore {
     override suspend fun current(): SessionState = state
 
     override suspend fun saveLogin(baseUrl: String, response: LoginResponse) {
@@ -25,6 +31,10 @@ private class FakeDiscoverySessionStore(private var state: SessionState = Sessio
 
     override suspend fun clearToken() {
         state = state.copy(token = null)
+    }
+
+    fun replace(session: SessionState) {
+        state = session
     }
 }
 
@@ -248,6 +258,7 @@ class CapabilityDiscoveryTest {
 
         assertTrue(repository.currentCapabilities.value.readAlong)
         assertTrue(repository.currentCapabilities.value.deviceManagement)
+        assertEquals(baseUrl(), repository.currentCapabilities.value.discoveryBaseUrl)
         assertTrue(repository.currentCapabilitiesResolved.value)
     }
 
@@ -261,7 +272,7 @@ class CapabilityDiscoveryTest {
 
         repository.refreshCurrentCapabilities()
 
-        assertEquals(ServerCapabilities.Baseline, repository.currentCapabilities.value)
+        assertEquals(ServerCapabilities.Baseline.copy(discoveryBaseUrl = baseUrl()), repository.currentCapabilities.value)
         assertTrue(repository.currentCapabilitiesResolved.value)
     }
 
@@ -275,7 +286,7 @@ class CapabilityDiscoveryTest {
 
         repository.refreshCurrentCapabilities()
 
-        assertEquals(ServerCapabilities.Baseline, repository.currentCapabilities.value)
+        assertEquals(ServerCapabilities.Baseline.copy(discoveryBaseUrl = baseUrl()), repository.currentCapabilities.value)
         assertFalse(repository.currentCapabilitiesResolved.value)
     }
 
@@ -322,5 +333,31 @@ class CapabilityDiscoveryTest {
         repository.capabilities(baseUrl())
 
         assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a discovery completing after switching server is not published to the new session`() = runTest {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+                return MockResponse().setBody(FullPayload)
+            }
+        }
+        val store = FakeDiscoverySessionStore(SessionState(serverUrl = baseUrl(), token = "a"))
+        val repository = TtsRoadRepository(store)
+        val oldDiscovery = async(Dispatchers.Default) { repository.refreshCurrentCapabilities() }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            store.replace(SessionState(serverUrl = "https://server-b.example/", token = "b"))
+        } finally {
+            release.countDown()
+        }
+        oldDiscovery.await()
+
+        assertEquals(ServerCapabilities.Baseline, repository.currentCapabilities.value)
+        assertFalse(repository.currentCapabilitiesResolved.value)
     }
 }

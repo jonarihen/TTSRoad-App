@@ -26,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
+import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -225,7 +226,12 @@ class AudioAuthSnapshotTest {
         }
         assertEquals(1, scheduled)
         assertEquals("fresh-token", store.current().token)
-        assertEquals("Bearer fresh-token", repository.authHeader)
+        server.takeRequest()
+        server.enqueue(MockResponse().setBody("""{"api_version":1,"fictions":[]}"""))
+        repository.library()
+        val freshRequest = requireNotNull(server.takeRequest(10, TimeUnit.SECONDS))
+        assertEquals("/api/mobile/library?scope=followed", freshRequest.path)
+        assertEquals("Bearer fresh-token", freshRequest.getHeader("Authorization"))
         assertEquals(0, store.clearTokenCalls)
         assertEquals(0, cleared)
         assertNull(repository.sessionEnd.value)
@@ -280,6 +286,76 @@ class AudioAuthSnapshotTest {
             assertEquals(0, cleared)
             assertNull(repository.sessionEnd.value)
         } finally {
+            replacement.shutdown()
+        }
+    }
+
+    @Test
+    fun `queued API and audio failures keep their old credentials after a server switch and stream recovery`() = runTest {
+        val blocked = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            if (chain.request().url.port == server.port && chain.request().url.encodedPath == "/api/mobile/library") {
+                blocked.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+            }
+            chain.proceed(chain.request())
+        }.build()
+        val store = loggedInStore()
+        var cleared = 0
+        val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ }, httpClient = client)
+        val session = store.current()
+        var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+        val pendingApi = async(Dispatchers.IO) { runCatching { repository.library() }.exceptionOrNull() }
+        val replacement = MockWebServer()
+        replacement.start()
+        try {
+            assertTrue(blocked.await(10, TimeUnit.SECONDS))
+            val failure = delayedFailure({ snapshot }) {
+                replacement.enqueue(MockResponse().setBody(
+                    """{"token":"new-server-token","token_type":"bearer","user":{"id":1,"username":"admin"}}""",
+                ))
+                assertEquals(LoginResult.Success, repository.login(replacement.url("/").toString(), "admin", "password", "Phone"))
+                val login = requireNotNull(replacement.takeRequest(10, TimeUnit.SECONDS))
+                assertEquals("/api/mobile/login", login.path)
+                assertNull(login.getHeader("Authorization"))
+                val fresh = store.current()
+                snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+                replacement.enqueue(MockResponse().setBody("""{"api_version":1,"fictions":[]}"""))
+                repository.library()
+                val request = requireNotNull(replacement.takeRequest(10, TimeUnit.SECONDS))
+                assertEquals("Bearer new-server-token", request.getHeader("Authorization"))
+            }
+            val player = RecoveryPlayer(recoveryItems())
+            try {
+                val error = requireNotNull(player.playerError)
+                var scheduled: (suspend () -> Unit)? = null
+                handleAudioRejection(repository, failure, store::current) { rejected, current ->
+                    scheduled = {
+                        recoverAudioPlaybackIfCurrent(player, error, rejected, current, store::current) { snapshot = it }
+                    }
+                }
+                requireNotNull(scheduled).invoke()
+                assertEquals(1, player.prepares)
+                retryRequest(player.currentMediaItem!!.localConfiguration!!.uri.toString(), snapshot, replacement)
+            } finally {
+                player.release()
+            }
+            server.enqueue(MockResponse().setResponseCode(401).setBody(
+                """{"detail":{"message":"Old API said no.","reason":"token_revoked"}}""",
+            ))
+            release.countDown()
+            assertTrue(pendingApi.await() is retrofit2.HttpException)
+            val oldRequest = requireNotNull(server.takeRequest(10, TimeUnit.SECONDS))
+            assertEquals("/api/mobile/library?scope=followed", oldRequest.path)
+            assertEquals("Bearer stale-token", oldRequest.getHeader("Authorization"))
+            assertEquals(replacement.url("/").toString(), store.current().serverUrl)
+            assertEquals("new-server-token", store.current().token)
+            assertEquals(0, store.clearTokenCalls)
+            assertEquals(0, cleared)
+            assertNull(repository.sessionEnd.value)
+        } finally {
+            release.countDown()
             replacement.shutdown()
         }
     }
