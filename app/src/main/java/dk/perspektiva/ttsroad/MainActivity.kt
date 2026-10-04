@@ -1144,7 +1144,7 @@ private fun MainScaffold(
 }
 
 @Composable
-private fun LibraryScreen(
+internal fun LibraryScreen(
     padding: PaddingValues,
     playbackController: PlaybackController,
     onOpenFiction: (FictionSummary) -> Unit,
@@ -4732,6 +4732,9 @@ internal fun SettingsScreen(
                     shelfNote = runCatching { repository.unfollowAllFictions() }
                         .fold(
                             onSuccess = { removed ->
+                                if (removed != null) {
+                                    ServiceLocator.libraryCache(context).invalidateFollowing()
+                                }
                                 when (removed) {
                                     null -> "This server cannot empty a shelf in one call."
                                     0 -> "Your shelf was already empty."
@@ -6493,7 +6496,7 @@ private fun downloadMetaLabel(
 }
 
 @Composable
-private fun FictionsScreen(
+internal fun FictionsScreen(
     padding: PaddingValues,
     repository: TtsRoadRepository,
     isAdmin: Boolean = false,
