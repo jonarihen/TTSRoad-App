@@ -163,6 +163,55 @@ class GrowingPlaybackQueueTest {
         }
     }
 
+    @Test fun `early tail Next is available to controller and discovers ready successor`() = runTest {
+        val player = QueuePlayer(listOf(item(1)))
+        var loads = 0
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { loads++; listOf(item(1), item(2)) }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        val session = MediaSession.Builder(ApplicationProvider.getApplicationContext(), queue.sessionPlayer).build()
+        val controller = MediaController.Builder(ApplicationProvider.getApplicationContext(), session.token)
+            .buildAsync().get()
+        try {
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(3_600_000)
+            testScheduler.runCurrent()
+            assertEquals(0, loads)
+            assertFalse(player.hasNextMediaItem())
+            assertTrue(controller.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM))
+            assertTrue(dk.perspektiva.ttsroad.player.canRequestNextChapter(controller))
+            assertTrue(dk.perspektiva.ttsroad.player.playerUiStateOf(controller, emptyList()).hasNext)
+            controller.seekToNextMediaItem()
+            org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+            testScheduler.runCurrent()
+            assertEquals(1, loads)
+            assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+            assertEquals(1, player.seeks)
+        } finally {
+            controller.release()
+            session.release()
+        }
+    }
+
+    @Test fun `Next waiting for boundary poll follows newly inserted successor once`() = runTest {
+        val player = QueuePlayer(listOf(item(1), item(3)))
+        player.position = 590_000
+        val response = CompletableDeferred<List<MediaItem>>()
+        val queue = GrowingPlaybackQueue(player, backgroundScope, { 1 },
+            { response.await() }, { fail("Must not advance"); null }, { true })
+        queue.start()
+        testScheduler.runCurrent()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        queue.sessionPlayer.seekToNextMediaItem()
+        assertEquals("chapter:1", player.currentMediaItem!!.mediaId)
+        response.complete(listOf(item(1), item(2), item(3)))
+        testScheduler.runCurrent()
+        assertEquals("chapter:2", player.currentMediaItem!!.mediaId)
+        assertEquals(1, player.seeks)
+        assertTrue(player.playWhenReady)
+    }
+
     @Test fun `early Next remains paused after suspended gap reconciliation`() = runTest {
         val player = QueuePlayer(listOf(item(1), item(3)))
         val response = CompletableDeferred<List<MediaItem>>()

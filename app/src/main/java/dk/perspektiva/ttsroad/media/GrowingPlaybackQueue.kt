@@ -36,8 +36,29 @@ internal class GrowingPlaybackQueue(
     private data class ReconciledQueue(val playlist: List<Any>)
 
     val sessionPlayer: Player = object : ForwardingPlayer(player) {
+        override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
+            .apply {
+                if (canReconcile()) {
+                    add(Player.COMMAND_SEEK_TO_NEXT)
+                    add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                }
+            }.build()
+
+        override fun isCommandAvailable(command: Int): Boolean = availableCommands.contains(command)
+
+        override fun hasNextMediaItem(): Boolean = super.hasNextMediaItem() || canReconcile()
+
         override fun seekToNextMediaItem() = requestNext { player.seekToNextMediaItem() }
         override fun seekToNext() = requestNext { player.seekToNext() }
+    }
+
+    private fun canReconcile(): Boolean {
+        if (sessionKey() == null) return false
+        val fictionId = player.currentMediaItem?.mediaMetadata?.extras?.getInt("fiction_id")
+            ?.takeIf { it > 0 } ?: return false
+        return (0 until player.mediaItemCount).all {
+            player.getMediaItemAt(it).mediaMetadata.extras?.getInt("fiction_id") == fictionId
+        }
     }
 
     private fun requestNext(transition: () -> Unit) {
@@ -173,6 +194,10 @@ internal class GrowingPlaybackQueue(
                 player.addMediaItem(insertion, item)
             }
             val reconciled = ReconciledQueue(queueIdentity())
+            nextIntent?.takeIf {
+                it.session == requestedSession && it.playlist == requestedQueue &&
+                    it.generation == navigationGeneration
+            }?.playlist = reconciled.playlist
             pendingHandoff = pendingHandoff?.copy(playlist = reconciled.playlist)
             if (!continueEnded || pendingNext > 0 || !wasEnded || !player.playWhenReady ||
                 !allowContinuation()
