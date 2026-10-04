@@ -80,6 +80,9 @@ class UpdateManager internal constructor(
 
     private val downloadLock = Any()
     private var downloadAttempt: DownloadAttempt? = null
+    private val runningAttempts = mutableSetOf<DownloadAttempt>()
+    private var installerApk: File? = null
+    private var updateCacheInitialized = false
 
     private class DownloadAttempt(cacheDir: File) {
         private val id = UUID.randomUUID().toString()
@@ -123,6 +126,7 @@ class UpdateManager internal constructor(
                         attempt.job.ensureActive()
                         installer(appContext, apk)
                         attempt.installed = true
+                        installerApk = apk
                         _state.value = UpdateState.Idle
                     }
                 }
@@ -139,13 +143,22 @@ class UpdateManager internal constructor(
             } finally {
                 attempt.partial.delete()
                 if (!attempt.installed) attempt.apk.delete()
-                synchronized(downloadLock) {
-                    if (downloadAttempt === attempt) downloadAttempt = null
+            }
+        }
+        cleanupUpdateFiles(appContext.cacheDir)
+        runningAttempts.add(attempt)
+        downloadAttempt = attempt
+        _state.value = UpdateState.Downloading(0)
+        attempt.job.invokeOnCompletion { cause ->
+            synchronized(downloadLock) {
+                runningAttempts.remove(attempt)
+                if (downloadAttempt === attempt) {
+                    downloadAttempt = null
+                    if (cause is CancellationException) _state.value = UpdateState.Idle
+                    cleanupUpdateFiles(appContext.cacheDir)
                 }
             }
         }
-        downloadAttempt = attempt
-        _state.value = UpdateState.Downloading(0)
         attempt.job.start()
         attempt.job
     }
@@ -164,6 +177,19 @@ class UpdateManager internal constructor(
         } else {
             _state.value = UpdateState.Idle
         }
+    }
+
+    private fun cleanupUpdateFiles(cacheDir: File) {
+        val artifacts = cacheDir.listFiles().orEmpty().filter {
+            it.isFile && (it.name == "update.apk" || UpdateArtifactName.matches(it.name))
+        }
+        if (!updateCacheInitialized) {
+            installerApk = artifacts.filter { it.extension == "apk" && it.length() > 0L }
+                .maxByOrNull { it.lastModified() }
+            updateCacheInitialized = true
+        }
+        val retained = runningAttempts.flatMap { listOf(it.partial, it.apk) }.toSet() + listOfNotNull(installerApk)
+        artifacts.filterNot { it in retained }.forEach { it.delete() }
     }
 
     private suspend fun fetchLatestRelease(): ReleaseInfo? = withContext(Dispatchers.IO) {
@@ -263,6 +289,7 @@ class UpdateManager internal constructor(
 
     private companion object {
         const val REPO = "jonarihen/TTSRoad-App"
+        val UpdateArtifactName = Regex("update-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\.(apk|part)")
     }
 }
 
