@@ -258,6 +258,32 @@ class LibraryCacheDeltaTest {
     }
 
     @Test
+    fun `invalidating follows keeps loaded chapters and their own delta cursor`() {
+        val cache = cache()
+        enqueueLibrary(serverTime = "t1", fictions = """{"id":7,"title":"Book"}""")
+        cache.refreshLibraryAndSettle()
+        nextRequest()
+        enqueueChapters(serverTime = "t2", chapters = """{"id":1,"chapter_number":1.0}""")
+        cache.refreshChapters(7)
+        val chapters = cache.chapters(7).settled().value
+        nextRequest()
+
+        cache.invalidateFollowing()
+        cache.ensureChapters(7)
+
+        assertNull(cache.library.value.value)
+        assertEquals(chapters, cache.chapters(7).value.value)
+        assertEquals(3, server.requestCount)
+
+        enqueueChapters(serverTime = "t3", delta = true, chapters = """{"id":2,"chapter_number":2.0}""")
+        cache.refreshChapters(7)
+        cache.chapters(7).settled()
+
+        assertEquals("t2", nextRequest().query("updated_since"))
+        assertEquals(listOf(1, 2), cache.chapters(7).value.value?.map { it.resolvedChapterId })
+    }
+
+    @Test
     fun `local played change made during in-flight chapter delta is preserved and not overwritten`() {
         val cache = cache()
         enqueueChapters(

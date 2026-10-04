@@ -2,7 +2,6 @@ package dk.perspektiva.ttsroad.download
 
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.Cache
 import androidx.media3.exoplayer.offline.DownloadIndex
 import androidx.media3.exoplayer.offline.DownloadRequest
@@ -76,36 +75,13 @@ internal class DownloadIdentityMigration {
     var identity: String? = null
         private set
 
-    @Volatile
-    var readIdentity: String? = null
-        private set
-
-    fun selectIdentity(incoming: String?) {
-        readIdentity = incoming
-    }
-
-    fun cacheKey(dataSpec: DataSpec, cache: Cache): String {
-        dataSpec.key?.let { return it }
-        val incoming = readIdentity
-        val key = DownloadCacheKeys.forUrl(dataSpec.uri.toString(), incoming)
-        if (incoming != null && incoming != identity) {
-            if (cache.getCachedSpans(key).any { dataSpec.position >= it.position && dataSpec.position < it.position + it.length }) {
-                return key
-            }
-            val legacy = DownloadCacheKeys.forUrl(dataSpec.uri.toString())
-            if (cache.getCachedSpans(legacy).any { dataSpec.position >= it.position && dataSpec.position < it.position + it.length }) {
-                return legacy
-            }
-        }
-        return key
-    }
-
     @Synchronized
     fun migrate(
         incoming: String,
         index: DownloadIndex,
         cache: Cache,
         isCurrent: () -> Boolean = { true },
+        ownsLegacyRequest: (DownloadRequest) -> Boolean = { true },
         rekey: (DownloadRequest) -> Unit,
     ): Boolean {
         if (!shouldAdoptIdentity(identity, incoming)) return true
@@ -118,15 +94,18 @@ internal class DownloadIdentityMigration {
         }.getOrNull() ?: return false
         if (!isCurrent()) return false
 
+        val indexed = requests.mapTo(mutableSetOf()) { it.customCacheKey ?: it.uri.toString() }
+        val stale = requests.filter { request ->
+            val key = request.customCacheKey ?: return@filter false
+            !DownloadCacheKeys.isScoped(key) && requests.filter { it.customCacheKey == key }.all(ownsLegacyRequest)
+        }
+        if (!isCurrent()) return false
         identity = incoming
-        val indexed = requests.mapTo(mutableSetOf()) { it.customCacheKey }
         runCatching {
             orphanedCacheKeys(cache.keys, indexed).forEach(cache::removeResource)
         }
         runCatching {
-            requests.filter { request ->
-                request.customCacheKey?.let { !DownloadCacheKeys.isScoped(it) } == true
-            }.forEach(rekey)
+            stale.forEach(rekey)
         }
         return true
     }
