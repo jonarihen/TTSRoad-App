@@ -18,6 +18,7 @@ import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SessionStore
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.data.readAlongOwnerOf
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit.SECONDS
@@ -65,12 +66,15 @@ class OfflineReaderPinLifecycleTest {
     private val release = CountDownLatch(1)
     private val results = mutableListOf<CompletableDeferred<Boolean>>()
     private val capabilities = MutableStateFlow(ServerCapabilities(readAlong = true))
+    private val session = MutableStateFlow(SessionState())
     private val context get() = RuntimeEnvironment.getApplication()
 
     @Before
     fun setUp() {
         Dispatchers.setMain(Dispatchers.Unconfined)
         server = MockWebServer().apply { start() }
+        session.value = SessionState(server.url("/").toString(), "reader-token", "admin")
+        capabilities.value = ServerCapabilities(readAlong = true, discoveryBaseUrl = session.value.serverUrl)
         directory = kotlin.io.path.createTempDirectory("offline-reader").toFile()
         disk = ReadAlongFileStore(directory)
         repository = TtsRoadRepository(sessionStore(), readAlongStore = disk)
@@ -86,10 +90,9 @@ class OfflineReaderPinLifecycleTest {
     }
 
     private fun sessionStore() = object : SessionStore {
-        private var state = SessionState(server.url("/").toString(), "reader-token", "admin")
-        override suspend fun current() = state
+        override suspend fun current() = session.value
         override suspend fun saveLogin(baseUrl: String, response: LoginResponse) = Unit
-        override suspend fun clearToken() { state = state.copy(token = null) }
+        override suspend fun clearToken() { session.value = session.value.copy(token = null) }
     }
 
     private fun createDownloads(
@@ -123,6 +126,7 @@ class OfflineReaderPinLifecycleTest {
         forgetAllAudioHashes = forgetAllAudioHashes,
         initializeManager = false,
         sendRemoveAllDownloads = sendRemoveAllDownloads,
+        session = session,
     ).also { downloads = it }
 
     private fun chapter(hasTimings: Boolean? = true, id: Int = 10) = ChapterSummary(
@@ -387,6 +391,79 @@ class OfflineReaderPinLifecycleTest {
         assertTrue(restarted.isPinned(10))
         assertEquals("New intent.", restarted.read(10)?.response?.text)
         assertEquals("\"new\"", restarted.read(10)?.etag)
+    }
+
+    @Test
+    fun `switching server identity rejects the pending pin without adopting stale reader capabilities`() = runBlocking {
+        deferFirstResponse()
+        capabilities.value = capabilities.value.copy(serverBaseUrl = "https://canonical-a.example/")
+        val downloads = createDownloads(ignoreCancellation = true)
+        downloads.download(chapter(), session.value.serverUrl)
+        val first = requireNotNull(nextService().getParcelableExtra("download_request", DownloadRequest::class.java))
+        awaitReaderRequest()
+        val second = MockWebServer().apply { start() }
+        try {
+            session.value = SessionState(second.url("/").toString(), "other-token", "other")
+            downloads.download(chapter(id = 11), session.value.serverUrl)
+            val next = requireNotNull(nextService().getParcelableExtra("download_request", DownloadRequest::class.java))
+            assertEquals(DownloadCacheKeys.forUrl(first.uri.toString(), "canonical-a.example"), first.customCacheKey)
+            assertEquals(
+                DownloadCacheKeys.forUrl(next.uri.toString(), "address:${session.value.serverUrl}"),
+                next.customCacheKey,
+            )
+            assertEquals(second.port, next.uri.port)
+            assertEquals(1, synchronized(results) { results.size })
+            release.countDown()
+
+            assertFalse(result())
+            assertFalse(ReadAlongFileStore(directory).isPinned(10))
+            assertNull(ReadAlongFileStore(directory).read(10))
+            assertEquals(0, second.requestCount)
+        } finally {
+            release.countDown()
+            second.shutdown()
+        }
+    }
+
+    @Test
+    fun `a new server pin survives the old identity response then remove all prevents resurrection`() = runBlocking {
+        deferFirstResponse()
+        capabilities.value = capabilities.value.copy(serverBaseUrl = "https://canonical-a.example/")
+        val downloads = createDownloads(ignoreCancellation = true)
+        downloads.download(chapter(), session.value.serverUrl)
+        val first = requireNotNull(nextService().getParcelableExtra("download_request", DownloadRequest::class.java))
+        awaitReaderRequest()
+        val second = MockWebServer().apply { start() }
+        try {
+            session.value = SessionState(second.url("/").toString(), "other-token", "other")
+            capabilities.value = ServerCapabilities(
+                readAlong = true,
+                discoveryBaseUrl = session.value.serverUrl,
+                serverBaseUrl = "https://canonical-b.example/",
+            )
+            second.enqueue(MockResponse().setBody(body("New server text.", timed = false)))
+            downloads.download(chapter(false), session.value.serverUrl)
+            val next = requireNotNull(nextService().getParcelableExtra("download_request", DownloadRequest::class.java))
+            assertEquals(DownloadCacheKeys.forUrl(next.uri.toString(), "canonical-b.example"), next.customCacheKey)
+            assertFalse(first.customCacheKey == next.customCacheKey)
+            assertTrue(result(1))
+            val request = requireNotNull(second.takeRequest(10, SECONDS))
+            assertEquals("/api/mobile/chapters/10/readalong", request.path)
+            assertEquals("Bearer other-token", request.getHeader("Authorization"))
+            assertEquals(readAlongOwnerOf(session.value), disk.read(10)?.owner)
+            release.countDown()
+
+            assertFalse(result())
+            assertEquals("New server text.", ReadAlongFileStore(directory).read(10)?.response?.text)
+            downloads.removeAll()
+            nextService()
+
+            assertFalse(ReadAlongFileStore(directory).isPinned(10))
+            assertNull(ReadAlongFileStore(directory).read(10))
+        } finally {
+            release.countDown()
+            second.shutdown()
+        }
     }
 
     @Test

@@ -51,11 +51,12 @@ internal fun readThroughFactory(
     streamingCache: Cache,
     upstream: DataSource.Factory,
     cacheKeyFactory: CacheKeyFactory,
+    streamingCacheKeyFactory: CacheKeyFactory = cacheKeyFactory,
 ): DataSource.Factory {
     val throughStreamingCache = CacheDataSource.Factory()
         .setCache(streamingCache)
         .setUpstreamDataSourceFactory(upstream)
-        .setCacheKeyFactory(cacheKeyFactory)
+        .setCacheKeyFactory(streamingCacheKeyFactory)
         // A cache that cannot be written (full disk, revoked permission) must degrade to plain
         // streaming rather than stopping playback.
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)

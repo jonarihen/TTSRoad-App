@@ -14,6 +14,7 @@ import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheKeyFactory
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.offline.DefaultDownloadIndex
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
@@ -23,6 +24,7 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.DefaultStreamingCacheBytes
 import dk.perspektiva.ttsroad.data.DownloadPrefs
 import dk.perspektiva.ttsroad.data.ServerCapabilities
+import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import java.io.File
@@ -98,6 +100,7 @@ class OfflineDownloads(
     private val sendRemoveAllDownloads: () -> Unit = {
         DownloadService.sendRemoveAllDownloads(context, TtsRoadDownloadService::class.java, false)
     },
+    session: Flow<SessionState> = tokenStore.session,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val readerPinLock = Any()
@@ -110,12 +113,18 @@ class OfflineDownloads(
 
     private val serverUrl: String get() = audioAuth.serverUrl
 
-    /**
-     * Which server the cache entries belong to, once it has said so. Null until capabilities come
-     * back, and on a server too old to report a `base_url` at all — see [DownloadCacheKeys].
-     */
+    private val identityPreferences = context.getSharedPreferences("download_server_identities", Context.MODE_PRIVATE)
+    private val cacheIdentities = SessionCacheIdentity(
+        knownIdentities = identityPreferences.all.mapNotNull { (address, identity) ->
+            (identity as? String)?.let { address to it }
+        }.toMap(),
+        remember = { address, identity -> identityPreferences.edit().putString(address, identity).apply() },
+    )
+
     @Volatile
-    private var serverIdentity: String? = null
+    private var activeCapabilities = ServerCapabilities.Baseline
+
+    private var migrationIdentity: String? = null
 
     /**
      * Whether this server can serve read-along documents at all.
@@ -184,8 +193,47 @@ class OfflineDownloads(
      * binder stripped of their local configuration, so a played item often arrives with no key at
      * all and the URL is the only thing left to derive one from.
      */
+    private val scopedCacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
+        dataSpec.key?.takeIf(DownloadCacheKeys::isScoped) ?: run {
+            val address = serverUrl
+            val url = dataSpec.uri.toString()
+            val key = DownloadCacheKeys.forUrl(url, cacheIdentities.forServer(address, activeCapabilities))
+            val fallback = DownloadCacheKeys.forUrl(url, cacheIdentities.fallbackForServer(address))
+            fun cached(candidate: String) = downloadCache.isCached(candidate, dataSpec.position, 1) ||
+                streamingCache.isCached(candidate, dataSpec.position, 1)
+            if (key != fallback && !cached(key) && cached(fallback)) fallback else key
+        }
+    }
+
     private val cacheKeyFactory = CacheKeyFactory { dataSpec: DataSpec ->
-        dataSpec.key ?: DownloadCacheKeys.forUrl(dataSpec.uri.toString(), serverIdentity)
+        val key = scopedCacheKeyFactory.buildCacheKey(dataSpec)
+        if (downloadCache.isCached(key, dataSpec.position, 1) || streamingCache.isCached(key, dataSpec.position, 1)) {
+            key
+        } else {
+            legacyDownloadKey(dataSpec.uri.toString(), serverUrl, dataSpec.position) ?: key
+        }
+    }
+
+    private fun legacyDownloadKey(url: String, address: String, position: Long): String? {
+        if (cacheIdentities.fallbackForServer(address) == null) return null
+        val key = DownloadCacheKeys.forUrl(url)
+        if (!downloadCache.isCached(key, position, 1)) return null
+        return runCatching {
+            DefaultDownloadIndex(databaseProvider).getDownloads().use { cursor ->
+                val owners = buildList {
+                    while (cursor.moveToNext()) {
+                        val request = cursor.download.request
+                        val requestKey = request.customCacheKey ?: request.uri.toString()
+                        if (requestKey == key) add(request.uri.toString())
+                    }
+                }
+                key.takeIf {
+                    owners.isNotEmpty() && owners.all { owner ->
+                        cacheIdentities.ownsLegacyUrl(address, owner, activeCapabilities)
+                    }
+                }
+            }
+        }.getOrNull()
     }
 
     /** Auth-injecting HTTP source used to fetch bytes the cache does not have. */
@@ -238,15 +286,16 @@ class OfflineDownloads(
 
     init {
         scope.launch {
-            tokenStore.session.collectLatest {
-                audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(it.serverUrl, it.authorizationHeader)
-            }
-        }
-        scope.launch {
-            capabilities.collectLatest {
-                readAlongSupported = it.readAlong
-                adoptServerIdentity(DownloadCacheKeys.serverIdentity(it.serverBaseUrl))
-            }
+            combine(session, capabilities) { current, discovered -> current to discovered }
+                .collectLatest { (current, discovered) ->
+                    activeCapabilities = discovered
+                    cacheIdentities.forServer(current.serverUrl, discovered)
+                    audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(current.serverUrl, current.authorizationHeader)
+                    readAlongSupported = discovered.discoveryBaseUrl == current.serverUrl && discovered.readAlong
+                    if (initializeManager && current.isLoggedIn) {
+                        adoptServerIdentity(cacheIdentities.advertisedForServer(current.serverUrl, discovered))
+                    }
+                }
         }
         // Requirements are enforced by the manager itself, so a queued chapter waits for Wi-Fi
         // rather than failing — and flipping the switch back on releases whatever was waiting,
@@ -338,6 +387,7 @@ class OfflineDownloads(
             streamingCache = streamingCache,
             upstream = upstream,
             cacheKeyFactory = cacheKeyFactory,
+            streamingCacheKeyFactory = scopedCacheKeyFactory,
         )
 
     /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
@@ -346,7 +396,8 @@ class OfflineDownloads(
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
     ) {
-        val spec = chapterDownloadSpec(chapter, serverUrl, serverIdentity, origin) ?: return
+        val identity = cacheIdentities.forServer(serverUrl.orEmpty(), activeCapabilities)
+        val spec = chapterDownloadSpec(chapter, serverUrl, identity, origin) ?: return
         synchronized(readerPinLock) {
             send(spec.toDownloadRequest())
             pinReadAlongFor(chapter)
@@ -593,8 +644,8 @@ class OfflineDownloads(
      * start the whole library downloading a second time.
      */
     private fun adoptServerIdentity(identity: String?) {
-        if (!shouldAdoptIdentity(current = serverIdentity, incoming = identity)) return
-        serverIdentity = identity
+        if (!shouldAdoptIdentity(current = migrationIdentity, incoming = identity)) return
+        migrationIdentity = identity
         scope.launch(Dispatchers.IO) {
             // Only unscoped entries move. One already carrying a different identity belongs to
             // another server the user also downloaded from, and re-keying it here would hand its
