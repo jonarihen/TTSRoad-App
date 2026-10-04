@@ -29,11 +29,12 @@ internal fun staleAudioDownloaderFactory(
         .setUpstreamDataSourceFactory(upstream)
     val delegateFactory = DefaultDownloaderFactory(cacheFactory, executor)
     return DownloaderFactory { request ->
-        val hash = decodeDownloadIds(request.data)?.replacementHash
+        val ids = decodeDownloadIds(request.data)
+        val hash = ids?.replacementHash
         if (hash == null) {
             delegateFactory.createDownloader(request)
         } else {
-            StaleAudioDownloader(request, hash, downloadCache, streamingCache, delegateFactory)
+            StaleAudioDownloader(request, hash, ids.invalidationKeys, downloadCache, streamingCache, delegateFactory)
         }
     }
 }
@@ -42,31 +43,34 @@ internal fun staleAudioDownloaderFactory(
 private class StaleAudioDownloader(
     private val request: DownloadRequest,
     private val hash: String,
+    invalidationKeys: Set<String>,
     private val downloadCache: Cache,
     private val streamingCache: Cache,
     private val factory: DownloaderFactory,
 ) : Downloader {
     @Volatile private var delegate: Downloader? = null
     @Volatile private var cancelled = false
+    private val invalidationKeys = invalidationKeys + (request.customCacheKey ?: request.uri.toString())
 
     override fun download(progressListener: Downloader.ProgressListener?) {
         if (cancelled) throw InterruptedException()
         if (delegate == null) {
-            val key = request.customCacheKey ?: request.uri.toString()
-            while (true) {
-                if (cancelled) throw InterruptedException()
-                streamingCache.removeResource(key)
-                val span = streamingCache.startReadWrite(key, 0, C.LENGTH_UNSET.toLong())
-                if (span.isCached) continue
-                try {
-                    resetAudioResource(streamingCache, key)
-                    resetAudioResource(downloadCache, key)
-                    delegate = factory.createDownloader(request)
-                } finally {
-                    streamingCache.releaseHoleSpan(span)
+            invalidationKeys.forEach { key ->
+                while (true) {
+                    if (cancelled) throw InterruptedException()
+                    streamingCache.removeResource(key)
+                    val span = streamingCache.startReadWrite(key, 0, C.LENGTH_UNSET.toLong())
+                    if (span.isCached) continue
+                    try {
+                        resetAudioResource(streamingCache, key)
+                        resetAudioResource(downloadCache, key)
+                    } finally {
+                        streamingCache.releaseHoleSpan(span)
+                    }
+                    break
                 }
-                break
             }
+            delegate = factory.createDownloader(request)
         }
         if (cancelled) throw InterruptedException()
         checkNotNull(delegate).download(progressListener)
@@ -86,9 +90,10 @@ private class StaleAudioDownloader(
             source.close()
         }
         if (digest.digest().joinToString("") { "%02x".format(it) } != hash) {
-            val key = request.customCacheKey ?: request.uri.toString()
-            resetAudioResource(downloadCache, key)
-            resetAudioResource(streamingCache, key)
+            invalidationKeys.forEach { key ->
+                resetAudioResource(downloadCache, key)
+                resetAudioResource(streamingCache, key)
+            }
             delegate = null
             throw IOException("Replacement audio does not match its content hash")
         }

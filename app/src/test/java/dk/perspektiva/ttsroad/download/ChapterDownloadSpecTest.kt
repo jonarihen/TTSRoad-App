@@ -163,6 +163,14 @@ class ChapterDownloadSpecTest {
     }
 
     @Test
+    fun `replacement cache keys with colons spaces and Unicode survive a restart`() {
+        val keys = setOf("address:https://ttsroad.example:8443/ /audio/第 42.mp3", "/audio/old:42.mp3")
+        val spec = chapterDownloadSpec(chapter(), serverUrl)!!
+        assertEquals(keys, decodeDownloadIds(spec.encodedIds("a".repeat(64), keys))!!.invalidationKeys)
+        assertNull(decodeDownloadIds("7:42:manual:replace:hash:not!base64".toByteArray()))
+    }
+
+    @Test
     fun `an unusable serverUrl returns null`() {
         assertNull(chapterDownloadSpec(chapter(), serverUrl = null))
         assertNull(chapterDownloadSpec(chapter(), serverUrl = ""))

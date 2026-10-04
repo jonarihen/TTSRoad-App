@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.download
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
+import java.util.Base64
 
 /**
  * Everything needed to ask Media3 to download one chapter, with no Android types in it.
@@ -44,8 +45,14 @@ data class ChapterDownloadSpec(
      * existing record as manual rather than orphaning it — and "manual" is the reading that cannot
      * cause a deletion.
      */
-    fun encodedIds(replacementHash: String? = null): ByteArray = when {
-        replacementHash != null -> "$fictionId:$chapterId:${origin.name.lowercase()}:$ReplacementMarker:$replacementHash"
+    fun encodedIds(replacementHash: String? = null, invalidationKeys: Set<String> = emptySet()): ByteArray = when {
+        replacementHash != null -> buildString {
+            append("$fictionId:$chapterId:${origin.name.lowercase()}:$ReplacementMarker:$replacementHash")
+            invalidationKeys.forEach { key ->
+                append(':')
+                append(Base64.getUrlEncoder().withoutPadding().encodeToString(key.toByteArray(Charsets.UTF_8)))
+            }
+        }
         origin == DownloadOrigin.Auto -> "$fictionId:$chapterId:$AutoMarker"
         else -> "$fictionId:$chapterId"
     }.toByteArray(Charsets.UTF_8)
@@ -57,6 +64,7 @@ data class DownloadIds(
     val chapterId: Int,
     val origin: DownloadOrigin = DownloadOrigin.Manual,
     val replacementHash: String? = null,
+    val invalidationKeys: Set<String> = emptySet(),
 )
 
 private const val AutoMarker = "auto"
@@ -104,10 +112,19 @@ fun decodeDownloadIds(data: ByteArray?): DownloadIds? {
     val parts = data?.takeIf { it.isNotEmpty() }
         ?.toString(Charsets.UTF_8)
         ?.split(':')
-        ?.takeIf { it.size == 2 || it.size == 3 || (it.size == 5 && it[3] == ReplacementMarker) }
+        ?.takeIf { it.size == 2 || it.size == 3 || (it.size >= 5 && it[3] == ReplacementMarker) }
         ?: return null
     val fictionId = parts[0].toIntOrNull() ?: return null
     val chapterId = parts[1].toIntOrNull() ?: return null
     val origin = if (parts.getOrNull(2) == AutoMarker) DownloadOrigin.Auto else DownloadOrigin.Manual
-    return DownloadIds(fictionId, chapterId, origin, replacementHash = parts.getOrNull(4)?.takeIf { it.isNotBlank() })
+    val invalidationKeys = runCatching {
+        parts.drop(5).mapTo(mutableSetOf()) { String(Base64.getUrlDecoder().decode(it), Charsets.UTF_8) }
+    }.getOrNull() ?: return null
+    return DownloadIds(
+        fictionId,
+        chapterId,
+        origin,
+        replacementHash = parts.getOrNull(4)?.takeIf { it.isNotBlank() },
+        invalidationKeys = invalidationKeys,
+    )
 }

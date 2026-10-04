@@ -6,6 +6,8 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.os.Looper
 import androidx.media3.common.C
+import androidx.media3.datasource.cache.Cache
+import androidx.media3.exoplayer.offline.DownloadProgress
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -20,6 +22,9 @@ import dk.perspektiva.ttsroad.data.AudioHashesResponse
 import dk.perspektiva.ttsroad.data.AudioInfo
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.TokenStore
+import dk.perspektiva.ttsroad.data.ServerCapabilities
+import dk.perspektiva.ttsroad.data.SessionState
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
@@ -61,6 +66,8 @@ class OfflineDownloadReplacementTest {
     private var hashes = bodies.mapValues { sha256(it.value) }
     private val requests = AtomicInteger()
     @Volatile private var responseGate: CountDownLatch? = null
+    private val session = MutableStateFlow(SessionState())
+    private val capabilities = MutableStateFlow(ServerCapabilities.Baseline)
 
     @Before
     fun setUp() {
@@ -78,6 +85,7 @@ class OfflineDownloadReplacementTest {
             }
         }
         server.start()
+        session.value = SessionState(serverUrl = server.url("/").toString(), token = "test")
         chapters = (1..2).map { id ->
             ChapterSummary(id = id, fictionId = 9, audio = AudioInfo(url = server.url("/audio/$id.mp3").toString()))
         }
@@ -87,6 +95,8 @@ class OfflineDownloadReplacementTest {
         downloads = OfflineDownloads(
             context,
             TokenStore(context),
+            capabilities = capabilities,
+            session = session,
             forgetAudioHash = scanner::forget,
             initializeManager = false,
             replacementHash = scanner::replacementHash,
@@ -305,6 +315,163 @@ class OfflineDownloadReplacementTest {
         assertEquals(setOf(1), scanner.staleChapters.value)
         assertEquals(sha256(a), record.current()[1])
         assertArrayEquals(a, play(chapters.first()))
+    }
+
+    @Test
+    fun `Update all replaces owned legacy bytes under canonical identity in both caches`() {
+        chapters.forEach { chapter ->
+            val spec = chapterDownloadSpec(chapter, session.value.serverUrl)!!
+            downloads.downloadManager.addDownload(
+                DownloadRequest.Builder(spec.id, android.net.Uri.parse(spec.url))
+                    .setCustomCacheKey(spec.cacheKey).setData(spec.encodedIds()).build(),
+            )
+        }
+        awaitCompleted(setOf(1, 2))
+        val downloadCache = cache("getDownloadCache")
+        val streamingCache = cache("getStreamingCache")
+        chapters.forEach { chapter -> write(streamingCache, DownloadCacheKeys.forUrl(chapter.audio!!.url), a) }
+        scan()
+        downloadCache.removeResource(DownloadCacheKeys.forUrl(chapters.last().audio!!.url))
+        discoverIdentity()
+        bodies = mapOf(1 to longerB, 2 to shorterB)
+        markStale()
+
+        downloads.download(chapters, session.value.serverUrl, replaceExisting = true)
+        val expectedKeys = chapters.mapTo(mutableSetOf()) { chapter ->
+            DownloadCacheKeys.forUrl(chapter.audio!!.url, "canonical.example")
+        }
+        assertEquals(expectedKeys, context.intents.mapTo(mutableSetOf()) {
+            it.getParcelableExtra(DownloadService.KEY_DOWNLOAD_REQUEST, DownloadRequest::class.java)!!.customCacheKey
+        })
+        fail = true
+        submitRequests()
+        await { (1..2).all { downloads.downloads.value["chapter:$it"]?.state == ChapterDownloadState.Failed } }
+        assertEquals(setOf(1, 2), scanner.staleChapters.value)
+        chapters.forEach { chapter ->
+            val legacyKey = DownloadCacheKeys.forUrl(chapter.audio!!.url)
+            assertTrue(downloadCache.getCachedSpans(legacyKey).isEmpty())
+            assertTrue(streamingCache.getCachedSpans(legacyKey).isEmpty())
+            write(streamingCache, legacyKey, a)
+        }
+        fail = false
+        downloads.download(chapters, session.value.serverUrl, replaceExisting = true)
+        submitRequests()
+        awaitCompleted(setOf(1, 2))
+
+        chapters.forEach { chapter ->
+            assertArrayEquals(bodies.getValue(chapter.id), play(chapter))
+            val legacyKey = DownloadCacheKeys.forUrl(chapter.audio!!.url)
+            assertTrue(downloadCache.getCachedSpans(legacyKey).isEmpty())
+            assertTrue(streamingCache.getCachedSpans(legacyKey).isEmpty())
+        }
+        assertEquals(hashes, record.current())
+        assertTrue(scanner.staleChapters.value.isEmpty())
+    }
+
+    @Test
+    fun `Update replaces address fallback bytes after canonical discovery without reviving A`() {
+        seed(listOf(chapters.first()))
+        val fallbackKey = downloads.downloadManager.downloadIndex.getDownload("chapter:1")!!.request.customCacheKey!!
+        discoverIdentity()
+        bodies = mapOf(1 to longerB, 2 to a)
+        markStale()
+        downloads.download(chapters.first(), session.value.serverUrl, replaceExisting = true)
+        submitRequests()
+        awaitCompleted(setOf(1))
+
+        assertArrayEquals(longerB, play(chapters.first()))
+        assertTrue(cache("getDownloadCache").getCachedSpans(fallbackKey).isEmpty())
+        assertTrue(cache("getStreamingCache").getCachedSpans(fallbackKey).isEmpty())
+        cache("getDownloadCache").removeResource(DownloadCacheKeys.forUrl(chapters.first().audio!!.url, "canonical.example"))
+        assertTrue(runCatching { play(chapters.first()) }.isFailure)
+    }
+
+    @Test
+    fun `Update after legacy migration verifies B under the migrated canonical key`() {
+        val chapter = chapters.first()
+        val spec = chapterDownloadSpec(chapter, session.value.serverUrl)!!
+        downloads.downloadManager.addDownload(
+            DownloadRequest.Builder(spec.id, android.net.Uri.parse(spec.url))
+                .setCustomCacheKey(spec.cacheKey).setData(spec.encodedIds()).build(),
+        )
+        awaitCompleted(setOf(1))
+        discoverIdentity()
+        OfflineDownloads::class.java.getDeclaredMethod("adoptServerIdentity", String::class.java)
+            .apply { isAccessible = true }.invoke(downloads, "canonical.example")
+        await { context.intents.size >= 2 }
+        submitRequests()
+        awaitCompleted(setOf(1))
+        assertEquals(
+            DownloadCacheKeys.forUrl(spec.url, "canonical.example"),
+            downloads.downloadManager.downloadIndex.getDownload(spec.id)!!.request.customCacheKey,
+        )
+        assertArrayEquals(a, play(chapter))
+        scan()
+        bodies = mapOf(1 to longerB, 2 to a)
+        markStale()
+        downloads.download(chapter, session.value.serverUrl, replaceExisting = true)
+        submitRequests()
+        awaitCompleted(setOf(1))
+
+        assertArrayEquals(longerB, play(chapter))
+        assertEquals(sha256(longerB), record.current()[1])
+        assertTrue(scanner.staleChapters.value.isEmpty())
+    }
+
+    @Test
+    fun `old server replacement ignores foreign discovery and preserves foreign legacy bytes`() {
+        seed(listOf(chapters.first()))
+        val downloadCache = cache("getDownloadCache")
+        val streamingCache = cache("getStreamingCache")
+        val legacyKey = DownloadCacheKeys.forUrl(chapters.first().audio!!.url)
+        val foreign = DownloadRequest.Builder("chapter:50", android.net.Uri.parse("https://other.example$legacyKey"))
+            .setCustomCacheKey(legacyKey).build()
+        androidx.media3.exoplayer.offline.DefaultDownloadIndex(
+            OfflineDownloads::class.java.getDeclaredMethod("getDatabaseProvider")
+                .apply { isAccessible = true }.invoke(downloads) as androidx.media3.database.DatabaseProvider,
+        ).putDownload(Download(foreign, Download.STATE_COMPLETED, 0, 0, a.size.toLong(), 0, 0, DownloadProgress()))
+        write(downloadCache, legacyKey, a)
+        write(streamingCache, legacyKey, a)
+        capabilities.value = ServerCapabilities(serverBaseUrl = "https://other.example", discoveryBaseUrl = "https://other.example/")
+        await { activeCapabilities() == capabilities.value }
+        bodies = mapOf(1 to longerB, 2 to a)
+        markStale()
+        downloads.download(chapters.first(), session.value.serverUrl, replaceExisting = true)
+        val request = context.intents.single().getParcelableExtra(DownloadService.KEY_DOWNLOAD_REQUEST, DownloadRequest::class.java)!!
+        assertEquals(
+            DownloadCacheKeys.forUrl(chapters.first().audio!!.url, "address:${session.value.serverUrl}"),
+            request.customCacheKey,
+        )
+        assertFalse(decodeDownloadIds(request.data)!!.invalidationKeys.contains(legacyKey))
+        submitRequests()
+        awaitCompleted(setOf(1))
+
+        assertArrayEquals(longerB, play(chapters.first()))
+        assertTrue(downloadCache.isCached(legacyKey, 0, a.size.toLong()))
+        assertTrue(streamingCache.isCached(legacyKey, 0, a.size.toLong()))
+        assertTrue(scanner.staleChapters.value.isEmpty())
+    }
+
+    private fun discoverIdentity() {
+        capabilities.value = ServerCapabilities(serverBaseUrl = "https://canonical.example", discoveryBaseUrl = session.value.serverUrl)
+        await { activeCapabilities() == capabilities.value }
+    }
+
+    private fun activeCapabilities() = OfflineDownloads::class.java.getDeclaredField("activeCapabilities")
+        .apply { isAccessible = true }.get(downloads) as ServerCapabilities
+
+    private fun cache(getter: String): Cache = OfflineDownloads::class.java.getDeclaredMethod(getter)
+        .apply { isAccessible = true }.invoke(downloads) as Cache
+
+    private fun write(cache: Cache, key: String, body: ByteArray) {
+        val hole = cache.startReadWrite(key, 0, body.size.toLong())
+        try {
+            val file = cache.startFile(key, 0, body.size.toLong())
+            file.writeBytes(body)
+            cache.commitFile(file, body.size.toLong())
+        } finally {
+            cache.releaseHoleSpan(hole)
+        }
     }
 
     private fun seed(selected: List<ChapterSummary>) {
