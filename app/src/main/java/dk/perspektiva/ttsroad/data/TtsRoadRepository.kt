@@ -7,6 +7,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -775,13 +776,19 @@ class TtsRoadRepository(
      */
     private val readerMutex = kotlinx.coroutines.sync.Mutex()
     @Volatile private var readerGeneration = 0L
+    private val readerPinLock = Any()
+    private var readerPinGeneration = 0L
+    private val readerPins = mutableMapOf<Int, Long>()
 
     private suspend fun invalidateReader() {
         readerMutex.lock()
         try {
             readerGeneration++
             synchronized(readAlongCache) { readAlongCache.clear() }
-            readAlongStore.clear()
+            synchronized(readerPinLock) {
+                readerPins.clear()
+                readAlongStore.clear()
+            }
         } finally {
             readerMutex.unlock()
         }
@@ -795,7 +802,7 @@ class TtsRoadRepository(
             check(session.isLoggedIn && tokenStore.current() == session && generation == readerGeneration) {
                 "Read-along session changed"
             }
-            return block()
+            return synchronized(readerPinLock) { block() }
         } finally {
             readerMutex.unlock()
         }
@@ -894,8 +901,7 @@ class TtsRoadRepository(
      * beforehand (#123). The backend's own `download-plan` endpoint treats the audio and its
      * companion documents as one unit for exactly this reason.
      *
-     * Answers whether a document is now held. False is an ordinary outcome: plenty of chapters were
-     * converted before timings existed, and there is nothing to pin for those.
+     * Answers whether a document is now held.
      *
      * Best-effort by design: no failure here is rethrown, because this runs in the background behind
      * a download the user asked for and a prefetch that did not land must not fail that download.
@@ -906,49 +912,70 @@ class TtsRoadRepository(
      * every other call is about to fail too, and hiding it in this one path would leave the app
      * quietly half-broken rather than asking for a sign-in.
      */
-    suspend fun pinReadAlong(chapterId: Int): Boolean = withContext(Dispatchers.IO) {
-        val session = tokenStore.current()
-        if (!session.isLoggedIn) return@withContext false
-        val generation = readerGeneration
-        val owner = readerOwner(session)
-        val promoted = readerAccess(session, generation) {
-            val held = storedReadAlong(chapterId, owner)
-            when {
-                held == null -> false
-                readAlongStore.isPinned(chapterId) -> true
-                else -> {
-                    readAlongStore.pin(chapterId, held)
-                    true
+    suspend fun pinReadAlong(chapterId: Int): Boolean {
+        val context = kotlin.coroutines.coroutineContext
+        val pinGeneration = synchronized(readerPinLock) {
+            context.ensureActive()
+            (++readerPinGeneration).also { readerPins[chapterId] = it }
+        }
+        return withContext(Dispatchers.IO) {
+            val session = tokenStore.current()
+            if (!session.isLoggedIn) return@withContext false
+            val generation = readerGeneration
+            val owner = readerOwner(session)
+            try {
+                val promoted = readerPinAccess(chapterId, pinGeneration, session, generation) {
+                    val held = storedReadAlong(chapterId, owner)
+                    when {
+                        held == null -> null
+                        readAlongStore.isPinned(chapterId) -> true
+                        else -> readAlongStore.pin(chapterId, held)
+                    }
                 }
+                if (promoted != null) return@withContext promoted
+                authorized { api ->
+                    val response = api.readAlong(chapterId, null)
+                    when {
+                        response.code() == 404 -> false
+                        response.isSuccessful -> response.body()?.let { body ->
+                            if (body.chapter.id != chapterId) return@let false
+                            readerPinAccess(chapterId, pinGeneration, session, generation) {
+                                readAlongStore.pin(chapterId, CachedReadAlong(response.headers()["ETag"], body, owner))
+                            }
+                        } ?: false
+
+                        else -> throw HttpException(response)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
             }
         }
-        if (promoted) return@withContext true
-        try {
-            authorized { api ->
-                val response = api.readAlong(chapterId, null)
-                when {
-                    response.code() == 404 -> false
-                    response.isSuccessful -> response.body()?.let { body ->
-                        if (body.chapter.id != chapterId) return@let false
-                        readerAccess(session, generation) {
-                            readAlongStore.pin(chapterId, CachedReadAlong(response.headers()["ETag"], body, owner))
-                            true
-                        }
-                    } ?: false
+    }
 
-                    else -> throw HttpException(response)
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            false
+    private suspend fun <T> readerPinAccess(
+        chapterId: Int,
+        pinGeneration: Long,
+        session: SessionState,
+        generation: Long,
+        block: () -> T,
+    ): T {
+        val context = kotlin.coroutines.coroutineContext
+        return readerAccess(session, generation) {
+            context.ensureActive()
+            check(readerPins[chapterId] == pinGeneration) { "Read-along download changed" }
+            block()
         }
     }
 
     /** Release a pinned document, when its chapter's audio is deleted. */
     fun unpinReadAlong(chapterId: Int) {
-        readAlongStore.unpin(chapterId)
+        synchronized(readerPinLock) {
+            readerPins.remove(chapterId)
+            readAlongStore.unpin(chapterId)
+        }
     }
 
     /**
