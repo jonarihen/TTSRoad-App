@@ -414,8 +414,11 @@ class TtsRoadRepository(
             _currentCapabilitiesResolved.value = false
             return ServerCapabilities.Baseline
         }
-        return capabilities(session.serverUrl, forceRefresh).also {
-            _currentCapabilities.value = it
+        val discovered = capabilities(session.serverUrl, forceRefresh)
+        val current = tokenStore.current()
+        if (current.serverUrl != session.serverUrl || current.token != session.token) return discovered
+        return discovered.also {
+            _currentCapabilities.value = it.copy(discoveryBaseUrl = session.serverUrl)
             val normalized = runCatching { normalizeBaseUrl(session.serverUrl) }.getOrNull()
             // A cache entry exists only after a successful response or a definitive old-server 404.
             // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
