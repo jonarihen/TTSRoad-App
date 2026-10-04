@@ -1545,8 +1545,11 @@ private fun FictionScreen(
     // Re-runs when a download finishes or is deleted, which is when the answer can have changed.
     // The scan is one small request and is skipped entirely without the capability or a download,
     // so opening a fiction you have nothing saved from costs nothing.
-    LaunchedEffect(fiction.id, downloadedChapterIds, capabilities.audioContentHash) {
-        staleDownloads.scan(fiction.id, downloadedChapterIds)
+    val retainedChapterIds = remember(downloadState) {
+        downloadState.keys.mapNotNullTo(mutableSetOf(), TtsRoadMediaIds::chapterId)
+    }
+    LaunchedEffect(fiction.id, downloadedChapterIds, retainedChapterIds, capabilities.audioContentHash) {
+        staleDownloads.scan(fiction.id, downloadedChapterIds, retainedChapterIds)
     }
 
     /**
@@ -1773,8 +1776,7 @@ private fun FictionScreen(
                                     val outdated = chapters.filter {
                                         it.resolvedChapterId in staleChapters
                                     }
-                                    staleDownloads.markUpdating(outdated.map { it.resolvedChapterId })
-                                    downloads.download(outdated, serverUrl)
+                                    downloads.download(outdated, serverUrl, replaceExisting = true)
                                 },
                             )
                         }
@@ -1838,9 +1840,8 @@ private fun FictionScreen(
                                 when {
                                     // A stale copy is replaced rather than deleted: what is wanted
                                     // here is the current narration, not the space back.
-                                    isStale && current.isAvailableOffline -> {
-                                        staleDownloads.markUpdating(listOf(chapter.resolvedChapterId))
-                                        downloads.download(chapter, serverUrl)
+                                    isStale && !current.isBusy -> {
+                                        downloads.download(chapter, serverUrl, replaceExisting = true)
                                     }
                                     // Anything already on disk or in flight is removed; anything
                                     // else (including a previous failure) is started.

@@ -96,6 +96,8 @@ class OfflineDownloads(
     private val forgetAudioHash: (Int) -> Unit = {},
     private val forgetAllAudioHashes: () -> Unit = {},
     private val initializeManager: Boolean = true,
+    private val replacementHash: (Int) -> String? = { null },
+    private val replacementCompleted: (Int, String) -> Unit = { _, _ -> },
     session: Flow<SessionState> = tokenStore.session,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -130,6 +132,7 @@ class OfflineDownloads(
     private var readAlongSupported: Boolean = false
 
     private val _downloads = MutableStateFlow<Map<String, ChapterDownload>>(emptyMap())
+    private val unfinishedReplacementDownloads = mutableSetOf<String>()
 
     /**
      * Keep-ahead's off-switch release could not reach the download service, most likely because the
@@ -208,17 +211,19 @@ class OfflineDownloads(
         }
     }
 
-    private fun legacyDownloadKey(url: String, address: String, position: Long): String? {
+    private fun legacyDownloadKey(url: String, address: String, position: Long?): String? {
         if (cacheIdentities.fallbackForServer(address) == null) return null
         val key = DownloadCacheKeys.forUrl(url)
-        if (!downloadCache.isCached(key, position, 1)) return null
+        if (position != null && !downloadCache.isCached(key, position, 1)) return null
         return runCatching {
             DefaultDownloadIndex(databaseProvider).getDownloads().use { cursor ->
                 val owners = buildList {
                     while (cursor.moveToNext()) {
                         val request = cursor.download.request
                         val requestKey = request.customCacheKey ?: request.uri.toString()
-                        if (requestKey == key) add(request.uri.toString())
+                        if (requestKey == key || decodeDownloadIds(request.data)?.invalidationKeys?.contains(key) == true) {
+                            add(request.uri.toString())
+                        }
                     }
                 }
                 key.takeIf {
@@ -242,12 +247,13 @@ class OfflineDownloads(
     val downloadManager: DownloadManager by lazy {
         DownloadManager(
             context,
-            databaseProvider,
-            downloadCache,
-            upstreamFactory,
-            // Two at a time: enough to keep a phone's link busy without starving playback of the
-            // chapter the user is actually listening to.
-            Executors.newFixedThreadPool(MaxParallelDownloads),
+            DefaultDownloadIndex(databaseProvider),
+            staleAudioDownloaderFactory(
+                downloadCache,
+                streamingCache,
+                upstreamFactory,
+                Executors.newFixedThreadPool(MaxParallelDownloads),
+            ),
         ).apply {
             maxParallelDownloads = MaxParallelDownloads
             addListener(
@@ -271,6 +277,11 @@ class OfflineDownloads(
                         downloadManager: DownloadManager,
                         download: Download,
                     ) {
+                        val ids = decodeDownloadIds(download.request.data)
+                        val unfinishedReplacement = unfinishedReplacementDownloads.remove(download.request.id)
+                        if (ids?.replacementHash == null || !unfinishedReplacement) {
+                            (ids?.chapterId ?: TtsRoadMediaIds.chapterId(download.request.id))?.let(forgetAudioHash)
+                        }
                         _downloads.value = _downloads.value - download.request.id
                     }
                 },
@@ -366,6 +377,14 @@ class OfflineDownloads(
         scope.cancel()
     }
 
+    internal fun releaseForTest() {
+        check(!initializeManager)
+        scope.cancel()
+        downloadManager.release()
+        downloadCache.release()
+        streamingCache.release()
+    }
+
     /**
      * Wrap [upstream] so the player reads through both caches before the network.
      *
@@ -389,10 +408,19 @@ class OfflineDownloads(
         chapter: ChapterSummary,
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
+        replaceExisting: Boolean = false,
     ) {
         val identity = cacheIdentities.forServer(serverUrl.orEmpty(), activeCapabilities)
         val spec = chapterDownloadSpec(chapter, serverUrl, identity, origin) ?: return
-        send(spec.toDownloadRequest())
+        val hash = if (replaceExisting) replacementHash(spec.chapterId) ?: return else null
+        val invalidationKeys = if (replaceExisting) {
+            buildSet {
+                add(spec.cacheKey)
+                add(DownloadCacheKeys.forUrl(spec.url, cacheIdentities.fallbackForServer(serverUrl.orEmpty())))
+                legacyDownloadKey(spec.url, serverUrl.orEmpty(), null)?.let(::add)
+            }
+        } else emptySet()
+        send(spec.toDownloadRequest(hash, invalidationKeys))
         pinReadAlongFor(chapter)
     }
 
@@ -419,8 +447,9 @@ class OfflineDownloads(
         chapters: List<ChapterSummary>,
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
+        replaceExisting: Boolean = false,
     ) {
-        chapters.forEach { download(it, serverUrl, origin) }
+        chapters.forEach { download(it, serverUrl, origin, replaceExisting) }
     }
 
     /**
@@ -488,7 +517,6 @@ class OfflineDownloads(
     /** Delete a chapter's audio and its read-along document, or cancel it if it is still downloading. */
     fun remove(chapterId: Int) {
         unpinReadAlong(chapterId)
-        forgetAudioHash(chapterId)
         DownloadService.sendRemoveDownload(
             context,
             TtsRoadDownloadService::class.java,
@@ -713,19 +741,36 @@ class OfflineDownloads(
                     }
                 }
             }.getOrDefault(emptyList())
-            publish(loaded)
+            withContext(Dispatchers.Main.immediate) {
+                publish(loaded.filter { it.request.id !in _downloads.value })
+            }
             refreshCacheBytes()
         }
     }
 
     private fun publish(loaded: List<Download>) {
         if (loaded.isEmpty()) return
+        loaded.forEach(::recordReplacement)
         _downloads.value = _downloads.value + loaded.associate { it.request.id to it.toChapterDownload() }
     }
 
     private fun put(download: Download) {
+        recordReplacement(download)
         _downloads.value = _downloads.value + (download.request.id to download.toChapterDownload())
         refreshCacheBytes()
+    }
+
+    private fun recordReplacement(download: Download) {
+        val ids = decodeDownloadIds(download.request.data)
+        val hash = ids?.replacementHash
+        when {
+            hash == null -> unfinishedReplacementDownloads.remove(download.request.id)
+            download.state == Download.STATE_COMPLETED -> {
+                unfinishedReplacementDownloads.remove(download.request.id)
+                replacementCompleted(ids.chapterId, hash)
+            }
+            download.state != Download.STATE_REMOVING -> unfinishedReplacementDownloads.add(download.request.id)
+        }
     }
 
     private fun Download.toChapterDownload(): ChapterDownload {
@@ -736,6 +781,7 @@ class OfflineDownloads(
             bytesDownloaded = bytesDownloaded,
             origin = ids?.origin ?: DownloadOrigin.Manual,
             fictionId = ids?.fictionId ?: 0,
+            isReplacement = ids?.replacementHash != null,
         )
     }
 
@@ -761,8 +807,11 @@ class OfflineDownloads(
  * the id, host and cache-key decisions testable.
  */
 @OptIn(UnstableApi::class)
-private fun ChapterDownloadSpec.toDownloadRequest(): DownloadRequest =
+private fun ChapterDownloadSpec.toDownloadRequest(
+    replacementHash: String? = null,
+    invalidationKeys: Set<String> = emptySet(),
+): DownloadRequest =
     DownloadRequest.Builder(id, url.toUri())
         .setCustomCacheKey(cacheKey)
-        .setData(encodedIds())
+        .setData(encodedIds(replacementHash, invalidationKeys))
         .build()
