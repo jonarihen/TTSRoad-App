@@ -9,22 +9,37 @@ import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import dk.perspektiva.ttsroad.player.FileHistoryPersistence
+import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.PlayedThreshold
+import dk.perspektiva.ttsroad.player.recentListeningSummary
+import java.io.File
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TransitionFinishedItemTest {
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
     private fun item(id: String) = MediaItem.Builder().setMediaId(id).build()
 
     @Test
@@ -159,6 +174,215 @@ class TransitionFinishedItemTest {
         assertNull(listener.lastProgressItem)
     }
 
+    @Test
+    fun `manual departure stays batched and queue clear flushes exact positions for restart`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        val listener = departingChapterProgressListener(player, this) { item, position, _, _, flushHistory ->
+            recordHistory(history, item, position, testScheduler.currentTime)
+            if (flushHistory) history.flush()
+        }
+        player.addListener(listener)
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, 0L)
+        player.seekTo(0, 23_456L)
+        player.elapse(2_000L)
+
+        player.seekToNextMediaItem()
+        testScheduler.runCurrent()
+
+        assertEquals(27_456L, history.snapshots.value.single().positionMs)
+        assertFalse(file.exists())
+        player.elapse(3_000L)
+        player.clearMediaItems()
+        testScheduler.runCurrent()
+
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals(history.snapshots.value, restarted.snapshots.value)
+        assertEquals(listOf("chapter:1", "chapter:2"), restarted.snapshots.value.map { it.mediaId })
+        assertEquals(listOf(27_456L, 6_000L), restarted.snapshots.value.map { it.positionMs })
+        assertNull(listener.lastProgressItem)
+    }
+
+    @Test
+    fun `automatic completion flushes departing duration and retains played preference gating`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        val saves = mutableListOf<SavedProgress>()
+        player.addListener(departingChapterProgressListener(player, this) { item, position, duration, completed, flushHistory ->
+            saves += SavedProgress(item, position, duration, completed)
+            recordHistory(history, item, position, testScheduler.currentTime)
+            assertTrue(flushHistory)
+            if (flushHistory) history.flush()
+        })
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, 0L)
+
+        player.advanceAutomatically()
+        testScheduler.runCurrent()
+
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals("chapter:1", restarted.snapshots.value.single().mediaId)
+        assertEquals(120_000L, restarted.snapshots.value.single().positionMs)
+        val saved = saves.single()
+        assertEquals(120_000L, saved.duration)
+        assertTrue(PlayedThreshold.reached(saved.position, saved.duration, true, saved.completed))
+        assertFalse(PlayedThreshold.reached(saved.position, saved.duration, false, saved.completed))
+    }
+
+    @Test
+    fun `rapid departing saves cannot replace current tracking while exact history is flushed on stop`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        val finishSave = CompletableDeferred<Unit>()
+        val listener = departingChapterProgressListener(player, this) { item, position, _, _, flushHistory ->
+            recordHistory(history, item, position, testScheduler.currentTime)
+            if (flushHistory) history.flush()
+            finishSave.await()
+        }
+        player.addListener(listener)
+        player.seekTo(0, 23_456L)
+        player.seekToNextMediaItem()
+        testScheduler.runCurrent()
+        player.elapse(2_000L)
+        player.seekToNextMediaItem()
+        testScheduler.runCurrent()
+        assertEquals("chapter:3", listener.lastProgressItem?.mediaId)
+        assertFalse(file.exists())
+
+        player.elapse(3_000L)
+        player.clearMediaItems()
+        testScheduler.runCurrent()
+        finishSave.complete(Unit)
+        testScheduler.runCurrent()
+
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals(history.snapshots.value, restarted.snapshots.value)
+        assertEquals(listOf("chapter:1", "chapter:2", "chapter:3"), restarted.snapshots.value.map { it.mediaId })
+        assertEquals(listOf(23_456L, 4_000L, 6_000L), restarted.snapshots.value.map { it.positionMs })
+        assertNull(listener.lastProgressItem)
+    }
+
+    @Test
+    fun `teardown long after pause flushes existing history without a new listening timestamp`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val recordingScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), recordingScope)
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+        advanceTimeBy(10_000L)
+        player.elapse(10_000L)
+        player.pause()
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+        history.flush()
+        val pausedHistory = history.snapshots.value
+        val pauseTimestamp = pausedHistory.last().timestamp
+        advanceTimeBy(3_600_000L)
+        recordingScope.cancel()
+        assertFalse(player.isPlaying)
+        assertTrue(player.currentMediaItem != null)
+
+        flushHistoryForTeardown(player, history) { item, position ->
+            recordHistory(history, item, position, testScheduler.currentTime)
+        }
+
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals(pausedHistory, history.snapshots.value)
+        assertEquals(pausedHistory, restarted.snapshots.value)
+        assertEquals(pauseTimestamp, recentListeningSummary(restarted.snapshots.value, testScheduler.currentTime).newestAt)
+    }
+
+    @Test
+    fun `active teardown commits the latest position and actual listening timestamp before restart`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val recordingScope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), recordingScope)
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+        advanceTimeBy(10_000L)
+        player.elapse(10_000L)
+        recordingScope.cancel()
+        assertTrue(player.isPlaying)
+        assertFalse(file.exists())
+
+        flushHistoryForTeardown(player, history) { item, position ->
+            recordHistory(history, item, position, testScheduler.currentTime)
+        }
+
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals(history.snapshots.value, restarted.snapshots.value)
+        assertEquals(111_000L, restarted.snapshots.value.last().positionMs)
+        assertEquals(10_000L, restarted.snapshots.value.last().timestamp)
+        assertEquals(2, restarted.snapshots.value.size)
+    }
+
+    @Test
+    fun `stop after a long pause only flushes the actual pause timestamp`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        player.addListener(idleHistoryFlushListener(history, this))
+        player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying) {
+                    recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+                    launch { history.flush() }
+                }
+            }
+        })
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+        advanceTimeBy(10_000L)
+        player.elapse(10_000L)
+        player.pause()
+        testScheduler.runCurrent()
+        val pausedHistory = history.snapshots.value
+        advanceTimeBy(3_600_000L)
+
+        player.stop()
+        testScheduler.runCurrent()
+
+        assertEquals(Player.STATE_IDLE, player.playbackState)
+        assertTrue(player.currentMediaItem != null)
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals(pausedHistory, history.snapshots.value)
+        assertEquals(pausedHistory, restarted.snapshots.value)
+        assertEquals(10_000L, recentListeningSummary(restarted.snapshots.value, testScheduler.currentTime).newestAt)
+    }
+
+    @Test
+    fun `active stop still records the latest advancing position before idle flush`() = runTest {
+        val player = TransitionPlayer()
+        val file = File(temporaryFolder.root, "playback_history.json")
+        val history = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        player.addListener(idleHistoryFlushListener(history, this))
+        player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!isPlaying) {
+                    recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+                    launch { history.flush() }
+                }
+            }
+        })
+        recordHistory(history, player.currentMediaItem!!, player.currentPosition, testScheduler.currentTime)
+        advanceTimeBy(10_000L)
+        player.elapse(10_000L)
+        assertFalse(file.exists())
+
+        player.stop()
+        testScheduler.runCurrent()
+
+        val restarted = PlaybackHistoryStore(FileHistoryPersistence(file), this)
+        assertEquals(history.snapshots.value, restarted.snapshots.value)
+        assertEquals(111_000L, restarted.snapshots.value.last().positionMs)
+        assertEquals(10_000L, restarted.snapshots.value.last().timestamp)
+        assertEquals(2, restarted.snapshots.value.size)
+    }
+
+    private fun recordHistory(history: PlaybackHistoryStore, item: MediaItem, position: Long, timestamp: Long) {
+        history.record(timestamp, item.mediaId, 10, item.mediaId.substringAfter(":").toInt(), "C", "F", position)
+    }
+
     private data class SavedProgress(
         val item: MediaItem,
         val position: Long,
@@ -176,14 +400,16 @@ class TransitionFinishedItemTest {
         private var index = 0
         private var position = 91_000L
         private var discontinuity: Int? = null
+        private var playing = true
+        private var stopped = false
 
         override fun getState(): State = State.Builder()
             .setAvailableCommands(Player.Commands.Builder().addAllCommands().build())
             .setPlaylist(entries)
             .setCurrentMediaItemIndex(index)
             .setContentPositionMs(PositionSupplier.getConstant(position))
-            .setPlayWhenReady(true, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
-            .setPlaybackState(if (entries.isEmpty()) Player.STATE_IDLE else Player.STATE_READY)
+            .setPlayWhenReady(playing, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            .setPlaybackState(if (stopped || entries.isEmpty()) Player.STATE_IDLE else Player.STATE_READY)
             .setPlaybackParameters(PlaybackParameters(2f))
             .apply { discontinuity?.let { setPositionDiscontinuity(it, position) } }
             .build()
@@ -199,6 +425,16 @@ class TransitionFinishedItemTest {
             discontinuity = Player.DISCONTINUITY_REASON_AUTO_TRANSITION
             invalidateState()
             discontinuity = null
+        }
+
+        override fun handleStop(): ListenableFuture<*> {
+            stopped = true
+            return Futures.immediateVoidFuture()
+        }
+
+        override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
+            playing = playWhenReady
+            return Futures.immediateVoidFuture()
         }
 
         override fun handleSeek(
