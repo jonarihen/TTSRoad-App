@@ -10,6 +10,8 @@ import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.cache.Cache
 import androidx.media3.exoplayer.offline.DefaultDownloadIndex
 import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadCursor
+import androidx.media3.exoplayer.offline.DownloadIndex
 import androidx.media3.exoplayer.offline.DownloadProgress
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
@@ -63,6 +65,8 @@ class OfflineDownloadSessionIdentityTest {
     private val bodyB = ByteArray(32) { 2 }
     private var upstreamOpens = 0
     private var reachable = true
+    private var migrationReads = 0
+    private var migrationRead: ((DefaultDownloadIndex) -> DownloadCursor)? = null
 
     @Before
     fun setUp() {
@@ -315,6 +319,248 @@ class OfflineDownloadSessionIdentityTest {
         assertEquals(0, upstreamOpens)
     }
 
+    @Test
+    fun `a failed migration preserves all spans records and scoped plus legacy offline reads`() = runTest {
+        val server = server()
+        val address = server.url("/").toString()
+        legacyDownload(address)
+        write(downloadCache, "/audio/orphan.mp3", bodyB)
+        write(downloadCache, "canonical.example /audio/chapter.mp3", bodyB)
+        val before = cachedSpans()
+        val records = indexedRecords()
+        session.value = SessionState(serverUrl = address, token = "a")
+        server.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+
+        assertEquals(1, migrationReads)
+        assertEquals(before, cachedSpans())
+        assertEquals(records, indexedRecords())
+        assertEquals(null, shadowOf(RuntimeEnvironment.getApplication()).nextStartedService)
+        reachable = false
+        assertArrayEquals(bodyB, read(address))
+        downloadCache.removeResource("canonical.example /audio/chapter.mp3")
+        assertArrayEquals(bodyA, read(address))
+        assertEquals(0, upstreamOpens)
+    }
+
+    @Test
+    fun `a partial migration index failure never cleans or rekeys records`() = runTest {
+        val server = server()
+        val address = server.url("/").toString()
+        legacyDownload(address)
+        write(downloadCache, "/audio/orphan.mp3", bodyB)
+        val before = cachedSpans()
+        val records = indexedRecords()
+        migrationRead = { index ->
+            val cursor = index.getDownloads()
+            object : DownloadCursor by cursor {
+                override fun moveToNext(): Boolean {
+                    if (cursor.position >= 0) throw IOException("partial read")
+                    return cursor.moveToNext()
+                }
+            }
+        }
+        session.value = SessionState(serverUrl = address, token = "a")
+        server.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+
+        assertEquals(before, cachedSpans())
+        assertEquals(records, indexedRecords())
+        assertEquals(null, shadowOf(RuntimeEnvironment.getApplication()).nextStartedService)
+        reachable = false
+        assertArrayEquals(bodyA, read(address))
+    }
+
+    @Test
+    fun `foreground retry after a read fault migrates only verified owners and genuine orphans`() = runTest {
+        val server = server()
+        val address = server.url("/").toString()
+        legacyDownload(address)
+        val foreign = DownloadRequest.Builder("chapter:8", Uri.parse("https://other.example/audio/foreign.mp3"))
+            .setCustomCacheKey("/audio/foreign.mp3").build()
+        DefaultDownloadIndex(databaseProvider).putDownload(
+            Download(foreign, Download.STATE_COMPLETED, 0, 0, bodyB.size.toLong(), 0, 0),
+        )
+        write(downloadCache, "/audio/foreign.mp3", bodyB)
+        write(downloadCache, "/audio/orphan.mp3", bodyB)
+        session.value = SessionState(serverUrl = address, token = "a")
+        server.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        assertEquals(1, migrationReads)
+        val fresh = queue(address)
+        write(downloadCache, fresh.customCacheKey!!, bodyB)
+        assertEquals("canonical.example /audio/chapter.mp3", fresh.customCacheKey)
+        migrationRead = { it.getDownloads() }
+
+        offline.retryPendingIdentityMigration()
+        runCurrent()
+
+        assertEquals(2, migrationReads)
+        assertEquals(setOf("/audio/chapter.mp3", "/audio/foreign.mp3", fresh.customCacheKey), downloadCache.keys)
+        val application = shadowOf(RuntimeEnvironment.getApplication())
+        val removed = application.nextStartedService
+        assertEquals(DownloadService.ACTION_REMOVE_DOWNLOAD, removed.action)
+        assertEquals("chapter:7", removed.getStringExtra(DownloadService.KEY_CONTENT_ID))
+        val added = application.nextStartedService
+        val request = added.getParcelableExtra(DownloadService.KEY_DOWNLOAD_REQUEST, DownloadRequest::class.java)!!
+        assertEquals(fresh.customCacheKey, request.customCacheKey)
+        assertEquals(address + "audio/chapter.mp3", request.uri.toString())
+        assertEquals(null, application.nextStartedService)
+        offline.retryPendingIdentityMigration()
+        runCurrent()
+        assertEquals(2, migrationReads)
+    }
+
+    @Test
+    fun `a download queued while the index snapshot closes is canonical scoped and remains offline`() = runTest {
+        val server = server()
+        val address = server.url("/").toString()
+        legacyDownload(address)
+        session.value = SessionState(serverUrl = address, token = "a")
+        server.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        var fresh: DownloadRequest? = null
+        migrationRead = { index ->
+            val cursor = index.getDownloads()
+            object : DownloadCursor by cursor {
+                override fun close() {
+                    cursor.close()
+                    fresh = queue(address)
+                    write(downloadCache, fresh!!.customCacheKey!!, bodyB)
+                }
+            }
+        }
+
+        offline.retryPendingIdentityMigration()
+        runCurrent()
+
+        assertEquals("canonical.example /audio/chapter.mp3", fresh!!.customCacheKey)
+        reachable = false
+        assertArrayEquals(bodyB, read(address))
+        assertTrue(downloadCache.isCached(fresh!!.customCacheKey!!, 0, bodyB.size.toLong()))
+    }
+
+    @Test
+    fun `ambiguous legacy records are not rekeyed during a successful migration`() = runTest {
+        val server = server()
+        val address = server.url("/").toString()
+        legacyDownload(address)
+        val foreign = DownloadRequest.Builder("chapter:8", Uri.parse("https://other.example/audio/chapter.mp3"))
+            .setCustomCacheKey("/audio/chapter.mp3").build()
+        DefaultDownloadIndex(databaseProvider).putDownload(
+            Download(foreign, Download.STATE_COMPLETED, 0, 0, bodyB.size.toLong(), 0, 0),
+        )
+        val before = cachedSpans()
+        val records = indexedRecords()
+        migrationRead = { it.getDownloads() }
+        session.value = SessionState(serverUrl = address, token = "a")
+        server.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+
+        assertEquals(before, cachedSpans())
+        assertEquals(records, indexedRecords())
+        assertEquals(null, shadowOf(RuntimeEnvironment.getApplication()).nextStartedService)
+        reachable = false
+        assertTrue(runCatching { read(address) }.isFailure)
+    }
+
+    @Test
+    fun `failed A migration is cancelled when B has old server discovery`() = runTest {
+        assertFailedMigrationServerSwitch(MockResponse().setResponseCode(404))
+    }
+
+    @Test
+    fun `failed A migration is cancelled when B omits a canonical identity`() = runTest {
+        assertFailedMigrationServerSwitch(MockResponse().setBody("""{"capabilities":{}}"""))
+    }
+
+    private suspend fun TestScope.assertFailedMigrationServerSwitch(discovery: MockResponse) {
+        val first = server()
+        val second = server()
+        val addressA = first.url("/").toString()
+        val addressB = second.url("/").toString()
+        legacyDownload(addressA)
+        session.value = SessionState(serverUrl = addressA, token = "a")
+        first.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        val requestA = queue(addressA)
+        write(downloadCache, requestA.customCacheKey!!, bodyA)
+        val before = cachedSpans()
+        val records = indexedRecords()
+        assertEquals(1, migrationReads)
+        session.value = SessionState(serverUrl = addressB, token = "b")
+        second.enqueue(discovery)
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        migrationRead = { it.getDownloads() }
+        offline.retryPendingIdentityMigration()
+        runCurrent()
+
+        assertEquals(1, migrationReads)
+        assertEquals(before, cachedSpans())
+        assertEquals(records, indexedRecords())
+        assertEquals(null, shadowOf(RuntimeEnvironment.getApplication()).nextStartedService)
+        reachable = false
+        assertTrue(runCatching { read(addressB) }.isFailure)
+        val requestB = queue(addressB)
+        assertNotEquals(requestA.customCacheKey, requestB.customCacheKey)
+        assertTrue(requestB.customCacheKey!!.startsWith("address:"))
+        write(downloadCache, requestB.customCacheKey!!, bodyB)
+        assertArrayEquals(bodyB, read(addressB))
+    }
+
+    @Test
+    fun `session switch inside the index snapshot aborts destructive work`() = runTest {
+        val first = server()
+        val second = server().url("/").toString()
+        val address = first.url("/").toString()
+        legacyDownload(address)
+        write(downloadCache, "/audio/orphan.mp3", bodyB)
+        val before = cachedSpans()
+        val records = indexedRecords()
+        migrationRead = { index ->
+            val cursor = index.getDownloads()
+            object : DownloadCursor by cursor {
+                override fun close() {
+                    cursor.close()
+                    session.value = SessionState(serverUrl = second, token = "b")
+                    testScheduler.runCurrent()
+                }
+            }
+        }
+        session.value = SessionState(serverUrl = address, token = "a")
+        first.enqueue(canonicalDiscovery())
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        offline.retryPendingIdentityMigration()
+        runCurrent()
+
+        assertEquals(1, migrationReads)
+        assertEquals(before, cachedSpans())
+        assertEquals(records, indexedRecords())
+        assertEquals(null, shadowOf(RuntimeEnvironment.getApplication()).nextStartedService)
+        reachable = false
+        assertTrue(runCatching { read(second) }.isFailure)
+    }
+
+    private fun indexedRecords(): List<Pair<DownloadRequest, Int>> =
+        DefaultDownloadIndex(databaseProvider).getDownloads().use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.download.request to cursor.download.state)
+            }
+        }
+
+    private fun cachedSpans(): Map<String, List<Pair<Long, List<Byte>>>> =
+        downloadCache.keys.associateWith { key ->
+            downloadCache.getCachedSpans(key).map { it.position to it.file!!.readBytes().toList() }
+        }
+
     private suspend fun TestScope.assertLegacyPlayback(discovery: MockResponse) {
         val server = server()
         val address = server.url("/").toString()
@@ -406,6 +652,15 @@ class OfflineDownloadSessionIdentityTest {
         downloadPrefs = emptyFlow(),
         initializeManager = false,
         session = session,
+        migrationIndex = object : DownloadIndex {
+            override fun getDownload(id: String): Download? = DefaultDownloadIndex(databaseProvider).getDownload(id)
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                migrationReads++
+                val index = DefaultDownloadIndex(databaseProvider)
+                return migrationRead?.invoke(index) ?: throw IOException("migration disabled")
+            }
+        },
+        migrationDispatcher = Dispatchers.Main,
     )
 
     private fun cache(getter: String): Cache = OfflineDownloads::class.java.getDeclaredMethod(getter)

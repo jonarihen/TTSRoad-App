@@ -9,6 +9,11 @@ import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheKeyFactory
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.offline.DefaultDownloadIndex
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadCursor
+import androidx.media3.exoplayer.offline.DownloadIndex
+import androidx.media3.exoplayer.offline.DownloadRequest
 import android.net.Uri
 import dk.perspektiva.ttsroad.data.StreamingCacheUnlimited
 import java.io.File
@@ -45,6 +50,7 @@ class MediaCachesTest {
     private lateinit var downloadCache: Cache
     private lateinit var streamingCache: Cache
     private lateinit var streamingEvictor: ResizableLruCacheEvictor
+    private lateinit var downloadIndex: DefaultDownloadIndex
 
     /** Switched off to mean airplane mode: the only way to prove a read came off the disk. */
     private var serverReachable = true
@@ -56,6 +62,7 @@ class MediaCachesTest {
     fun setUp() {
         val context = RuntimeEnvironment.getApplication()
         val provider = StandaloneDatabaseProvider(context)
+        downloadIndex = DefaultDownloadIndex(provider)
         downloadCache = SimpleCache(
             File(context.filesDir, "test_downloads_${System.nanoTime()}"),
             NoOpCacheEvictor(),
@@ -207,14 +214,289 @@ class MediaCachesTest {
         assertEquals(5, streamingCache.keys.size)
     }
 
+    @Test
+    fun `an index open failure retains every cached span and download record`() {
+        assertFailedMigrationRetainsLibrary(object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                throw IOException("index unavailable")
+            }
+        })
+    }
+
+    @Test
+    fun `an index cursor failure after one record retains the entire library`() {
+        assertFailedMigrationRetainsLibrary(object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun moveToNext(): Boolean {
+                        if (cursor.position >= 0) throw IOException("cursor read failed")
+                        return cursor.moveToNext()
+                    }
+                }
+            }
+        })
+    }
+
+    @Test
+    fun `an index cursor close failure retains every cached span and record`() {
+        assertFailedMigrationRetainsLibrary(object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        throw IOException("cursor close failed")
+                    }
+                }
+            }
+        })
+    }
+
+    @Test
+    fun `a failed identity migration retries the same identity when the index recovers`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val incoming = DownloadCacheKeys.serverIdentity("https://ttsroad.example")!!
+        var unavailable = true
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                if (unavailable) throw IOException("index unavailable")
+                return downloadIndex.getDownloads(*states)
+            }
+        }
+        val rekeyed = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            rekeyed += request.id
+            downloadCache.removeResource(request.customCacheKey!!)
+            val replacement = DownloadRequest.Builder(request.id, request.uri)
+                .setCustomCacheKey(DownloadCacheKeys.forUrl(request.uri.toString(), incoming))
+                .setData(request.data)
+                .build()
+            downloadIndex.putDownload(
+                Download(replacement, Download.STATE_QUEUED, 0, 0, -1, 0, 0),
+            )
+        }
+
+        assertFalse(migration.migrate(incoming, index, downloadCache, rekey = rekey))
+        unavailable = false
+        assertTrue(migration.migrate(incoming, index, downloadCache, rekey = rekey))
+
+        assertEquals(incoming, migration.identity)
+        assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.toSet())
+        assertEquals(setOf("other.example /audio/chapter.mp3", "other.example /audio/orphan.mp3"), downloadCache.keys)
+        for (id in rekeyed) {
+            val download = downloadIndex.getDownload(id)!!
+            assertEquals(Download.STATE_QUEUED, download.state)
+            assertTrue(download.request.customCacheKey!!.startsWith("$incoming "))
+        }
+        assertEquals(Download.STATE_COMPLETED, downloadIndex.getDownload("chapter:3")!!.state)
+        assertTrue(migration.migrate(incoming, index, downloadCache, rekey = rekey))
+        assertEquals(2, rekeyed.size)
+    }
+
+    @Test
+    fun `a successful identity index read removes only genuine unscoped orphans`() {
+        seedMigrationLibrary()
+        val records = indexedRecords()
+        val migration = DownloadIdentityMigration()
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertTrue(
+            migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekeyed::add),
+        )
+
+        assertEquals(
+            setOf(DefaultKey, "/audio/second.mp3", "other.example /audio/chapter.mp3", "other.example /audio/orphan.mp3"),
+            downloadCache.keys,
+        )
+        assertTrue(downloadCache.isCached(DefaultKey, 0, body.size.toLong() * 2))
+        assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.map { it.id }.toSet())
+        assertEquals(records, indexedRecords())
+    }
+
+    @Test
+    fun `a successfully empty identity index removes unscoped orphans but keeps scoped spans`() {
+        writeInto(downloadCache)
+        writeInto(downloadCache, "other.example /audio/chapter.mp3")
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertTrue(
+            DownloadIdentityMigration().migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekeyed::add),
+        )
+
+        assertEquals(setOf("other.example /audio/chapter.mp3"), downloadCache.keys)
+        assertTrue(rekeyed.isEmpty())
+        assertTrue(indexedRecords().isEmpty())
+    }
+
+    @Test
+    fun `a session reset during the index read aborts cleanup and rekeying`() {
+        seedMigrationLibrary()
+        val records = indexedRecords()
+        val spans = cachedSpans()
+        val migration = DownloadIdentityMigration()
+        var current = true
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        current = false
+                    }
+                }
+            }
+        }
+
+        assertFalse(
+            migration.migrate("ttsroad.example", index, downloadCache, isCurrent = { current }) {
+                error("must not rekey a previous session")
+            },
+        )
+
+        assertEquals(null, migration.identity)
+        assertEquals(records, indexedRecords())
+        assertEquals(spans, cachedSpans())
+    }
+
+    @Test
+    fun `a download queued during the snapshot uses the selected identity and survives migration`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val incoming = "ttsroad.example"
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        val key = DownloadCacheKeys.forUrl(Url, incoming)
+                        writeInto(downloadCache, key)
+                        val request = DownloadRequest.Builder("chapter:4", Uri.parse(Url)).setCustomCacheKey(key).build()
+                        downloadIndex.putDownload(Download(request, Download.STATE_COMPLETED, 0, 0, body.size.toLong(), 0, 0))
+                    }
+                }
+            }
+        }
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertTrue(migration.migrate("ttsroad.example", index, downloadCache, rekey = rekeyed::add))
+
+        assertEquals("ttsroad.example $DefaultKey", downloadIndex.getDownload("chapter:4")!!.request.customCacheKey)
+        assertFalse(rekeyed.any { it.id == "chapter:4" })
+        serverReachable = false
+        assertArrayEquals(body, readThroughChain(cacheKeyFactory = CacheKeyFactory { DownloadCacheKeys.forUrl(it.uri.toString(), incoming) }))
+    }
+
+    @Test
+    fun `a refused rekey keeps migration incomplete and retries after foreground recovery`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val before = cachedSpans()
+        val records = indexedRecords()
+        var refused = true
+        val dispatched = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            if (refused) throw IllegalStateException("background service start refused")
+            dispatched += request.id
+        }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(null, migration.identity)
+        assertEquals(before, cachedSpans())
+        assertEquals(records, indexedRecords())
+        refused = false
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals("ttsroad.example", migration.identity)
+        assertEquals(setOf("chapter:1", "chapter:2"), dispatched.toSet())
+        assertFalse(downloadCache.keys.contains("/audio/orphan.mp3"))
+    }
+
+    @Test
+    fun `a rekey whose remove succeeded but add failed retains its request even without an index row`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        var refuseAdd = true
+        val replacementIds = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            downloadIndex.removeDownload(request.id)
+            downloadCache.removeResource(request.customCacheKey!!)
+            if (refuseAdd) throw IllegalStateException("add refused")
+            val replacement = DownloadRequest.Builder(request.id, request.uri)
+                .setCustomCacheKey(DownloadCacheKeys.forUrl(request.uri.toString(), "ttsroad.example"))
+                .setData(request.data)
+                .build()
+            downloadIndex.putDownload(Download(replacement, Download.STATE_QUEUED, 0, 0, -1, 0, 0))
+            replacementIds += request.id
+        }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(null, migration.identity)
+        assertEquals(null, downloadIndex.getDownload("chapter:1"))
+        assertTrue(downloadCache.keys.contains("/audio/orphan.mp3"))
+        refuseAdd = false
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(setOf("chapter:1", "chapter:2"), replacementIds.toSet())
+        for (id in replacementIds) assertEquals(Download.STATE_QUEUED, downloadIndex.getDownload(id)!!.state)
+        assertFalse(downloadCache.keys.contains("/audio/orphan.mp3"))
+    }
+
+    private fun assertFailedMigrationRetainsLibrary(index: DownloadIndex) {
+        seedMigrationLibrary()
+        val records = indexedRecords()
+        val spans = cachedSpans()
+        val bytes = downloadCache.cacheSpace
+        val migration = DownloadIdentityMigration()
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertFalse(migration.migrate("ttsroad.example", index, downloadCache, rekey = rekeyed::add))
+
+        assertEquals(null, migration.identity)
+        assertTrue(rekeyed.isEmpty())
+        assertEquals(records, indexedRecords())
+        assertEquals(spans, cachedSpans())
+        assertEquals(bytes, downloadCache.cacheSpace)
+        serverReachable = false
+        assertArrayEquals(body, readThroughChain())
+    }
+
+    private fun seedMigrationLibrary() {
+        listOf(DefaultKey, "/audio/second.mp3", "other.example /audio/chapter.mp3").forEachIndexed { i, key ->
+            writeInto(downloadCache, key)
+            val request = DownloadRequest.Builder("chapter:${i + 1}", Uri.parse("https://ttsroad.example${key.substringAfter(' ')}"))
+                .setCustomCacheKey(key)
+                .setData(byteArrayOf(i.toByte()))
+                .build()
+            downloadIndex.putDownload(
+                Download(request, Download.STATE_COMPLETED, 0, 0, body.size.toLong(), 0, 0),
+            )
+        }
+        writeInto(downloadCache, DefaultKey, body.size.toLong())
+        writeInto(downloadCache, "/audio/orphan.mp3")
+        writeInto(downloadCache, "other.example /audio/orphan.mp3")
+    }
+
+    private fun indexedRecords(): List<Pair<DownloadRequest, Int>> =
+        downloadIndex.getDownloads().use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.download.request to cursor.download.state)
+            }
+        }
+
+    private fun cachedSpans(): Map<String, List<Pair<Long, List<Byte>>>> =
+        downloadCache.keys.associateWith { key ->
+            downloadCache.getCachedSpans(key).map { span -> span.position to span.file!!.readBytes().toList() }
+        }
+
     // --- helpers ---------------------------------------------------------------------------
 
-    private fun readThroughChain(url: String = Url): ByteArray {
+    private fun readThroughChain(url: String = Url, cacheKeyFactory: CacheKeyFactory = KeyFactory): ByteArray {
         val source = readThroughFactory(
             downloadCache = downloadCache,
             streamingCache = streamingCache,
             upstream = FakeUpstreamFactory(),
-            cacheKeyFactory = KeyFactory,
+            cacheKeyFactory = cacheKeyFactory,
         ).createDataSource()
 
         val spec = DataSpec.Builder().setUri(Uri.parse(url)).build()
@@ -234,9 +516,9 @@ class MediaCachesTest {
     }
 
     /** Put [body] into [cache] the way a download does: written directly, not through the chain. */
-    private fun writeInto(cache: Cache, key: String = DefaultKey) {
-        val hole = cache.startReadWrite(key, 0, body.size.toLong())
-        val file = cache.startFile(key, 0, body.size.toLong())
+    private fun writeInto(cache: Cache, key: String = DefaultKey, position: Long = 0) {
+        val hole = cache.startReadWrite(key, position, body.size.toLong())
+        val file = cache.startFile(key, position, body.size.toLong())
         file.writeBytes(body)
         cache.commitFile(file, body.size.toLong())
         cache.releaseHoleSpan(hole)

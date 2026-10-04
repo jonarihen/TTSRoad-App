@@ -1,5 +1,11 @@
 package dk.perspektiva.ttsroad.download
 
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.cache.Cache
+import androidx.media3.exoplayer.offline.DownloadIndex
+import androidx.media3.exoplayer.offline.DownloadRequest
+
 /**
  * The decisions behind re-filing 0.8.0's cache entries under a server identity.
  *
@@ -62,3 +68,53 @@ internal fun strandedStreamKeys(
     cacheKeys: Collection<String>,
     indexedKeys: Set<String?>,
 ): List<String> = cacheKeys.filter { it !in indexedKeys }
+
+@OptIn(UnstableApi::class)
+internal class DownloadIdentityMigration {
+    @Volatile
+    var identity: String? = null
+        private set
+
+    private val undispatched = mutableMapOf<String, MutableMap<String, DownloadRequest>>()
+
+    @Synchronized
+    fun migrate(
+        incoming: String,
+        index: DownloadIndex,
+        cache: Cache,
+        isCurrent: () -> Boolean = { true },
+        ownsLegacyRequest: (DownloadRequest) -> Boolean = { true },
+        rekey: (DownloadRequest) -> Unit,
+    ): Boolean {
+        if (!shouldAdoptIdentity(identity, incoming)) return true
+        val requests = runCatching {
+            index.getDownloads().use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) add(cursor.download.request)
+                }
+            }
+        }.getOrNull() ?: return false
+        if (!isCurrent()) return false
+
+        val indexed = requests.mapTo(mutableSetOf()) { it.customCacheKey ?: it.uri.toString() }
+        val stale = requests.filter { request ->
+            val key = request.customCacheKey ?: return@filter false
+            !DownloadCacheKeys.isScoped(key) && requests.filter { it.customCacheKey == key }.all(ownsLegacyRequest)
+        }
+        if (!isCurrent()) return false
+        val pending = undispatched.getOrPut(incoming) { mutableMapOf() }
+        stale.forEach { pending[it.id] = it }
+        for (request in pending.values.toList()) {
+            if (!isCurrent()) return false
+            if (runCatching { rekey(request) }.isFailure) return false
+            pending.remove(request.id)
+        }
+        if (!isCurrent()) return false
+        runCatching {
+            orphanedCacheKeys(cache.keys, indexed).forEach(cache::removeResource)
+        }
+        undispatched.remove(incoming)
+        identity = incoming
+        return true
+    }
+}

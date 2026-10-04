@@ -16,6 +16,7 @@ import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.offline.DefaultDownloadIndex
 import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadIndex
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
@@ -29,6 +30,7 @@ import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import java.io.File
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -97,6 +99,8 @@ class OfflineDownloads(
     private val forgetAllAudioHashes: () -> Unit = {},
     private val initializeManager: Boolean = true,
     session: Flow<SessionState> = tokenStore.session,
+    private val migrationIndex: DownloadIndex? = null,
+    private val migrationDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -118,7 +122,17 @@ class OfflineDownloads(
     @Volatile
     private var activeCapabilities = ServerCapabilities.Baseline
 
-    private var migrationIdentity: String? = null
+    private val identityMigration = DownloadIdentityMigration()
+    private val identityMigrationLock = Any()
+
+    @Volatile
+    private var pendingMigration: IdentityMigrationAttempt? = null
+
+    private data class IdentityMigrationAttempt(
+        val identity: String,
+        val session: dk.perspektiva.ttsroad.core.AudioAuthSnapshot,
+        val capabilities: ServerCapabilities,
+    )
 
     /**
      * Whether this server can serve read-along documents at all.
@@ -282,13 +296,14 @@ class OfflineDownloads(
         scope.launch {
             combine(session, capabilities) { current, discovered -> current to discovered }
                 .collectLatest { (current, discovered) ->
+                    val snapshot = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(current.serverUrl, current.authorizationHeader)
+                    if (snapshot != audioAuth) pendingMigration = null
                     activeCapabilities = discovered
                     cacheIdentities.forServer(current.serverUrl, discovered)
-                    audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(current.serverUrl, current.authorizationHeader)
+                    audioAuth = snapshot
                     readAlongSupported = discovered.discoveryBaseUrl == current.serverUrl && discovered.readAlong
-                    if (initializeManager && current.isLoggedIn) {
-                        adoptServerIdentity(cacheIdentities.advertisedForServer(current.serverUrl, discovered))
-                    }
+                    val identity = cacheIdentities.advertisedForServer(current.serverUrl, discovered)
+                    if (current.isLoggedIn) adoptServerIdentity(identity) else pendingMigration = null
                 }
         }
         // Requirements are enforced by the manager itself, so a queued chapter waits for Wi-Fi
@@ -545,6 +560,17 @@ class OfflineDownloads(
         if (keepAheadReleasePending) keepAheadRetry.value++
     }
 
+    fun retryPendingIdentityMigration() {
+        val attempt = pendingMigration ?: return
+        if (attempt.session != audioAuth) {
+            pendingMigration = null
+            return
+        }
+        if (initializeManager || migrationIndex != null) {
+            scope.launch(migrationDispatcher) { performIdentityMigration(attempt) }
+        }
+    }
+
     /**
      * Restart whatever was still in flight when the app was last killed.
      *
@@ -554,6 +580,7 @@ class OfflineDownloads(
      */
     fun resumeUnfinished() {
         retryPendingKeepAheadRelease()
+        retryPendingIdentityMigration()
         runCatching {
             DownloadService.sendResumeDownloads(
                 context,
@@ -643,65 +670,50 @@ class OfflineDownloads(
      * start the whole library downloading a second time.
      */
     private fun adoptServerIdentity(identity: String?) {
-        if (!shouldAdoptIdentity(current = migrationIdentity, incoming = identity)) return
-        migrationIdentity = identity
-        scope.launch(Dispatchers.IO) {
-            // Only unscoped entries move. One already carrying a different identity belongs to
-            // another server the user also downloaded from, and re-keying it here would hand its
-            // audio to this one — the very collision the identity exists to prevent.
-            val stale = runCatching {
-                downloadManager.downloadIndex.getDownloads().use { cursor ->
-                    buildList {
-                        while (cursor.moveToNext()) {
-                            val request = cursor.download.request
-                            val key = request.customCacheKey ?: continue
-                            if (!DownloadCacheKeys.isScoped(key)) add(request)
-                        }
-                    }
-                }
-            }.getOrDefault(emptyList())
-
-            // Unscoped spans belonging to no download record are what streaming left behind.
-            // Nothing will ever read them again, so they are dropped rather than re-fetched — the
-            // chapter simply streams once more if it is played.
-            val indexed = stale.mapTo(mutableSetOf()) { it.customCacheKey }
-            runCatching {
-                orphanedCacheKeys(downloadCache.keys, indexed)
-                    .forEach(downloadCache::removeResource)
-            }
-
-            // Wrapped like resumeUnfinished: this can run while the process is in the background
-            // (the media service builds this class too) and starting the download service from
-            // there is not always allowed. A row that does not make it keeps the honest state —
-            // not downloaded — rather than taking the process down.
-            runCatching {
-                stale.forEach { request ->
-                    // Removed before it is re-added, so the manager has nothing to merge the new
-                    // key into; both go through the one service queue, so they stay in order.
-                    DownloadService.sendRemoveDownload(
-                        context,
-                        TtsRoadDownloadService::class.java,
-                        request.id,
-                        /* foreground= */ false,
-                    )
-                    // The recorded URL may name an address this phone can no longer reach, so it is
-                    // put back on the one signed in — the rewrite a fresh download would do.
-                    send(
-                        DownloadRequest.Builder(
-                            request.id,
-                            ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), serverUrl)?.toUri() ?: request.uri,
-                        )
-                            .setCustomCacheKey(
-                                DownloadCacheKeys.forUrl(request.uri.toString(), identity),
-                            )
-                            .setData(request.data)
-                            .build(),
-                    )
-                }
-            }
-            refreshCacheBytes()
+        if (!shouldAdoptIdentity(current = identityMigration.identity, incoming = identity)) {
+            pendingMigration = null
+            return
         }
+        val attempt = IdentityMigrationAttempt(identity ?: return, audioAuth, activeCapabilities)
+        pendingMigration = attempt
+        if (initializeManager || migrationIndex != null) retryPendingIdentityMigration()
     }
+
+    private fun performIdentityMigration(attempt: IdentityMigrationAttempt): Boolean =
+        synchronized(identityMigrationLock) {
+            if (pendingMigration !== attempt || audioAuth != attempt.session) return@synchronized false
+            val migrated = identityMigration.migrate(
+                incoming = attempt.identity,
+                index = migrationIndex ?: downloadManager.downloadIndex,
+                cache = downloadCache,
+                isCurrent = { pendingMigration === attempt && audioAuth == attempt.session },
+                ownsLegacyRequest = { request ->
+                    cacheIdentities.ownsLegacyUrl(attempt.session.serverUrl, request.uri.toString(), attempt.capabilities)
+                },
+            ) { request ->
+                check(audioAuth == attempt.session && pendingMigration === attempt)
+                DownloadService.sendRemoveDownload(
+                    context,
+                    TtsRoadDownloadService::class.java,
+                    request.id,
+                    false,
+                )
+                send(
+                    DownloadRequest.Builder(
+                        request.id,
+                        ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), attempt.session.serverUrl)?.toUri() ?: request.uri,
+                    )
+                        .setCustomCacheKey(
+                            DownloadCacheKeys.forUrl(request.uri.toString(), attempt.identity),
+                        )
+                        .setData(request.data)
+                        .build(),
+                )
+            }
+            if (migrated && pendingMigration === attempt) pendingMigration = null
+            if (migrated) refreshCacheBytes()
+            migrated
+        }
 
     /** Read every persisted download, including the completed ones the manager does not hold. */
     private fun loadIndex() {

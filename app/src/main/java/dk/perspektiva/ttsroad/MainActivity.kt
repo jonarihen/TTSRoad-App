@@ -397,7 +397,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        ServiceLocator.offlineDownloads(this).retryPendingKeepAheadRelease()
+        val downloads = ServiceLocator.offlineDownloads(this)
+        downloads.retryPendingKeepAheadRelease()
+        downloads.retryPendingIdentityMigration()
     }
 
     override fun onNewIntent(intent: Intent) {
