@@ -389,6 +389,59 @@ class MediaCachesTest {
         assertArrayEquals(body, readThroughChain(cacheKeyFactory = CacheKeyFactory { DownloadCacheKeys.forUrl(it.uri.toString(), incoming) }))
     }
 
+    @Test
+    fun `a refused rekey keeps migration incomplete and retries after foreground recovery`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val before = cachedSpans()
+        val records = indexedRecords()
+        var refused = true
+        val dispatched = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            if (refused) throw IllegalStateException("background service start refused")
+            dispatched += request.id
+        }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(null, migration.identity)
+        assertEquals(before, cachedSpans())
+        assertEquals(records, indexedRecords())
+        refused = false
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals("ttsroad.example", migration.identity)
+        assertEquals(setOf("chapter:1", "chapter:2"), dispatched.toSet())
+        assertFalse(downloadCache.keys.contains("/audio/orphan.mp3"))
+    }
+
+    @Test
+    fun `a rekey whose remove succeeded but add failed retains its request even without an index row`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        var refuseAdd = true
+        val replacementIds = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            downloadIndex.removeDownload(request.id)
+            downloadCache.removeResource(request.customCacheKey!!)
+            if (refuseAdd) throw IllegalStateException("add refused")
+            val replacement = DownloadRequest.Builder(request.id, request.uri)
+                .setCustomCacheKey(DownloadCacheKeys.forUrl(request.uri.toString(), "ttsroad.example"))
+                .setData(request.data)
+                .build()
+            downloadIndex.putDownload(Download(replacement, Download.STATE_QUEUED, 0, 0, -1, 0, 0))
+            replacementIds += request.id
+        }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(null, migration.identity)
+        assertEquals(null, downloadIndex.getDownload("chapter:1"))
+        assertTrue(downloadCache.keys.contains("/audio/orphan.mp3"))
+        refuseAdd = false
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(setOf("chapter:1", "chapter:2"), replacementIds.toSet())
+        for (id in replacementIds) assertEquals(Download.STATE_QUEUED, downloadIndex.getDownload(id)!!.state)
+        assertFalse(downloadCache.keys.contains("/audio/orphan.mp3"))
+    }
+
     private fun assertFailedMigrationRetainsLibrary(index: DownloadIndex) {
         seedMigrationLibrary()
         val records = indexedRecords()

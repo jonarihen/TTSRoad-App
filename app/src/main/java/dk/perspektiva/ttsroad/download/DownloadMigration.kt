@@ -75,6 +75,8 @@ internal class DownloadIdentityMigration {
     var identity: String? = null
         private set
 
+    private val undispatched = mutableMapOf<String, MutableMap<String, DownloadRequest>>()
+
     @Synchronized
     fun migrate(
         incoming: String,
@@ -100,13 +102,19 @@ internal class DownloadIdentityMigration {
             !DownloadCacheKeys.isScoped(key) && requests.filter { it.customCacheKey == key }.all(ownsLegacyRequest)
         }
         if (!isCurrent()) return false
-        identity = incoming
+        val pending = undispatched.getOrPut(incoming) { mutableMapOf() }
+        stale.forEach { pending[it.id] = it }
+        for (request in pending.values.toList()) {
+            if (!isCurrent()) return false
+            if (runCatching { rekey(request) }.isFailure) return false
+            pending.remove(request.id)
+        }
+        if (!isCurrent()) return false
         runCatching {
             orphanedCacheKeys(cache.keys, indexed).forEach(cache::removeResource)
         }
-        runCatching {
-            stale.forEach(rekey)
-        }
+        undispatched.remove(incoming)
+        identity = incoming
         return true
     }
 }
