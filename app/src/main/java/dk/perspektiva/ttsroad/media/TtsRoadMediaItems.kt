@@ -58,6 +58,8 @@ private fun Bundle.putCompletion(chapter: ChapterSummary) {
     }
 }
 
+internal const val AudioServerUrlExtra = "audio_server_url"
+
 object TtsRoadMediaItems {
     /**
      * Browse-node styling hints. Fictions are cover-led, so they read far better as a grid; chapters
@@ -136,6 +138,7 @@ object TtsRoadMediaItems {
         val audioUrl = ServerUrls.rewriteAudioUrlOrNull(rawUrl, serverUrl) ?: return null
         val audioUri = audioUrl.toUri()
         val extras = Bundle().apply {
+            putString(AudioServerUrlExtra, serverUrl)
             putInt("fiction_id", chapter.resolvedFictionId)
             putInt("chapter_id", chapter.resolvedChapterId)
             chapter.displayNumber?.let { putDouble("display_number", it) }
@@ -190,6 +193,7 @@ object TtsRoadMediaItems {
         val audioUrl = ServerUrls.rewriteAudioUrlOrNull(rawUrl, serverUrl) ?: return null
         val audioUri = audioUrl.toUri()
         val extras = Bundle().apply {
+            putString(AudioServerUrlExtra, serverUrl)
             putInt("fiction_id", item.fictionId)
             putInt("chapter_id", item.chapterId)
             item.chapterNumber?.let { putDouble("display_number", it) }

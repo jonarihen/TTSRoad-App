@@ -14,12 +14,17 @@ import androidx.media3.datasource.ResolvingDataSource
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.data.AccountActionResult
+import dk.perspektiva.ttsroad.data.AudioInfo
+import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.QueueItem
 import dk.perspektiva.ttsroad.data.FakeSessionStore
 import dk.perspektiva.ttsroad.data.LoginResult
 import dk.perspektiva.ttsroad.data.SessionEndReason
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.media.audioItemBelongsToSession
+import dk.perspektiva.ttsroad.media.AudioServerUrlExtra
+import dk.perspektiva.ttsroad.media.TtsRoadMediaItems
 import dk.perspektiva.ttsroad.media.DepartingChapterProgressListener
 import dk.perspektiva.ttsroad.media.discardCrossServerPlayback
 import dk.perspektiva.ttsroad.media.endAudioSession
@@ -612,6 +617,39 @@ class AudioAuthSnapshotTest {
         val item = MediaItem.Builder().setUri("https://home.example/first/audio/chapter.mp3").build()
         assertFalse(audioItemBelongsToSession(item, SessionState(serverUrl = "https://home.example/second/", token = "new")))
         assertTrue(audioItemBelongsToSession(item, SessionState(serverUrl = first.serverUrl, token = "new")))
+    }
+
+    @Test
+    fun `root audio for a prefixed API retains explicit backend ownership and can recover`() = runTest {
+        val address = "https://home.example/ttsroad/"
+        val session = SessionState(serverUrl = address, token = "fresh")
+        val chapter = requireNotNull(TtsRoadMediaItems.chapter(
+            ChapterSummary(id = 7, fictionId = 1, audio = AudioInfo(url = "/audio/book/1.mp3")), serverUrl = address,
+        ))
+        val queued = requireNotNull(TtsRoadMediaItems.queueItem(
+            QueueItem(chapterId = 8, fictionId = 1, audio = AudioInfo(url = "/audio/book/2.mp3")), address,
+        ))
+        for (item in listOf(chapter, queued)) {
+            assertEquals(address, item.mediaMetadata.extras!!.getString(AudioServerUrlExtra))
+            assertTrue(item.localConfiguration!!.uri.toString().startsWith("https://home.example/audio/"))
+            assertTrue(audioItemBelongsToSession(item, session))
+            assertFalse(audioItemBelongsToSession(item, session.copy(serverUrl = "https://home.example/another/")))
+            val stripped = item.buildUpon().setUri(null as android.net.Uri?).build()
+            assertTrue(audioItemBelongsToSession(stripped, session))
+        }
+        val player = RecoveryPlayer(listOf(queued, chapter))
+        try {
+            val error = requireNotNull(player.playerError)
+            recoverAudioPlaybackIfCurrent(player, error, AudioAuthSnapshot(address, "Bearer old"),
+                AudioAuthSnapshot(address, "Bearer fresh"), { session }) {}
+            assertEquals(1, player.prepares)
+            assertEquals(0, player.stops)
+        } finally {
+            player.release()
+        }
+        val legacy = MediaItem.fromUri("https://home.example/audio/book/1.mp3")
+        assertTrue(audioItemBelongsToSession(legacy, session))
+        assertFalse(audioItemBelongsToSession(legacy, session.copy(serverUrl = "https://foreign.example/ttsroad/")))
     }
 
     @Test

@@ -1751,7 +1751,10 @@ private fun audioItemBelongsToServer(item: MediaItem?, serverUrl: String): Boole
     val uri = item?.localConfiguration?.uri ?: item?.requestMetadata?.mediaUri ?: return false
     val request = uri.toString().toHttpUrlOrNull() ?: return false
     val server = runCatching { normalizeBaseUrl(serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
+    val owner = item?.mediaMetadata?.extras?.getString(AudioServerUrlExtra)
+    if (owner != null && !sameAudioServer(AudioAuthSnapshot(owner), AudioAuthSnapshot(serverUrl))) return false
     return ServerUrls.isSameOrigin(request.toString(), server.toString()) &&
-        request.encodedPath.startsWith(server.encodedPath + "audio/")
+        (owner != null || request.encodedPath.startsWith("/audio/") ||
+            request.encodedPath.startsWith(server.encodedPath + "audio/"))
 }
 
