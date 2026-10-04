@@ -1,6 +1,12 @@
 package dk.perspektiva.ttsroad
 
 import android.content.Intent
+import android.content.Context
+import android.os.Bundle
+import androidx.lifecycle.lifecycleScope
+import dk.perspektiva.ttsroad.core.ServiceLocator
+import java.util.UUID
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,7 +30,52 @@ internal sealed interface NotificationRoute {
     data class Play(val fictionId: Int, val chapterId: Int) : NotificationRoute
 }
 
-class NotificationPlayActivity : MainActivity()
+class NotificationPlayActivity : androidx.activity.ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val sessionKey = intent.getStringExtra(NewChapterNotifier.ExtraSessionKey)
+        val route = consumeNotificationRoute(intent, allowPlay = true)
+        if (route !is NotificationRoute.Play) {
+            finish()
+            return
+        }
+        NewChapterNotifier(this).clear()
+        lifecycleScope.launch {
+            try {
+                val session = ServiceLocator.tokenStore(this@NotificationPlayActivity).current()
+                if (session.isLoggedIn && sessionKey == notificationSessionKey(session)) {
+                    startActivity(TrustedNotificationActions.issue(this@NotificationPlayActivity, route, session))
+                }
+            } finally {
+                finish()
+            }
+        }
+    }
+}
+
+internal object TrustedNotificationActions {
+    private const val TicketExtra = "dk.perspektiva.ttsroad.NOTIFICATION_TICKET"
+    private var ticket: Pair<String, NotificationRouteOwner.Request>? = null
+
+    @Synchronized
+    fun issue(context: Context, route: NotificationRoute.Play, session: SessionState): Intent {
+        val key = UUID.randomUUID().toString()
+        ticket = key to NotificationRouteOwner.Request(route).apply { this.session = session }
+        return Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(TicketExtra, key)
+    }
+
+    @Synchronized
+    fun consume(intent: Intent?): NotificationRouteOwner.Request? {
+        val key = intent?.getStringExtra(TicketExtra) ?: return null
+        intent.removeExtra(TicketExtra)
+        val held = ticket ?: return null
+        if (held.first != key) return null
+        ticket = null
+        return held.second
+    }
+}
 
 internal fun consumeNotificationRoute(intent: Intent?, allowPlay: Boolean = false): NotificationRoute? {
     if (intent?.getBooleanExtra(NewChapterNotifier.ExtraOpenNotifications, false) != true) return null
@@ -57,7 +108,12 @@ internal class NotificationRouteOwner : ViewModel() {
     val pending = mutablePending.asStateFlow()
 
     fun accept(intent: Intent?, allowPlay: Boolean = false) {
-        consumeNotificationRoute(intent, allowPlay)?.let { mutablePending.value = Request(it) }
+        val trusted = TrustedNotificationActions.consume(intent)
+        if (trusted != null) {
+            mutablePending.value = trusted
+        } else {
+            consumeNotificationRoute(intent, allowPlay)?.let { mutablePending.value = Request(it) }
+        }
     }
 
     fun consume(request: Request) {
@@ -164,5 +220,7 @@ internal suspend fun playNotificationChapter(
         TtsRoadMediaItems.chapter(it, response.fiction, session.serverUrl) != null
     }
     if (chapters.none { it.resolvedChapterId == route.chapterId }) return false
-    return playQueue(response.copy(chapters = chapters), route.chapterId)
+    val installed = playQueue(response.copy(chapters = chapters), route.chapterId)
+    currentCoroutineContext().ensureActive()
+    return installed && stillAllowed()
 }

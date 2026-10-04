@@ -94,7 +94,8 @@ internal class ChapterNotificationLifetime {
             (previous.serverUrl != current.serverUrl || previous.token != current.token)
         session = current
         if (accountChanged) flags = null
-        if (!current.isLoggedIn || !resolved) return accountChanged
+        if (!current.isLoggedIn) return previous == null || accountChanged
+        if (!resolved) return accountChanged
         val next = capabilities.notifications to capabilities.follows
         val capabilitiesChanged = flags != null && flags != next
         flags = next
@@ -178,7 +179,7 @@ internal fun rememberNewChapters(
                         }
                         if (!ownsSession()) return@LaunchedEffect
                         readyNotificationText(fresh)?.let { (title, body) ->
-                            notifier.notifyReady(title, body, fresh.singleOrNull())
+                            notifier.notifyReady(title, body, fresh.singleOrNull(), session)
                         }
                     } else {
                         state.isUnsupported = true

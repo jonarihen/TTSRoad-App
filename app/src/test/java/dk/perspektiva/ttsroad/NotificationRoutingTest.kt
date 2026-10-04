@@ -62,8 +62,8 @@ class NotificationRoutingTest {
         val body = shadowOf(notification.contentIntent).savedIntent
         val action = shadowOf(notification.actions.single().actionIntent).savedIntent
         assertEquals(NotificationPlayActivity::class.java.name, action.component?.className)
-        assertTrue(action.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
-        assertTrue(action.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
+        assertTrue(body.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
+        assertTrue(body.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
         assertTrue(notification.actions.single().actionIntent.isImmutable)
         assertFalse(notification.contentIntent == notification.actions.single().actionIntent)
         assertEquals(NotificationRoute.List, consumeNotificationRoute(body))
@@ -115,29 +115,90 @@ class NotificationRoutingTest {
 
     @Test
     @Config(application = Application::class)
-    fun `real Play PendingIntent targets nonexported activity and works with fresh route owner`() {
+    fun `private Play PendingIntent finishes trampoline reuses MainActivity and clears tapped notice`() {
         val info = context.packageManager.getActivityInfo(android.content.ComponentName(context, NotificationPlayActivity::class.java), 0)
         assertFalse(info.exported)
+        assertFalse(MainActivity::class.java.isAssignableFrom(NotificationPlayActivity::class.java))
         ServiceLocator.disableDownloadManagerForTest()
+        val store = ServiceLocator.tokenStore(context)
+        kotlinx.coroutines.runBlocking { store.saveLogin(signedIn.serverUrl,
+            dk.perspektiva.ttsroad.data.LoginResponse(token = signedIn.token!!,
+                user = dk.perspektiva.ttsroad.data.MobileUser(id = 1, username = "listener"))) }
+        val main = Robolectric.buildActivity(MainActivity::class.java).create()
         val notifier = NewChapterNotifier(context)
-        notifier.notifyReady("Ready", "Chapter", ChapterNotificationEntry(
-            playable = true, fiction = ChapterNotificationFiction(id = 7), chapter = ChapterNotificationChapter(id = 102),
-        ))
         val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
-        val action = manager.getNotification(NewChapterNotifier.Tag, NewChapterNotifier.NotificationId).actions.single().actionIntent
-        action.send()
-        val delivered = shadowOf(context).nextStartedActivity
-        val activity = Robolectric.buildActivity(NotificationPlayActivity::class.java, delivered).create()
         try {
-            val owner = activity.get().notificationRoutes
-            assertEquals(NotificationRoute.Play(7, 102), owner.pending.value?.route)
-            owner.consume(requireNotNull(owner.pending.value))
-            activity.newIntent(intent(true, chapter = 104))
-            assertEquals(NotificationRoute.Play(7, 104), owner.pending.value?.route)
+            repeat(2) { attempt ->
+                notifier.notifyReady("Ready", "Chapter", ChapterNotificationEntry(
+                    playable = true, fiction = ChapterNotificationFiction(id = 7), chapter = ChapterNotificationChapter(id = 102 + attempt),
+                ), signedIn)
+                manager.getNotification(NewChapterNotifier.Tag, NewChapterNotifier.NotificationId).actions.single().actionIntent.send()
+                val delivered = shadowOf(context).nextStartedActivity
+                val trampoline = Robolectric.buildActivity(NotificationPlayActivity::class.java, delivered).create()
+                try {
+                    repeat(50) { shadowOf(android.os.Looper.getMainLooper()).idle() }
+                    assertTrue(trampoline.get().isFinishing)
+                    assertEquals(0, manager.allNotifications.size)
+                    val forwarded = shadowOf(trampoline.get()).nextStartedActivity
+                    assertEquals(MainActivity::class.java.name, forwarded.component?.className)
+                    assertTrue(forwarded.flags and Intent.FLAG_ACTIVITY_CLEAR_TOP != 0)
+                    assertTrue(forwarded.flags and Intent.FLAG_ACTIVITY_SINGLE_TOP != 0)
+                    val retained = main.get().notificationRoutes
+                    main.newIntent(forwarded)
+                    org.junit.Assert.assertSame(retained, main.get().notificationRoutes)
+                    assertEquals(NotificationRoute.Play(7, 102 + attempt), retained.pending.value?.route)
+                    assertEquals(signedIn.token, retained.pending.value?.session?.token)
+                    retained.consume(requireNotNull(retained.pending.value))
+                    main.newIntent(forwarded)
+                    assertNull(retained.pending.value)
+                } finally {
+                    trampoline.destroy()
+                }
+            }
         } finally {
-            activity.destroy()
+            main.destroy()
+            kotlinx.coroutines.runBlocking { store.clearToken() }
             ServiceLocator.restoreDownloadManagerAfterTest()
         }
+    }
+
+    @Test
+    @Config(application = Application::class)
+    fun `surviving action from old login clears notice without forwarding chapter IDs to next account`() {
+        val store = ServiceLocator.tokenStore(context)
+        kotlinx.coroutines.runBlocking { store.saveLogin("https://other.example.com/",
+            dk.perspektiva.ttsroad.data.LoginResponse(token = "next-token",
+                user = dk.perspektiva.ttsroad.data.MobileUser(id = 2, username = "next"))) }
+        val notifier = NewChapterNotifier(context)
+        notifier.notifyReady("Old account", "Ready", ChapterNotificationEntry(
+            playable = true, fiction = ChapterNotificationFiction(id = 7), chapter = ChapterNotificationChapter(id = 102),
+        ), signedIn)
+        val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
+        manager.getNotification(NewChapterNotifier.Tag, NewChapterNotifier.NotificationId).actions.single().actionIntent.send()
+        val delivered = shadowOf(context).nextStartedActivity
+        val trampoline = Robolectric.buildActivity(NotificationPlayActivity::class.java, delivered).create()
+        try {
+            repeat(50) { shadowOf(android.os.Looper.getMainLooper()).idle() }
+            assertTrue(trampoline.get().isFinishing)
+            assertNull(shadowOf(trampoline.get()).nextStartedActivity)
+            assertEquals(0, manager.allNotifications.size)
+        } finally {
+            trampoline.destroy()
+            kotlinx.coroutines.runBlocking { store.clearToken() }
+        }
+    }
+
+    @Test
+    fun `trusted pending route never uses old chapter IDs after login switches`() {
+        val owner = NotificationRouteOwner()
+        owner.accept(TrustedNotificationActions.issue(context, NotificationRoute.Play(7, 102), signedIn))
+        val next = signedIn.copy(token = "next-token", serverUrl = "https://other.example.com/")
+        compose.setContent {
+            NotificationRouting(owner, next, supported, true, { next },
+                play = { _, _ -> error("Old route must not play") }, navigate = { error("Old route must not navigate") })
+        }
+        compose.waitForIdle()
+        assertNull(owner.pending.value)
     }
 
     @Test

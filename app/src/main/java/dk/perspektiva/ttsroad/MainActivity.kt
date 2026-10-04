@@ -362,7 +362,7 @@ import kotlinx.coroutines.withContext
  */
 private val LocalServerUrl = staticCompositionLocalOf { "" }
 
-open class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity() {
     // Notification taps that arrive while the activity is already running come through
     // onNewIntent, so they are relayed to the composition rather than read from the start intent.
     private val openPlayerRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -374,7 +374,7 @@ open class MainActivity : ComponentActivity() {
         // activity because the process is in the foreground here, so starting the service is allowed.
         ServiceLocator.offlineDownloads(this).resumeUnfinished()
         val startOnPlayer = consumeOpenPlayer(intent)
-        notificationRoutes.accept(intent, allowPlay = this is NotificationPlayActivity)
+        notificationRoutes.accept(intent)
         val tokenStore = ServiceLocator.tokenStore(this)
         val recoveryCodesOwner = recoveryCodesOwner(
             repository = ServiceLocator.repository(this),
@@ -408,7 +408,7 @@ open class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (consumeOpenPlayer(intent)) openPlayerRequests.tryEmit(Unit)
-        notificationRoutes.accept(intent, allowPlay = this is NotificationPlayActivity)
+        notificationRoutes.accept(intent)
     }
 
     companion object {
@@ -515,7 +515,7 @@ private fun TtsRoadApp(
                         canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
                 },
                 playQueue = { response, chapterId ->
-                    playbackController.playQueue(response.chapters, chapterId, response.fiction)
+                    playbackController.playQueue(response.chapters, chapterId, response.fiction, expectedSession = owner)
                 },
             )
         },
@@ -1164,7 +1164,7 @@ private fun MainScaffold(
                                             canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
                                     },
                                     playQueue = { response, chapterId ->
-                                        playbackController.playQueue(response.chapters, chapterId, response.fiction)
+                                        playbackController.playQueue(response.chapters, chapterId, response.fiction, expectedSession = session)
                                     },
                                 )
                                 if (played) onScreenChange(AppScreen.Player)

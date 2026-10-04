@@ -75,6 +75,26 @@ class NewChaptersGatingTest {
     }
 
     @Test
+    fun `initial signed out session clears surviving notice before login and never carries old account data`() {
+        val context = RuntimeEnvironment.getApplication()
+        val notifier = NewChapterNotifier(context)
+        val manager = shadowOf(context.getSystemService(NotificationManager::class.java))
+        val repository = TtsRoadRepository(FakeSessionStore(SessionState()))
+        var session by mutableStateOf<SessionState?>(null)
+        val lifetime = ChapterNotificationLifetime()
+        notifier.notifyReady("Old account", "Ready", null)
+        compose.setContent { rememberNewChapters(repository, session, supported, { session ?: SessionState() }, false, lifetime) }
+        compose.waitForIdle()
+        assertEquals(1, manager.allNotifications.size)
+        compose.runOnIdle { session = SessionState(serverUrl = "https://ttsroad.example.com/") }
+        compose.waitForIdle()
+        assertEquals(0, manager.allNotifications.size)
+        compose.runOnIdle { session = session!!.copy(token = "new-account") }
+        compose.waitForIdle()
+        assertEquals(0, manager.allNotifications.size)
+    }
+
+    @Test
     fun `lifetime compares only actual accounts and resolved capability answers`() {
         val lifetime = ChapterNotificationLifetime()
         val session = SessionState(serverUrl = "https://ttsroad.example.com/", token = "token")

@@ -26,6 +26,7 @@ object TtsRoadSessionCommands {
     const val Bookmark = "dk.perspektiva.ttsroad.BOOKMARK"
     const val ReportPronunciation = "dk.perspektiva.ttsroad.REPORT_PRONUNCIATION"
 
+    internal val installQueueCommand = SessionCommand("dk.perspektiva.ttsroad.INSTALL_QUEUE", Bundle.EMPTY)
     internal val verifyQueueCommand = SessionCommand("dk.perspektiva.ttsroad.VERIFY_QUEUE", Bundle.EMPTY)
 
     @OptIn(UnstableApi::class)

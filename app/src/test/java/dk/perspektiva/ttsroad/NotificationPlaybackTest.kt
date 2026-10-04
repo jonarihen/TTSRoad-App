@@ -12,6 +12,7 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import android.os.Bundle
 import dk.perspektiva.ttsroad.media.TtsRoadSessionCommands
+import dk.perspektiva.ttsroad.media.SessionBoundQueue
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.core.ServiceLocator
@@ -57,6 +58,12 @@ private class NotificationQueuePlayer : SimpleBasePlayer(Looper.getMainLooper())
     override fun handleSetMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<*> {
         items = mediaItems
         index = startIndex
+        return Futures.immediateVoidFuture()
+    }
+
+    override fun handleRemoveMediaItems(fromIndex: Int, toIndex: Int): ListenableFuture<*> {
+        items = items.filterIndexed { index, _ -> index !in fromIndex until toIndex }
+        index = 0
         return Futures.immediateVoidFuture()
     }
 
@@ -117,7 +124,19 @@ class NotificationPlaybackTest {
     fun `session rejecting queue installation returns failure despite optimistic controller updates`() =
         verifyPlayback(refuseQueue = true)
 
-    private fun verifyPlayback(refuseQueue: Boolean) {
+    @Test
+    fun `account switching during connection never installs old chapter IDs`() =
+        verifyPlayback(refuseQueue = false, switchAt = "connect")
+
+    @Test
+    fun `account switching before service installation rejects old queue`() =
+        verifyPlayback(refuseQueue = false, switchAt = "install")
+
+    @Test
+    fun `queue result after account switch cannot claim old playback success`() =
+        verifyPlayback(refuseQueue = false, switchAt = "result")
+
+    private fun verifyPlayback(refuseQueue: Boolean, switchAt: String? = null) {
         val context = RuntimeEnvironment.getApplication()
         val store = ServiceLocator.tokenStore(context)
         runBlocking { store.saveLogin(session.serverUrl, LoginResponse(token = "test-token", user = MobileUser(id = 1, username = "listener"))) }
@@ -127,36 +146,50 @@ class NotificationPlaybackTest {
             override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
                 MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailableSessionCommands(
                     MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                        .add(TtsRoadSessionCommands.verifyQueueCommand).build(),
+                        .add(TtsRoadSessionCommands.installQueueCommand).build(),
                 ).build()
 
-            override fun onSetMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo,
-                mediaItems: MutableList<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
-                if (refuseQueue) Futures.immediateFailedFuture(IllegalStateException("Queue refused"))
-                else Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
-
             override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo,
-                customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> =
-                scope.future { TtsRoadSessionCommands.awaitQueue(player, args) }
+                customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> = scope.future {
+                if (switchAt == "install") runBlocking { store.saveLogin("https://other.example.com/",
+                    LoginResponse(token = "next-token", user = MobileUser(id = 2, username = "next"))) }
+                if (refuseQueue) return@future SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE)
+                val result = SessionBoundQueue.install(args.getString("ticket"), player, store) {}
+                if (switchAt == "result") {
+                    runBlocking { store.saveLogin("https://other.example.com/",
+                        LoginResponse(token = "next-token", user = MobileUser(id = 2, username = "next"))) }
+                    player.clearMediaItems()
+                }
+                result
+            }
         }).build()
         val controller = PlaybackController(
             context, store, ServiceLocator.playbackPreferences(context), ServiceLocator.fictionSpeedPreferences(context),
             object : ControllerConnector {
-                override fun connect(context: Context, token: SessionToken, listener: MediaController.Listener): ListenableFuture<MediaController> =
-                    MediaController.Builder(context, mediaSession.token).setListener(listener).buildAsync()
+                override fun connect(context: Context, token: SessionToken, listener: MediaController.Listener): ListenableFuture<MediaController> {
+                    if (switchAt == "connect") runBlocking {
+                        store.saveLogin("https://other.example.com/",
+                            LoginResponse(token = "next-token", user = MobileUser(id = 2, username = "next")))
+                    }
+                    return MediaController.Builder(context, mediaSession.token).setListener(listener).buildAsync()
+                }
             }, scope,
         )
         try {
             var installed = false
             val operation = scope.launch {
                 installed = playNotificationChapter(route, session, { response }, { true }) { queue, id ->
-                    controller.playQueue(queue.chapters, id, queue.fiction)
+                    controller.playQueue(queue.chapters, id, queue.fiction, expectedSession = session)
                 }
             }
-            repeat(120) { shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(50)) }
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+            while (!operation.isCompleted && System.nanoTime() < deadline) {
+                shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(50))
+                Thread.yield()
+            }
             assertTrue(operation.isCompleted)
-            assertEquals(!refuseQueue, installed)
-            if (refuseQueue) {
+            assertEquals(!refuseQueue && switchAt == null, installed)
+            if (refuseQueue || switchAt != null) {
                 assertTrue(player.items.isEmpty())
             } else {
                 assertEquals(listOf("chapter:101", "chapter:102", "chapter:104"), player.items.map { it.mediaId })
@@ -187,7 +220,7 @@ class NotificationPlaybackTest {
         )
         try {
             assertFalse(playNotificationChapter(route, session, { response }, { true }) { queue, id ->
-                controller.playQueue(queue.chapters, id, queue.fiction)
+                controller.playQueue(queue.chapters, id, queue.fiction, expectedSession = session)
             })
         } finally {
             controller.release()
@@ -208,6 +241,27 @@ class NotificationPlaybackTest {
             assertEquals(SessionResult.RESULT_ERROR_INVALID_STATE, TtsRoadSessionCommands.verifyQueue(player, args).resultCode)
         } finally {
             player.release()
+        }
+    }
+
+    @Test
+    fun `queue installation ticket is single use and discarded tickets cannot mutate player`() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val store = ServiceLocator.tokenStore(context)
+        store.saveLogin(session.serverUrl, LoginResponse(token = session.token!!, user = MobileUser(id = 1, username = "listener")))
+        val player = NotificationQueuePlayer()
+        val items = listOf(MediaItem.Builder().setMediaId("chapter:102").build())
+        try {
+            val discarded = SessionBoundQueue.issue(session, items, 0, 0)
+            SessionBoundQueue.discard(discarded)
+            assertEquals(SessionResult.RESULT_ERROR_BAD_VALUE, SessionBoundQueue.install(discarded, player, store) {}.resultCode)
+            assertTrue(player.items.isEmpty())
+            val valid = SessionBoundQueue.issue(session, items, 0, 0)
+            assertEquals(SessionResult.RESULT_SUCCESS, SessionBoundQueue.install(valid, player, store) {}.resultCode)
+            assertEquals(SessionResult.RESULT_ERROR_BAD_VALUE, SessionBoundQueue.install(valid, player, store) {}.resultCode)
+        } finally {
+            player.release()
+            store.clearToken()
         }
     }
 
