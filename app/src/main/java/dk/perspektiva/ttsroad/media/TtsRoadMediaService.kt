@@ -1282,20 +1282,17 @@ class TtsRoadMediaService : MediaLibraryService() {
         // from the same result set whose count was announced.
         private val searchCache = BrowserSearchResultCache()
 
-        // Every browser that has been told a result count, so an account change can retract it.
-        private val activeSearches = mutableMapOf<Pair<MediaSession.ControllerInfo, String>, LibraryParams?>()
-
         /**
          * Withdraw every search result a connected car is showing. Called on sign-out and account
          * switch: the held result belongs to the previous account, and the car keeps rendering
          * what it was last told until it hears otherwise.
          */
         fun retractSearches(session: MediaLibrarySession) {
+            val searches = searchCache.announcedSearches()
             searchCache.invalidate()
-            for ((search, params) in activeSearches) {
-                session.notifySearchResultChanged(search.first, search.second, 0, params)
+            for (search in searches) {
+                session.notifySearchResultChanged(search.browser, search.query, 0, search.params)
             }
-            activeSearches.clear()
         }
 
         override fun onDisconnected(
@@ -1303,7 +1300,6 @@ class TtsRoadMediaService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
         ) {
             searchCache.invalidate(controller)
-            activeSearches.keys.removeAll { it.first == controller }
         }
 
         private suspend fun results(
@@ -1327,7 +1323,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             service.serviceScope.future {
                 val found = results(browser, query, fresh = true)
                     ?: return@future LibraryResult.ofVoid()
-                activeSearches[browser to query] = params
+                searchCache.announced(browser, query, params)
                 session.notifySearchResultChanged(browser, query, found.size, params)
                 LibraryResult.ofVoid()
             }
@@ -1536,8 +1532,27 @@ internal class SearchResultCache {
     }
 }
 
-internal class BrowserSearchResultCache {
-    private val caches = mutableMapOf<Pair<MediaSession.ControllerInfo, String>, SearchResultCache>()
+internal const val MaxRetainedSearchQueriesPerBrowser = 8
+
+internal data class SearchAnnouncement(
+    val browser: MediaSession.ControllerInfo,
+    val query: String,
+    val params: LibraryParams?,
+)
+
+internal class BrowserSearchResultCache(
+    private val maxQueriesPerBrowser: Int = MaxRetainedSearchQueriesPerBrowser,
+) {
+    private class Entry {
+        val cache = SearchResultCache()
+        var announcement: SearchAnnouncement? = null
+    }
+
+    private val caches = mutableMapOf<MediaSession.ControllerInfo, LinkedHashMap<String, Entry>>()
+
+    init {
+        require(maxQueriesPerBrowser > 0)
+    }
 
     suspend fun results(
         browser: MediaSession.ControllerInfo,
@@ -1546,18 +1561,24 @@ internal class BrowserSearchResultCache {
         fresh: Boolean,
         search: suspend () -> SearchResult?,
     ): List<MediaItem>? {
-        val key = browser to query
-        val cache = if (fresh) {
-            SearchResultCache().also { caches[key] = it }
-        } else {
-            caches.getOrPut(key) { SearchResultCache() }
-        }
-        val found = cache.held(query) ?: cache.results(query, generation, search).orEmpty()
-        return found.takeIf { caches[key] === cache }
+        val queries = caches.getOrPut(browser) { linkedMapOf() }
+        val previous = queries.remove(query)
+        val entry = if (fresh) Entry().also { it.announcement = previous?.announcement } else previous ?: Entry()
+        queries[query] = entry
+        if (queries.size > maxQueriesPerBrowser) queries.remove(queries.keys.first())
+        val found = entry.cache.held(query) ?: entry.cache.results(query, generation, search).orEmpty()
+        return found.takeIf { caches[browser]?.get(query) === entry }
     }
 
+    fun announced(browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?) {
+        caches[browser]?.get(query)?.announcement = SearchAnnouncement(browser, query, params)
+    }
+
+    fun announcedSearches(): List<SearchAnnouncement> =
+        caches.values.flatMap { queries -> queries.values.mapNotNull { it.announcement } }
+
     fun invalidate(browser: MediaSession.ControllerInfo) {
-        caches.keys.removeAll { it.first == browser }
+        caches.remove(browser)
     }
 
     fun invalidate() {

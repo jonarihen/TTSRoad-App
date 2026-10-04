@@ -4,12 +4,14 @@ import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaSession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -258,9 +260,13 @@ class SearchResultCacheTest {
         cache.results(car, "ashes", 3L, fresh = true, search)
         cache.results(car, "cinder", 3L, fresh = true, search)
         val otherAnnounced = cache.results(other, "ashes", 3L, fresh = true, search)
+        cache.announced(car, "ashes", null)
+        cache.announced(car, "cinder", null)
+        cache.announced(other, "ashes", null)
 
         cache.invalidate(car)
 
+        assertEquals(listOf(SearchAnnouncement(other, "ashes", null)), cache.announcedSearches())
         assertEquals(otherAnnounced, cache.results(other, "ashes", 3L, fresh = false, search))
         assertEquals(listOf(item("chapter:4")), cache.results(car, "ashes", 3L, fresh = false, search))
         assertEquals(listOf(item("chapter:5")), cache.results(car, "cinder", 3L, fresh = false, search))
@@ -277,9 +283,12 @@ class SearchResultCacheTest {
         }
         cache.results(car, "ashes", 3L, fresh = true, oldAccount)
         cache.results(other, "cinder", 3L, fresh = true, oldAccount)
+        cache.announced(car, "ashes", null)
+        cache.announced(other, "cinder", null)
 
         cache.invalidate()
 
+        assertTrue(cache.announcedSearches().isEmpty())
         var searches = 0
         val newAccount: suspend () -> SearchResult? = {
             searches++
@@ -355,6 +364,145 @@ class SearchResultCacheTest {
         assertNull(pending.await())
         assertEquals(announced, cache.results(car, "ashes", generation = 4L, fresh = false) {
             error("Announced results must be held")
+        })
+    }
+
+    @Test
+    fun `distinct queries bound results and announcements independently for each browser`() = runTest {
+        val cache = BrowserSearchResultCache()
+        val browsers = listOf(browser(1), browser(2))
+        val limit = MaxRetainedSearchQueriesPerBrowser
+        var searches = 0
+        for (index in 0 until 100) {
+            for (browser in browsers) {
+                cache.results(browser, "query:$index", generation = 3L, fresh = true) {
+                    searches++
+                    SearchResult(listOf(item("chapter:$index")), generation = 3L)
+                }
+                cache.announced(browser, "query:$index", null)
+                assertTrue(cache.announcedSearches().count { it.browser == browser } <= limit)
+            }
+        }
+
+        val expectedQueries = (100 - limit until 100).map { "query:$it" }
+        for (browser in browsers) {
+            assertEquals(expectedQueries, cache.announcedSearches().filter { it.browser == browser }.map { it.query })
+            for (index in 100 - limit until 100) {
+                assertEquals(listOf(item("chapter:$index")), cache.results(browser, "query:$index", 4L, fresh = false) {
+                    error("Retained query must not search again")
+                })
+            }
+            val evicted = cache.results(browser, "query:0", generation = 4L, fresh = false) {
+                searches++
+                SearchResult(listOf(item("chapter:new")), generation = 4L)
+            }
+            assertEquals(listOf(item("chapter:new")), evicted)
+            assertTrue(cache.announcedSearches().none { it.browser == browser && it.query == "query:0" })
+        }
+        assertEquals(202, searches)
+    }
+
+    @Test
+    fun `page-only queries share the bound and retire evicted announcements`() = runTest {
+        val cache = BrowserSearchResultCache(maxQueriesPerBrowser = 2)
+        val car = browser(1)
+        cache.results(car, "ashes", generation = 3L, fresh = true) {
+            SearchResult(listOf(item("chapter:1")), generation = 3L)
+        }
+        cache.announced(car, "ashes", null)
+        for (index in 0 until 100) {
+            cache.results(car, "page:$index", generation = 3L, fresh = false) {
+                SearchResult(listOf(item("chapter:$index")), generation = 3L)
+            }
+        }
+
+        assertTrue(cache.announcedSearches().isEmpty())
+        val evicted = cache.results(car, "page:0", generation = 4L, fresh = false) {
+            SearchResult(listOf(item("chapter:new")), generation = 4L)
+        }
+        assertEquals(listOf(item("chapter:new")), evicted)
+    }
+
+    @Test
+    fun `paging an active query keeps its announced set through repeated LRU eviction`() = runTest {
+        val cache = BrowserSearchResultCache(maxQueriesPerBrowser = 2)
+        val car = browser(1)
+        val announced = listOf(item("chapter:1"), item("chapter:2"), item("chapter:3"))
+        cache.results(car, "ashes", generation = 3L, fresh = true) {
+            SearchResult(announced, generation = 3L)
+        }
+        cache.announced(car, "ashes", null)
+        val pages = mutableListOf<MediaItem>()
+        for (index in announced.indices) {
+            val generation = 4L + index
+            cache.results(car, "query:$index", generation, fresh = true) {
+                SearchResult(listOf(item("chapter:new:$index")), generation)
+            }
+            cache.announced(car, "query:$index", null)
+            val held = cache.results(car, "ashes", generation, fresh = false) {
+                error("Active pages must use the announced set")
+            }!!
+            pages += held[index]
+            assertEquals(announced.size, held.size)
+            assertEquals(setOf("ashes", "query:$index"), cache.announcedSearches().map { it.query }.toSet())
+        }
+
+        assertEquals(announced, pages)
+        assertEquals(announced.size, pages.size)
+    }
+
+    @Test
+    fun `repeating a fresh query renews its eviction recency and announcement params`() = runTest {
+        val cache = BrowserSearchResultCache(maxQueriesPerBrowser = 2)
+        val car = browser(1)
+        val search: suspend () -> SearchResult? = {
+            SearchResult(listOf(item("chapter:1")), generation = 3L)
+        }
+        cache.results(car, "ashes", 3L, fresh = true, search)
+        cache.announced(car, "ashes", null)
+        cache.results(car, "cinder", 3L, fresh = true, search)
+        cache.announced(car, "cinder", null)
+        val refreshed = cache.results(car, "ashes", generation = 4L, fresh = true) {
+            SearchResult(listOf(item("chapter:2")), generation = 4L)
+        }
+        val params = LibraryParams.Builder().setSuggested(true).build()
+        cache.announced(car, "ashes", params)
+        cache.results(car, "embers", 4L, fresh = true, search)
+        cache.announced(car, "embers", null)
+
+        assertEquals(
+            listOf(SearchAnnouncement(car, "ashes", params), SearchAnnouncement(car, "embers", null)),
+            cache.announcedSearches(),
+        )
+        assertEquals(refreshed, cache.results(car, "ashes", generation = 5L, fresh = false) {
+            error("The freshly announced set must survive eviction")
+        })
+    }
+
+    @Test
+    fun `an evicted suspended search cannot resurrect results or announcements`() = runTest {
+        val cache = BrowserSearchResultCache(maxQueriesPerBrowser = 1)
+        val car = browser(1)
+        val started = CompletableDeferred<Unit>()
+        val answer = CompletableDeferred<SearchResult>()
+        val pending = async {
+            cache.results(car, "ashes", generation = 3L, fresh = true) {
+                started.complete(Unit)
+                answer.await()
+            }
+        }
+        started.await()
+        cache.results(car, "cinder", generation = 4L, fresh = true) {
+            SearchResult(listOf(item("chapter:2")), generation = 4L)
+        }
+        cache.announced(car, "cinder", null)
+        answer.complete(SearchResult(listOf(item("chapter:1")), generation = 3L))
+
+        assertNull(pending.await())
+        cache.announced(car, "ashes", null)
+        assertEquals(listOf(SearchAnnouncement(car, "cinder", null)), cache.announcedSearches())
+        assertEquals(listOf(item("chapter:2")), cache.results(car, "cinder", generation = 5L, fresh = false) {
+            error("Evicted search must not replace retained results")
         })
     }
 }
