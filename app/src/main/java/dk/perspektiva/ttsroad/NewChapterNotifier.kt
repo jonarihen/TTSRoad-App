@@ -10,6 +10,12 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import dk.perspektiva.ttsroad.data.ChapterNotificationEntry
+import dk.perspektiva.ttsroad.data.SessionState
+import java.security.MessageDigest
+
+internal fun notificationSessionKey(session: SessionState): String = MessageDigest.getInstance("SHA-256")
+    .digest("${session.serverUrl}\u0000${session.token.orEmpty()}".toByteArray(Charsets.UTF_8))
+    .joinToString("") { "%02x".format(it) }
 
 /**
  * Posts "a chapter you were waiting for can be played now" into the shade (#175).
@@ -54,12 +60,8 @@ class NewChapterNotifier(private val context: Context) {
 
     /**
      * Posts one notification for [fresh], or nothing when it is empty.
-     *
-     * Several chapters collapse into one line rather than one notification each — see
-     * [dk.perspektiva.ttsroad.data.readyNotificationText]. A single chapter's notification opens
-     * straight into it; a batch opens the list.
      */
-    fun notifyReady(title: String, body: String, single: ChapterNotificationEntry?) {
+    fun notifyReady(title: String, body: String, single: ChapterNotificationEntry?, session: SessionState? = null) {
         // Checked rather than assumed: POST_NOTIFICATIONS is denied by default on Android 13+, and
         // the per-app toggle can be turned off at any time afterwards.
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
@@ -72,7 +74,16 @@ class NewChapterNotifier(private val context: Context) {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
             .setAutoCancel(true)
-            .setContentIntent(openIntent(single))
+            .setContentIntent(openIntent())
+            .apply {
+                if (single?.playable == true && single.fiction.id > 0 && single.chapter.id > 0) {
+                    addAction(
+                        0,
+                        "Play",
+                        openIntent(single, session),
+                    )
+                }
+            }
             .build()
 
         runCatching {
@@ -87,13 +98,16 @@ class NewChapterNotifier(private val context: Context) {
         runCatching { NotificationManagerCompat.from(context).cancel(Tag, NotificationId) }
     }
 
-    private fun openIntent(single: ChapterNotificationEntry?): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    private fun openIntent(single: ChapterNotificationEntry? = null, session: SessionState? = null): PendingIntent {
+        val destination = if (single == null) MainActivity::class.java else NotificationPlayActivity::class.java
+        val intent = Intent(context, destination).apply {
+            flags = if (single == null) Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP else 0
             putExtra(ExtraOpenNotifications, true)
             single?.let {
+                action = ActionPlay
                 putExtra(ExtraFictionId, it.fiction.id)
                 putExtra(ExtraChapterId, it.chapter.id)
+                session?.let { owner -> putExtra(ExtraSessionKey, notificationSessionKey(owner)) }
             }
         }
         return PendingIntent.getActivity(
@@ -110,6 +124,8 @@ class NewChapterNotifier(private val context: Context) {
         const val ChannelId: String = "ttsroad_new_chapters"
         const val Tag: String = "ttsroad-new-chapter"
         const val NotificationId: Int = 4175
+        internal const val ActionPlay: String = "dk.perspektiva.ttsroad.PLAY_NEW_CHAPTER"
+        internal const val ExtraSessionKey: String = "dk.perspektiva.ttsroad.NOTIFICATION_SESSION_KEY"
 
         /** Set on the launch intent so the activity knows to open the notices list. */
         const val ExtraOpenNotifications: String = "dk.perspektiva.ttsroad.OPEN_NOTIFICATIONS"

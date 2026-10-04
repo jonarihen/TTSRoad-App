@@ -33,6 +33,7 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
+import dk.perspektiva.ttsroad.notificationSessionKey
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
@@ -149,6 +150,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     @Volatile
     private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
+    private var boundQueueSession: dk.perspektiva.ttsroad.data.SessionState? = null
 
     // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
     // and car transport read the preference from here rather than the DataStore.
@@ -174,6 +176,11 @@ class TtsRoadMediaService : MediaLibraryService() {
             tokenStore.session.collectLatest { state ->
                 playbackSessionGeneration++
                 playbackSessionActive = state.isLoggedIn
+                val queueOwner = boundQueueSession
+                if (queueOwner != null && (queueOwner.serverUrl != state.serverUrl || queueOwner.token != state.token || !state.isLoggedIn)) {
+                    boundQueueSession = null
+                    if (::player.isInitialized) stopSignedOutPlayback(player)
+                }
                 audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(state.serverUrl, state.authorizationHeader)
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
@@ -872,6 +879,10 @@ class TtsRoadMediaService : MediaLibraryService() {
         queueEnded: Boolean,
         flushHistory: Boolean = queueEnded,
     ) {
+        val itemSession = mediaItem.mediaMetadata.extras?.getString("queue_session_key")
+        suspend fun ownsProgress(): Boolean = itemSession == null ||
+            notificationSessionKey(tokenStore.current()) == itemSession
+        if (!ownsProgress()) return
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 }
         val chapterId = extras?.getInt("chapter_id")?.takeIf { it > 0 }
@@ -904,7 +915,9 @@ class TtsRoadMediaService : MediaLibraryService() {
         // carried an unstamped position the server could not order against one reached in the
         // browser meanwhile, and so overwrote it. The queue is what makes the position survive
         // being offline, and the stamp is what lets the server decide who is actually newer.
+        if (!ownsProgress()) return
         withContext(Dispatchers.IO) {
+            if (!ownsProgress()) return@withContext
             pendingProgress.record(
                 fictionId = fictionId,
                 chapterId = chapterId,
@@ -912,6 +925,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 isPlayed = isPlayed,
             )
         }
+        if (!ownsProgress()) return
         progressSync.flush()
 
         writeBreadcrumb(chapterId = chapterId, positionMs = position)
@@ -1158,6 +1172,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .setAvailableSessionCommands(
                     MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
                         .buildUpon()
+                        .apply {
+                            if (controller.uid == android.os.Process.myUid()) {
+                                add(TtsRoadSessionCommands.verifyQueueCommand)
+                                add(TtsRoadSessionCommands.installQueueCommand)
+                            }
+                        }
                         .add(TtsRoadSessionCommands.skipBackCommand)
                         .add(TtsRoadSessionCommands.skipForwardCommand)
                         // Granted regardless of the bookmarks capability: whether the *button* is
@@ -1179,6 +1199,23 @@ class TtsRoadMediaService : MediaLibraryService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == TtsRoadSessionCommands.installQueueCommand.customAction) {
+                if (controller.uid != android.os.Process.myUid()) {
+                    return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                }
+                return service.serviceScope.future {
+                    SessionBoundQueue.install(args.getString("ticket"), session.player, service.tokenStore) { owner ->
+                        service.boundQueueSession = owner
+                        service.audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(owner.serverUrl, owner.authorizationHeader)
+                    }
+                }
+            }
+            if (customCommand.customAction == TtsRoadSessionCommands.verifyQueueCommand.customAction) {
+                if (controller.uid != android.os.Process.myUid()) {
+                    return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                }
+                return service.serviceScope.future { TtsRoadSessionCommands.awaitQueue(session.player, args) }
+            }
             // Handled apart from the seeks below: these write to the server rather than the player,
             // so they answer asynchronously and never touch the playback position.
             if (customCommand.customAction == TtsRoadSessionCommands.Bookmark) {

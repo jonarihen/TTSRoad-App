@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.player
 import android.content.ComponentName
 import android.content.Context
 import android.os.Looper
+import android.os.Bundle
 import androidx.annotation.MainThread
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -17,11 +18,16 @@ import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.TokenStore
+import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.media.SessionBoundQueue
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import dk.perspektiva.ttsroad.data.sanitizeSpeed
 import dk.perspektiva.ttsroad.media.PlaybackFeedbackCommand
 import dk.perspektiva.ttsroad.media.PlaybackFeedbackMessage
 import dk.perspektiva.ttsroad.media.TtsRoadMediaItems
 import dk.perspektiva.ttsroad.media.TtsRoadMediaService
+import dk.perspektiva.ttsroad.media.TtsRoadSessionCommands
 import kotlin.math.roundToLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -36,6 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class QueueItem(
     val mediaId: String,
@@ -238,15 +245,19 @@ class PlaybackController internal constructor(
         startChapterId: Int,
         fiction: FictionSummary? = null,
         startPositionMsOverride: Long? = null,
-    ) {
-        val serverUrl = tokenStore.current().serverUrl
+        expectedSession: SessionState? = null,
+    ): Boolean {
+        val owner = expectedSession ?: tokenStore.current()
+        val current = tokenStore.current()
+        if (!current.isLoggedIn || current.serverUrl != owner.serverUrl || current.token != owner.token) return false
+        val serverUrl = owner.serverUrl
         val built = chapters
             .filter { it.audio != null }
             .mapNotNull { chapter ->
                 TtsRoadMediaItems.chapter(chapter, fiction ?: chapter.fiction, serverUrl)
                     ?.let { chapter to it }
             }
-        if (built.isEmpty()) return
+        if (built.isEmpty()) return false
 
         val startIndex = built.indexOfFirst { it.first.resolvedChapterId == startChapterId }
             .coerceAtLeast(0)
@@ -257,12 +268,29 @@ class PlaybackController internal constructor(
                 ?.let { (it * 1000).roundToLong() }
             ?: 0L
 
-        val controller = controllerOrNull() ?: return
-        queueSnapshot.invalidate()
-        controller.setMediaItems(built.map { it.second }, startIndex, startPositionMs)
-        controller.prepare()
-        controller.play()
-        publishState(controller)
+        val controller = withTimeoutOrNull(10_000) { controllerOrNull() } ?: return false
+        if (!controller.isConnected || !controller.isCommandAvailable(Player.COMMAND_CHANGE_MEDIA_ITEMS) ||
+            !controller.isCommandAvailable(Player.COMMAND_PREPARE) || !controller.isCommandAvailable(Player.COMMAND_PLAY_PAUSE)
+        ) return false
+        currentCoroutineContext().ensureActive()
+        val live = tokenStore.current()
+        if (!live.isLoggedIn || live.serverUrl != owner.serverUrl || live.token != owner.token) return false
+        val ticket = SessionBoundQueue.issue(owner, built.map { it.second }, startIndex, startPositionMs)
+        try {
+            queueSnapshot.invalidate()
+            val args = Bundle().apply { putString("ticket", ticket) }
+            val installed = withTimeoutOrNull(10_000) {
+                controller.sendCustomCommand(TtsRoadSessionCommands.installQueueCommand, args).await().resultCode ==
+                    SessionResult.RESULT_SUCCESS
+            } ?: false
+            currentCoroutineContext().ensureActive()
+            val finished = tokenStore.current()
+            if (!finished.isLoggedIn || finished.serverUrl != owner.serverUrl || finished.token != owner.token) return false
+            publishState(controller)
+            return installed
+        } finally {
+            SessionBoundQueue.discard(ticket)
+        }
     }
 
     fun togglePlayPause() {

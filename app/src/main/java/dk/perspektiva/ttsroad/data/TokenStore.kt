@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private val Context.sessionDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "ttsroad_session",
@@ -57,6 +59,14 @@ class TokenStore(
     private val context: Context,
     private val cipher: TokenCipher = KeystoreTokenCipher(),
 ) : SessionStore {
+    private val sessionMutation = Mutex()
+
+    internal suspend fun <T> withCurrentSession(owner: SessionState, block: () -> T): T? = sessionMutation.withLock {
+        val live = current()
+        if (!live.isLoggedIn || live.serverUrl != owner.serverUrl || live.token != owner.token) return@withLock null
+        block()
+    }
+
     private object Keys {
         val ServerUrl = stringPreferencesKey("server_url")
         val Token = stringPreferencesKey("token")
@@ -93,7 +103,7 @@ class TokenStore(
 
     override suspend fun current(): SessionState = session.first()
 
-    override suspend fun saveLogin(baseUrl: String, response: LoginResponse) {
+    override suspend fun saveLogin(baseUrl: String, response: LoginResponse): Unit = sessionMutation.withLock {
         context.sessionDataStore.edit { prefs ->
             prefs[Keys.ServerUrl] = normalizeBaseUrl(baseUrl)
             // Sealing can fail on a device whose keystore refuses to generate a key. Storing the
@@ -110,7 +120,7 @@ class TokenStore(
         }
     }
 
-    override suspend fun clearToken() {
+    override suspend fun clearToken(): Unit = sessionMutation.withLock {
         context.sessionDataStore.edit { prefs ->
             prefs.remove(Keys.Token)
             prefs.remove(Keys.Username)
@@ -120,7 +130,7 @@ class TokenStore(
         }
     }
 
-    suspend fun clearAll() {
+    suspend fun clearAll(): Unit = sessionMutation.withLock {
         context.sessionDataStore.edit { it.clear() }
     }
 
