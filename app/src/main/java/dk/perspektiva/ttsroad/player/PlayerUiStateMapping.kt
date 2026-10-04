@@ -55,6 +55,10 @@ internal fun buildQueue(player: Player): List<QueueItem> {
  *
  * [queue] is passed in rather than derived so the caller can reuse a cached list.
  */
+internal fun canRequestNextChapter(player: Player): Boolean = player.hasNextMediaItem() ||
+    (player.currentMediaItem?.mediaMetadata?.extras?.getInt("fiction_id", 0)?.let { it > 0 } == true &&
+        player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM))
+
 internal fun playerUiStateOf(player: Player, queue: List<QueueItem>): PlayerUiState {
     val metadata = player.currentMediaItem?.mediaMetadata
     // An unknown duration arrives as C.TIME_UNSET, which is Long.MIN_VALUE. Letting that reach the
@@ -76,7 +80,7 @@ internal fun playerUiStateOf(player: Player, queue: List<QueueItem>): PlayerUiSt
         speed = player.playbackParameters.speed,
         queue = queue,
         currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
-        hasNext = player.hasNextMediaItem(),
+        hasNext = canRequestNextChapter(player),
         hasPrevious = player.hasPreviousMediaItem(),
         // The cause does not survive the binder, so the HTTP status is unavailable here; the
         // service reads it from the real exception and handles the 401 case there.

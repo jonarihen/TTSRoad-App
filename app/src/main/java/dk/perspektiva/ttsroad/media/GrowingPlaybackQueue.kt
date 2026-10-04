@@ -1,8 +1,10 @@
 package dk.perspektiva.ttsroad.media
 
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -10,7 +12,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
+@androidx.annotation.OptIn(UnstableApi::class)
 internal class GrowingPlaybackQueue(
     private val player: Player,
     private val scope: CoroutineScope,
@@ -24,6 +28,71 @@ internal class GrowingPlaybackQueue(
     private var advancedEnd: Pair<Any?, Any>? = null
     private data class PendingHandoff(val session: Any, val playlist: List<Any>, val item: MediaItem)
     private var pendingHandoff: PendingHandoff? = null
+    private var navigationGeneration = 0L
+    private var pendingNext = 0
+    private val nextMutex = Mutex()
+    private data class NextIntent(val session: Any, var playlist: List<Any>, var generation: Long)
+    private var nextIntent: NextIntent? = null
+    private data class ReconciledQueue(val playlist: List<Any>)
+
+    val sessionPlayer: Player = object : ForwardingPlayer(player) {
+        override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
+            .apply {
+                if (canReconcile()) {
+                    add(Player.COMMAND_SEEK_TO_NEXT)
+                    add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                }
+            }.build()
+
+        override fun isCommandAvailable(command: Int): Boolean = availableCommands.contains(command)
+
+        override fun hasNextMediaItem(): Boolean = super.hasNextMediaItem() || canReconcile()
+
+        override fun seekToNextMediaItem() = requestNext { player.seekToNextMediaItem() }
+        override fun seekToNext() = requestNext { player.seekToNext() }
+    }
+
+    private fun canReconcile(): Boolean {
+        if (sessionKey() == null) return false
+        val fictionId = player.currentMediaItem?.mediaMetadata?.extras?.getInt("fiction_id")
+            ?.takeIf { it > 0 } ?: return false
+        return (0 until player.mediaItemCount).all {
+            player.getMediaItemAt(it).mediaMetadata.extras?.getInt("fiction_id") == fictionId
+        }
+    }
+
+    private fun requestNext(transition: () -> Unit) {
+        val requestedSession = sessionKey() ?: return
+        val requestedQueue = queueIdentity()
+        val intent = nextIntent?.takeIf {
+            it.session == requestedSession && it.playlist == requestedQueue &&
+                it.generation == navigationGeneration
+        } ?: NextIntent(requestedSession, requestedQueue, navigationGeneration).also { nextIntent = it }
+        pendingNext++
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            try {
+                nextMutex.withLock {
+                    if (sessionKey() != intent.session || navigationGeneration != intent.generation ||
+                        queueIdentity() != intent.playlist || player.mediaItemCount == 0
+                    ) return@withLock
+                    val currentUid = player.currentTimeline.getWindow(
+                        player.currentMediaItemIndex, Timeline.Window(),
+                    ).uid
+                    val result = withTimeoutOrNull(3_000) { reconcile(continueEnded = false) }
+                    if (sessionKey() != intent.session || navigationGeneration != intent.generation ||
+                        queueIdentity() != (result?.playlist ?: intent.playlist) ||
+                        player.currentTimeline.getWindow(player.currentMediaItemIndex, Timeline.Window()).uid != currentUid
+                    ) return@withLock
+                    transition()
+                    intent.playlist = queueIdentity()
+                    intent.generation = navigationGeneration
+                }
+            } finally {
+                pendingNext--
+                if (pendingNext == 0) nextIntent = null
+            }
+        }
+    }
 
     private fun installHandoff(item: MediaItem) {
         if (!allowContinuation()) player.pause()
@@ -39,8 +108,23 @@ internal class GrowingPlaybackQueue(
         }
     }
 
+    private fun shouldPoll(): Boolean {
+        if (!player.playWhenReady || player.mediaItemCount == 0) return false
+        if (player.playbackState == Player.STATE_ENDED) return true
+        return player.isPlaying && player.duration > 0 &&
+            player.duration - player.currentPosition <= 60_000
+    }
+
     fun start() {
         player.addListener(object : Player.Listener {
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                navigationGeneration++
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) {
                     scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
@@ -52,19 +136,26 @@ internal class GrowingPlaybackQueue(
         scope.launch {
             while (isActive) {
                 delay(15_000)
-                refresh()
+                if (shouldPoll()) refresh()
             }
         }
     }
 
     suspend fun refresh(endedEvent: Boolean = false) {
+        reconcile(endedEvent)
+    }
+
+    private suspend fun reconcile(
+        endedEvent: Boolean = false,
+        continueEnded: Boolean = true,
+    ): ReconciledQueue? {
         val requestedQueue = queueIdentity()
-        val requestedSession = sessionKey() ?: return
+        val requestedSession = sessionKey() ?: return null
         val requestedItem = player.currentMediaItem
         val endedPosition = player.currentPosition.coerceAtLeast(0L)
         val endedDuration = player.duration.takeIf { it > 0 }
-        mutex.withLock {
-            if (sessionKey() != requestedSession || queueIdentity() != requestedQueue) return
+        return mutex.withLock {
+            if (sessionKey() != requestedSession || queueIdentity() != requestedQueue) return null
             pendingHandoff = pendingHandoff?.takeIf {
                 it.session == requestedSession && it.playlist == requestedQueue
             }
@@ -72,20 +163,21 @@ internal class GrowingPlaybackQueue(
                 saveEndedProgress(requestedItem, endedPosition, endedDuration)
                 if (sessionKey() != requestedSession || queueIdentity() != requestedQueue ||
                     player.currentMediaItem != requestedItem
-                ) return
+                ) return null
             }
+            val unchanged = ReconciledQueue(requestedQueue)
             val items = (0 until player.mediaItemCount).map(player::getMediaItemAt)
             val fictionId = player.currentMediaItem?.mediaMetadata?.extras
-                ?.getInt("fiction_id")?.takeIf { it > 0 } ?: return
-            if (items.any { it.mediaMetadata.extras?.getInt("fiction_id") != fictionId }) return
+                ?.getInt("fiction_id")?.takeIf { it > 0 } ?: return unchanged
+            if (items.any { it.mediaMetadata.extras?.getInt("fiction_id") != fictionId }) return unchanged
             val loaded = try {
                 load(fictionId).distinctBy { it.mediaId }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                return
+                return unchanged
             }
-            if (sessionKey() != requestedSession || queueIdentity() != requestedQueue) return
+            if (sessionKey() != requestedSession || queueIdentity() != requestedQueue) return null
             val wasEnded = player.playbackState == Player.STATE_ENDED
             val currentUid = player.currentTimeline.getWindow(
                 player.currentMediaItemIndex, Timeline.Window(),
@@ -101,22 +193,29 @@ internal class GrowingPlaybackQueue(
                     ?: player.mediaItemCount
                 player.addMediaItem(insertion, item)
             }
-            pendingHandoff = pendingHandoff?.copy(playlist = queueIdentity())
-            if (!wasEnded || !player.playWhenReady || !allowContinuation()) return
+            val reconciled = ReconciledQueue(queueIdentity())
+            nextIntent?.takeIf {
+                it.session == requestedSession && it.playlist == requestedQueue &&
+                    it.generation == navigationGeneration
+            }?.playlist = reconciled.playlist
+            pendingHandoff = pendingHandoff?.copy(playlist = reconciled.playlist)
+            if (!continueEnded || pendingNext > 0 || !wasEnded || !player.playWhenReady ||
+                !allowContinuation()
+            ) return reconciled
             val successor = player.currentMediaItemIndex + 1
             if (successor < player.mediaItemCount) {
                 player.seekTo(successor, 0L)
                 player.prepare()
-                return
+                return reconciled
             }
-            if (!endedEvent || player.currentMediaItem != requestedItem) return
+            if (!endedEvent || player.currentMediaItem != requestedItem) return reconciled
             pendingHandoff?.let {
                 pendingHandoff = null
                 installHandoff(it.item)
-                return
+                return reconciled
             }
             val end = requestedSession to currentUid
-            if (advancedEnd == end) return
+            if (advancedEnd == end) return reconciled
             advancedEnd = end
             val beforeAdvance = queueIdentity()
             val next = try {
@@ -125,15 +224,16 @@ internal class GrowingPlaybackQueue(
                 throw cancelled
             } catch (_: Exception) {
                 null
-            } ?: return
-            if (sessionKey() != requestedSession || queueIdentity() != beforeAdvance) return
+            } ?: return reconciled
+            if (sessionKey() != requestedSession || queueIdentity() != beforeAdvance) return null
             if (player.playbackState != Player.STATE_ENDED ||
                 player.currentMediaItem != requestedItem || player.currentPosition != endedPosition
             ) {
                 pendingHandoff = PendingHandoff(requestedSession, beforeAdvance, next)
-                return
+                return reconciled
             }
             installHandoff(next)
+            reconciled
         }
     }
 }

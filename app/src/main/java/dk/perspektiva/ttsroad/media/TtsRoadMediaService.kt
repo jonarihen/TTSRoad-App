@@ -302,7 +302,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 }
             },
         )
-        GrowingPlaybackQueue(
+        val growingQueue = GrowingPlaybackQueue(
             player = player,
             scope = serviceScope,
             sessionKey = { playbackSessionGeneration.takeIf { playbackSessionActive } },
@@ -324,12 +324,13 @@ class TtsRoadMediaService : MediaLibraryService() {
             saveEndedProgress = { item, position, duration ->
                 saveProgressFor(item, position, duration, queueEnded = true)
             },
-        ).start()
+        )
+        growingQueue.start()
         startProgressTicker()
         startPlaybackSkipTicker()
         startSleepTimer()
         browserCallback = BrowserCallback(this)
-        session = MediaLibrarySession.Builder(this, player, browserCallback)
+        session = MediaLibrarySession.Builder(this, growingQueue.sessionPlayer, browserCallback)
             .setSessionActivity(playerActivityIntent())
             .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
             .build()
