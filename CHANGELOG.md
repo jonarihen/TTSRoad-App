@@ -2,6 +2,33 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.19.0 — 2026-10-04
+
+### Fixed
+
+- Signed-in requests carry the credential and origin they were made for, so a request queued while
+  switching accounts can never reach the old server with the new token. (#286)
+- Emptying the followed shelf in Settings now refreshes Home and Browse immediately instead of
+  leaving removed books visible until a manual refresh. (#295)
+- Server-log responses from a previous filter or page can no longer overwrite the current list,
+  cursor, or error state. (#294)
+- One-time recovery codes stay visible through rotation until acknowledged, and are cleared on
+  sign-out or account change. (#292)
+- Auto-advance and manual skips now save the departed chapter at its true position, so finished
+  chapters are marked played at any speed and rapid skips record the right chapter. (#290)
+- Android Auto search results are held per connected browser and released on disconnect, so two
+  browsers can page their own announced sets. (#283)
+- Cancelling and retrying an app-update download can no longer delete or corrupt the retry's APK,
+  and superseded installer files are cleaned up. (#293)
+- The offline cache identity is tied to the signed-in server, so switching to a server that
+  advertises no identity can no longer reuse another server's cached audio. (#284)
+- Jump-back history no longer rewrites up to 2,000 entries on every progress tick; it batches
+  writes and flushes on stop. (#291)
+- Updating a stale download now invalidates its cached bytes before re-downloading, even when the
+  URL is unchanged, and a failed replacement keeps the stale warning. (#288)
+- Tapping a new-chapter notification opens that chapter with a Play action, and the notices poll
+  only runs when the server supports notifications for followed fiction. (#175)
+
 ## 0.18.1 — 2026-09-28
 
 ### Fixed

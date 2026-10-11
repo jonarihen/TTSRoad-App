@@ -13,6 +13,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -32,6 +33,7 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
+import dk.perspektiva.ttsroad.notificationSessionKey
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
@@ -56,6 +58,7 @@ import dk.perspektiva.ttsroad.player.InProcessPlayer
 import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.adSkipTarget
 import dk.perspektiva.ttsroad.player.PlaybackFailure
+import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.PlayedThreshold
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.ShakeDetector
@@ -87,6 +90,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 // Media3 marks much of its session and data-source surface @UnstableApi. The whole class works
@@ -146,6 +150,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     @Volatile
     private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
+    private var boundQueueSession: dk.perspektiva.ttsroad.data.SessionState? = null
 
     // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
     // and car transport read the preference from here rather than the DataStore.
@@ -171,6 +176,11 @@ class TtsRoadMediaService : MediaLibraryService() {
             tokenStore.session.collectLatest { state ->
                 playbackSessionGeneration++
                 playbackSessionActive = state.isLoggedIn
+                val queueOwner = boundQueueSession
+                if (queueOwner != null && (queueOwner.serverUrl != state.serverUrl || queueOwner.token != state.token || !state.isLoggedIn)) {
+                    boundQueueSession = null
+                    if (::player.isInitialized) stopSignedOutPlayback(player)
+                }
                 audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(state.serverUrl, state.authorizationHeader)
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
@@ -231,6 +241,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .collect { skipIntervalMs = it }
         }
         player.addListener(
+            departingChapterProgressListener(player, serviceScope) { item, position, duration, completed, flushHistory ->
+                saveProgressFor(item, position, duration, queueEnded = completed, flushHistory = flushHistory)
+            },
+        )
+        player.addListener(idleHistoryFlushListener(ServiceLocator.playbackHistory(this), serviceScope))
+        player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState != Player.STATE_ENDED) {
@@ -248,7 +264,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (!isPlaying) {
-                        serviceScope.launch { saveCurrentProgress(queueEnded = false) }
+                        serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
                     } else {
                         // Do not wait for the first 15-second progress tick to turn Play into Pause.
                         serviceScope.launch { publishNowPlaying(forcePlaying = true) }
@@ -263,23 +279,6 @@ class TtsRoadMediaService : MediaLibraryService() {
                  * the case that matters, since the car and the notification can both do it.
                  */
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    // The chapter just left never gets another tick, pause or queue-end: by the time
-                    // this fires the player already points at the new item, so saveCurrentProgress
-                    // can no longer see it. Persist its last known position first, keyed to the item
-                    // that ended rather than re-reading the player — otherwise an auto-advanced
-                    // chapter keeps only its last pre-boundary tick and is never marked played.
-                    val finished = transitionFinishedItem(lastProgressItem, mediaItem?.mediaId)
-                    if (finished != null) {
-                        lastProgressItem = null
-                        serviceScope.launch {
-                            saveProgressFor(
-                                finished,
-                                lastProgressPositionMs,
-                                lastProgressDurationMs,
-                                queueEnded = false,
-                            )
-                        }
-                    }
                     currentFictionId.value = mediaItem?.mediaMetadata?.extras
                         ?.getInt("fiction_id")
                         ?.takeIf { it > 0 }
@@ -365,6 +364,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
+        serviceScope.cancel()
+        runBlocking {
+            flushHistoryForTeardown(player, ServiceLocator.playbackHistory(this@TtsRoadMediaService), ::recordHistory)
+        }
         shakeDetector?.stop()
         sleepTimer.cancel()
         // Release the effect before the player: it is attached to the player's audio session, and
@@ -374,7 +377,6 @@ class TtsRoadMediaService : MediaLibraryService() {
         session.release()
         InProcessPlayer.detach(player)
         player.release()
-        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -847,15 +849,28 @@ class TtsRoadMediaService : MediaLibraryService() {
         runCatching { NowPlayingWidget().updateAll(this) }
     }
 
-    private var lastProgressItem: MediaItem? = null
-    private var lastProgressPositionMs: Long = 0L
-    private var lastProgressDurationMs: Long? = null
+    private fun recordHistory(mediaItem: MediaItem, position: Long) {
+        val extras = mediaItem.mediaMetadata.extras
+        ServiceLocator.playbackHistory(this).record(
+            timestamp = System.currentTimeMillis(),
+            mediaId = mediaItem.mediaId,
+            fictionId = extras?.getInt("fiction_id") ?: 0,
+            chapterId = extras?.getInt("chapter_id") ?: 0,
+            title = mediaItem.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: "Chapter",
+            fictionTitle = mediaItem.mediaMetadata.albumTitle?.toString(),
+            positionMs = position,
+        )
+    }
 
-    private suspend fun saveCurrentProgress(queueEnded: Boolean) {
-        val mediaItem = player.currentMediaItem ?: return
+    private suspend fun saveCurrentProgress(queueEnded: Boolean, flushHistory: Boolean = queueEnded) {
+        val mediaItem = player.currentMediaItem
+        if (mediaItem == null) {
+            if (flushHistory) ServiceLocator.playbackHistory(this).flush()
+            return
+        }
         val position = player.currentPosition.coerceAtLeast(0L)
         val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 }
-        saveProgressFor(mediaItem, position, duration, queueEnded)
+        saveProgressFor(mediaItem, position, duration, queueEnded, flushHistory)
     }
 
     private suspend fun saveProgressFor(
@@ -863,10 +878,12 @@ class TtsRoadMediaService : MediaLibraryService() {
         position: Long,
         duration: Long?,
         queueEnded: Boolean,
+        flushHistory: Boolean = queueEnded,
     ) {
-        lastProgressItem = mediaItem
-        lastProgressPositionMs = position
-        lastProgressDurationMs = duration
+        val itemSession = mediaItem.mediaMetadata.extras?.getString("queue_session_key")
+        suspend fun ownsProgress(): Boolean = itemSession == null ||
+            notificationSessionKey(tokenStore.current()) == itemSession
+        if (!ownsProgress()) return
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 }
         val chapterId = extras?.getInt("chapter_id")?.takeIf { it > 0 }
@@ -874,15 +891,8 @@ class TtsRoadMediaService : MediaLibraryService() {
         // Record a wall-clock → position snapshot so the user can jump back to where they fell
         // asleep. Done here because this runs on the 15s tick, on pause, and at chapter end. The
         // fiction/chapter ids let "jump back" reload the fiction even after playback has stopped.
-        ServiceLocator.playbackHistory(this).record(
-            timestamp = System.currentTimeMillis(),
-            mediaId = mediaItem.mediaId,
-            fictionId = fictionId ?: 0,
-            chapterId = chapterId ?: 0,
-            title = mediaItem.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: "Chapter",
-            fictionTitle = mediaItem.mediaMetadata.albumTitle?.toString(),
-            positionMs = position,
-        )
+        recordHistory(mediaItem, position)
+        if (flushHistory) ServiceLocator.playbackHistory(this).flush()
 
         // The home-screen widget reads a note rather than a player, because the launcher draws it
         // in a process where this one is usually dead (#150). Written from here so it rides the
@@ -906,7 +916,9 @@ class TtsRoadMediaService : MediaLibraryService() {
         // carried an unstamped position the server could not order against one reached in the
         // browser meanwhile, and so overwrote it. The queue is what makes the position survive
         // being offline, and the stamp is what lets the server decide who is actually newer.
+        if (!ownsProgress()) return
         withContext(Dispatchers.IO) {
+            if (!ownsProgress()) return@withContext
             pendingProgress.record(
                 fictionId = fictionId,
                 chapterId = chapterId,
@@ -914,6 +926,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 isPlayed = isPlayed,
             )
         }
+        if (!ownsProgress()) return
         progressSync.flush()
 
         writeBreadcrumb(chapterId = chapterId, positionMs = position)
@@ -1160,6 +1173,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .setAvailableSessionCommands(
                     MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
                         .buildUpon()
+                        .apply {
+                            if (controller.uid == android.os.Process.myUid()) {
+                                add(TtsRoadSessionCommands.verifyQueueCommand)
+                                add(TtsRoadSessionCommands.installQueueCommand)
+                            }
+                        }
                         .add(TtsRoadSessionCommands.skipBackCommand)
                         .add(TtsRoadSessionCommands.skipForwardCommand)
                         // Granted regardless of the bookmarks capability: whether the *button* is
@@ -1181,6 +1200,23 @@ class TtsRoadMediaService : MediaLibraryService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == TtsRoadSessionCommands.installQueueCommand.customAction) {
+                if (controller.uid != android.os.Process.myUid()) {
+                    return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                }
+                return service.serviceScope.future {
+                    SessionBoundQueue.install(args.getString("ticket"), session.player, service.tokenStore) { owner ->
+                        service.boundQueueSession = owner
+                        service.audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(owner.serverUrl, owner.authorizationHeader)
+                    }
+                }
+            }
+            if (customCommand.customAction == TtsRoadSessionCommands.verifyQueueCommand.customAction) {
+                if (controller.uid != android.os.Process.myUid()) {
+                    return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                }
+                return service.serviceScope.future { TtsRoadSessionCommands.awaitQueue(session.player, args) }
+            }
             // Handled apart from the seeks below: these write to the server rather than the player,
             // so they answer asynchronously and never touch the playback position.
             if (customCommand.customAction == TtsRoadSessionCommands.Bookmark) {
@@ -1281,10 +1317,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         // exist, then the browser asks for the page it wants. The result is cached between the two
         // so the library is not fetched and matched twice per spoken search, and so the pages come
         // from the same result set whose count was announced.
-        private val searchCache = SearchResultCache()
-
-        // Every browser that has been told a result count, so an account change can retract it.
-        private val activeSearches = mutableMapOf<MediaSession.ControllerInfo, Pair<String, LibraryParams?>>()
+        private val searchCache = BrowserSearchResultCache()
 
         /**
          * Withdraw every search result a connected car is showing. Called on sign-out and account
@@ -1292,24 +1325,30 @@ class TtsRoadMediaService : MediaLibraryService() {
          * what it was last told until it hears otherwise.
          */
         fun retractSearches(session: MediaLibrarySession) {
+            val searches = searchCache.announcedSearches()
             searchCache.invalidate()
-            for ((browser, search) in activeSearches) {
-                session.notifySearchResultChanged(browser, search.first, 0, search.second)
+            for (search in searches) {
+                session.notifySearchResultChanged(search.browser, search.query, 0, search.params)
             }
-            activeSearches.clear()
         }
 
-        private suspend fun results(query: String, fresh: Boolean): List<MediaItem> {
+        override fun onDisconnected(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ) {
+            searchCache.invalidate(controller)
+        }
+
+        private suspend fun results(
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            fresh: Boolean,
+        ): List<MediaItem>? {
             val session = service.librarySessionGeneration
-            val found = if (fresh) {
-                searchCache.invalidate()
-                searchCache.results(query, service.searchCacheGeneration) { service.searchItems(query) }
-            } else {
-                searchCache.held(query) ?: searchCache.results(query, service.searchCacheGeneration) {
-                    service.searchItems(query)
-                }
-            } ?: return emptyList()
-            return if (service.sessionStillCurrent(session)) found else emptyList()
+            val found = searchCache.results(browser, query, service.searchCacheGeneration, fresh) {
+                service.searchItems(query)
+            } ?: return null
+            return found.takeIf { service.sessionStillCurrent(session) }
         }
 
         override fun onSearch(
@@ -1319,8 +1358,9 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<Void>> =
             service.serviceScope.future {
-                val found = results(query, fresh = true)
-                activeSearches[browser] = query to params
+                val found = results(browser, query, fresh = true)
+                    ?: return@future LibraryResult.ofVoid()
+                searchCache.announced(browser, query, params)
                 session.notifySearchResultChanged(browser, query, found.size, params)
                 LibraryResult.ofVoid()
             }
@@ -1334,7 +1374,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
             service.serviceScope.future {
-                LibraryResult.ofItemList(page(results(query, fresh = false), page, pageSize), params)
+                val found = results(browser, query, fresh = false).orEmpty()
+                LibraryResult.ofItemList(page(found, page, pageSize), params)
             }
 
         override fun onGetChildren(
@@ -1481,6 +1522,70 @@ internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition
 internal fun transitionFinishedItem(previous: MediaItem?, newMediaId: String?): MediaItem? =
     if (previous != null && previous.mediaId != newMediaId) previous else null
 
+internal fun idleHistoryFlushListener(history: PlaybackHistoryStore, scope: CoroutineScope): Player.Listener =
+    object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_IDLE) scope.launch { history.flush() }
+        }
+    }
+
+@OptIn(UnstableApi::class)
+internal suspend fun flushHistoryForTeardown(
+    player: Player,
+    history: PlaybackHistoryStore,
+    record: (MediaItem, Long) -> Unit,
+) {
+    if (player.isPlaying) {
+        player.currentMediaItem?.let { record(it, player.currentPosition.coerceAtLeast(0L)) }
+    }
+    history.flush()
+}
+
+@OptIn(UnstableApi::class)
+internal fun departingChapterProgressListener(
+    player: Player,
+    scope: CoroutineScope,
+    save: suspend (MediaItem, Long, Long?, Boolean, Boolean) -> Unit,
+): DepartingChapterProgressListener = DepartingChapterProgressListener(player) { item, position, duration, completed ->
+    val flushHistory = completed || player.currentMediaItem == null
+    scope.launch { save(item, position, duration, completed, flushHistory) }
+}
+
+@OptIn(UnstableApi::class)
+internal class DepartingChapterProgressListener(
+    private val player: Player,
+    private val save: (MediaItem, Long, Long?, Boolean) -> Unit,
+) : Player.Listener {
+    var lastProgressItem: MediaItem? = player.currentMediaItem
+        private set
+
+    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        lastProgressItem = mediaItem
+    }
+
+    override fun onPositionDiscontinuity(
+        oldPosition: Player.PositionInfo,
+        newPosition: Player.PositionInfo,
+        reason: Int,
+    ) {
+        val departed = transitionFinishedItem(
+            oldPosition.mediaItem ?: lastProgressItem,
+            newPosition.mediaItem?.mediaId,
+        )
+        lastProgressItem = newPosition.mediaItem
+        if (departed == null) return
+        val timeline = player.currentTimeline
+        val window = Timeline.Window()
+        val duration = (0 until timeline.windowCount).firstNotNullOfOrNull { index ->
+            timeline.getWindow(index, window)
+            window.durationMs.takeIf { window.uid == oldPosition.windowUid && it > 0 }
+        } ?: departed.mediaMetadata.durationMs?.takeIf { it > 0 }
+        val completed = reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION
+        val position = if (completed && duration != null) duration else oldPosition.positionMs
+        save(departed, position.coerceAtLeast(0L), duration, completed)
+    }
+}
+
 /** Items found by one search, tagged with the generation of the library they were built from. */
 internal data class SearchResult(val items: List<MediaItem>, val generation: Long)
 
@@ -1525,6 +1630,60 @@ internal class SearchResultCache {
         cachedQuery = null
         cachedGeneration = -1L
         cachedResults = emptyList()
+    }
+}
+
+internal const val MaxRetainedSearchQueriesPerBrowser = 8
+
+internal data class SearchAnnouncement(
+    val browser: MediaSession.ControllerInfo,
+    val query: String,
+    val params: LibraryParams?,
+)
+
+internal class BrowserSearchResultCache(
+    private val maxQueriesPerBrowser: Int = MaxRetainedSearchQueriesPerBrowser,
+) {
+    private class Entry {
+        val cache = SearchResultCache()
+        var announcement: SearchAnnouncement? = null
+    }
+
+    private val caches = mutableMapOf<MediaSession.ControllerInfo, LinkedHashMap<String, Entry>>()
+
+    init {
+        require(maxQueriesPerBrowser > 0)
+    }
+
+    suspend fun results(
+        browser: MediaSession.ControllerInfo,
+        query: String,
+        generation: Long,
+        fresh: Boolean,
+        search: suspend () -> SearchResult?,
+    ): List<MediaItem>? {
+        val queries = caches.getOrPut(browser) { linkedMapOf() }
+        val previous = queries.remove(query)
+        val entry = if (fresh) Entry().also { it.announcement = previous?.announcement } else previous ?: Entry()
+        queries[query] = entry
+        if (queries.size > maxQueriesPerBrowser) queries.remove(queries.keys.first())
+        val found = entry.cache.held(query) ?: entry.cache.results(query, generation, search).orEmpty()
+        return found.takeIf { caches[browser]?.get(query) === entry }
+    }
+
+    fun announced(browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?) {
+        caches[browser]?.get(query)?.announcement = SearchAnnouncement(browser, query, params)
+    }
+
+    fun announcedSearches(): List<SearchAnnouncement> =
+        caches.values.flatMap { queries -> queries.values.mapNotNull { it.announcement } }
+
+    fun invalidate(browser: MediaSession.ControllerInfo) {
+        caches.remove(browser)
+    }
+
+    fun invalidate() {
+        caches.clear()
     }
 }
 

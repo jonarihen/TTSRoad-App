@@ -256,6 +256,7 @@ data class ServerCapabilities(
     val maxPlaybackSyncItems: Int? = null,
     /** The largest EPUB the server will accept, for checking a file before uploading it (#114). */
     val maxEpubBytes: Long? = null,
+    val discoveryBaseUrl: String? = null,
 ) {
     /**
      * The EPUB ceiling to enforce on this server, advertised or assumed.

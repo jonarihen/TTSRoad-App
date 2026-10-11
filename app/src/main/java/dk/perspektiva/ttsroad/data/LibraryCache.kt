@@ -205,6 +205,15 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         refreshed
     }
 
+    fun invalidateFollowing() {
+        libraryJob?.cancel()
+        browseAllJob?.cancel()
+        libraryCursor = null
+        browseAllCursor = null
+        _library.value = Cached()
+        _browseAll.value = Cached()
+    }
+
     /**
      * Reflect a follow change without refetching either list.
      *

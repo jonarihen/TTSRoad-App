@@ -223,7 +223,6 @@ class FictionNotificationSettingsRepositoryTest {
             assertEquals(method, server.takeRequest().method)
             assertEquals(1, store.clearTokenCalls)
             assertFalse(store.current().isLoggedIn)
-            assertNull(repository.authHeader)
             assertEquals(SessionEndReason.Expired, repository.sessionEnd.value?.reason)
             assertEquals("Sign in again.", repository.sessionEnd.value?.message)
         }

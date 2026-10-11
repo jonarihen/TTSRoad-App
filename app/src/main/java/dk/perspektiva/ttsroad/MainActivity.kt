@@ -154,6 +154,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
@@ -365,6 +366,7 @@ class MainActivity : ComponentActivity() {
     // Notification taps that arrive while the activity is already running come through
     // onNewIntent, so they are relayed to the composition rather than read from the start intent.
     private val openPlayerRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    internal val notificationRoutes by lazy { ViewModelProvider(this)[NotificationRouteOwner::class.java] }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -372,16 +374,26 @@ class MainActivity : ComponentActivity() {
         // activity because the process is in the foreground here, so starting the service is allowed.
         ServiceLocator.offlineDownloads(this).resumeUnfinished()
         val startOnPlayer = consumeOpenPlayer(intent)
+        notificationRoutes.accept(intent)
+        val tokenStore = ServiceLocator.tokenStore(this)
+        val recoveryCodesOwner = recoveryCodesOwner(
+            repository = ServiceLocator.repository(this),
+            sessions = tokenStore.session,
+            currentSession = tokenStore::current,
+        )
         setContent {
             TtsRoadTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = AarisColor.Bg,
                 ) {
-                    TtsRoadApp(
-                        startOnPlayer = startOnPlayer,
-                        openPlayerRequests = openPlayerRequests,
-                    )
+                    CompositionLocalProvider(LocalRecoveryCodesOwner provides recoveryCodesOwner) {
+                        TtsRoadApp(
+                            startOnPlayer = startOnPlayer,
+                            openPlayerRequests = openPlayerRequests,
+                            notificationRoutes = notificationRoutes,
+                        )
+                    }
                 }
             }
         }
@@ -396,6 +408,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (consumeOpenPlayer(intent)) openPlayerRequests.tryEmit(Unit)
+        notificationRoutes.accept(intent)
     }
 
     companion object {
@@ -422,6 +435,7 @@ class MainActivity : ComponentActivity() {
 private fun TtsRoadApp(
     startOnPlayer: Boolean = false,
     openPlayerRequests: Flow<Unit> = emptyFlow(),
+    notificationRoutes: NotificationRouteOwner,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -431,6 +445,8 @@ private fun TtsRoadApp(
     val playbackController = remember { ServiceLocator.playbackController(context) }
     val updateManager = remember { ServiceLocator.updateManager() }
     val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val recoveryCodesOwner = LocalRecoveryCodesOwner.current
+    val recoveryCodesState by recoveryCodesOwner.state.collectAsStateWithLifecycle()
     var backStack by remember { mutableStateOf(rootBackStack) }
     var openPlayerPending by remember { mutableStateOf(startOnPlayer) }
 
@@ -480,6 +496,45 @@ private fun TtsRoadApp(
         }
     }
 
+    val notificationCapabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    val notificationCapabilitiesResolved by repository.currentCapabilitiesResolved.collectAsStateWithLifecycle()
+    NotificationRouting(
+        owner = notificationRoutes,
+        session = session,
+        capabilities = notificationCapabilities,
+        capabilitiesResolved = notificationCapabilitiesResolved,
+        currentSession = tokenStore::current,
+        play = { route, owner ->
+            playNotificationChapter(
+                route = route,
+                session = owner,
+                load = { repository.chapters(it, playableOnly = true) },
+                stillAllowed = {
+                    val current = tokenStore.current()
+                    current.serverUrl == owner.serverUrl && current.token == owner.token &&
+                        canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
+                },
+                playQueue = { response, chapterId ->
+                    playbackController.playQueue(response.chapters, chapterId, response.fiction, expectedSession = owner)
+                },
+            )
+        },
+        navigate = { backStack = backStack.navigateTo(it) },
+        retryDiscovery = {
+            repository.refreshCurrentCapabilities(forceRefresh = true)
+            repository.currentCapabilitiesResolved.value
+        },
+    )
+    val newChapters = rememberNewChapters(
+        repository, session, notificationCapabilities, tokenStore::current,
+        notificationCapabilitiesResolved, notificationRoutes.lifetime,
+    )
+    LaunchedEffect(notificationCapabilities, notificationCapabilitiesResolved, session?.isLoggedIn) {
+        if (session != null && !canUseChapterNotifications(notificationCapabilities, session, notificationCapabilitiesResolved)) {
+            backStack = backStack.filterNot { it == AppScreen.NewChapters }.ifEmpty { rootBackStack }
+        }
+    }
+
     // Quietly check GitHub Releases for a newer build once per launch.
     LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
 
@@ -508,7 +563,11 @@ private fun TtsRoadApp(
                 onBack = { backStack = backStack.popScreen() },
                 repository = repository,
                 playbackController = playbackController,
+                newChapters = newChapters,
             )
+        }
+        if (session != null && recoveryCodesState.codes.isNotEmpty() && recoveryCodesOwner.owns(session)) {
+            RecoveryCodesDialog(recoveryCodesOwner)
         }
     }
 
@@ -872,6 +931,7 @@ private fun MainScaffold(
     onBack: () -> Unit,
     repository: TtsRoadRepository,
     playbackController: PlaybackController,
+    newChapters: NewChaptersState,
 ) {
     val context = LocalContext.current
     // Saved UI state (scroll offsets, search text) is kept per stack entry, so returning to a
@@ -903,13 +963,7 @@ private fun MainScaffold(
     BackHandler(enabled = canGoBack, onBack = requestBack)
     val scaffoldScope = rememberCoroutineScope()
     val scaffoldCapabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
-    // Hoisted to the scaffold rather than to the screen: the badge and the system notification are
-    // driven by a poll that has to run whether or not the list has ever been opened (#175).
-    val newChapters = rememberNewChapters(
-        repository = repository,
-        isLoggedIn = session.isLoggedIn,
-        available = scaffoldCapabilities.notifications,
-    )
+    val scaffoldCapabilitiesResolved by repository.currentCapabilitiesResolved.collectAsStateWithLifecycle()
     val playerState by playbackController.state.collectAsStateWithLifecycle()
     val preferences = remember { ServiceLocator.playbackPreferences(context) }
     val skipIntervalMs by remember(preferences) {
@@ -1093,23 +1147,27 @@ private fun MainScaffold(
                     repository = repository,
                 )
 
-                AppScreen.NewChapters -> NewChaptersScreen(
+                AppScreen.NewChapters -> if (canUseChapterNotifications(scaffoldCapabilities, session, scaffoldCapabilitiesResolved)) NewChaptersScreen(
                     padding = padding,
                     state = newChapters,
                     repository = repository,
                     onPlay = { entry ->
                         scaffoldScope.launch {
                             runCatching {
-                                val resp = repository.chapters(entry.fiction.id, playableOnly = false)
-                                // Guarded rather than assumed: the list can be a minute old, and a
-                                // chapter excluded since would otherwise start whatever sorts first.
-                                if (resp.chapters.any { it.id == entry.chapter.id }) {
-                                    playbackController.playQueue(
-                                        chapters = resp.chapters,
-                                        startChapterId = entry.chapter.id,
-                                        fiction = resp.fiction,
-                                    )
-                                }
+                                val played = playNotificationChapter(
+                                    route = NotificationRoute.Play(entry.fiction.id, entry.chapter.id),
+                                    session = session,
+                                    load = { repository.chapters(it, playableOnly = true) },
+                                    stillAllowed = {
+                                        val current = ServiceLocator.tokenStore(context).current()
+                                        current.serverUrl == session.serverUrl && current.token == session.token &&
+                                            canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
+                                    },
+                                    playQueue = { response, chapterId ->
+                                        playbackController.playQueue(response.chapters, chapterId, response.fiction, expectedSession = session)
+                                    },
+                                )
+                                if (played) onScreenChange(AppScreen.Player)
                             }
                         }
                     },
@@ -1131,7 +1189,7 @@ private fun MainScaffold(
 }
 
 @Composable
-private fun LibraryScreen(
+internal fun LibraryScreen(
     padding: PaddingValues,
     playbackController: PlaybackController,
     onOpenFiction: (FictionSummary) -> Unit,
@@ -1532,8 +1590,11 @@ private fun FictionScreen(
     // Re-runs when a download finishes or is deleted, which is when the answer can have changed.
     // The scan is one small request and is skipped entirely without the capability or a download,
     // so opening a fiction you have nothing saved from costs nothing.
-    LaunchedEffect(fiction.id, downloadedChapterIds, capabilities.audioContentHash) {
-        staleDownloads.scan(fiction.id, downloadedChapterIds)
+    val retainedChapterIds = remember(downloadState) {
+        downloadState.keys.mapNotNullTo(mutableSetOf(), TtsRoadMediaIds::chapterId)
+    }
+    LaunchedEffect(fiction.id, downloadedChapterIds, retainedChapterIds, capabilities.audioContentHash) {
+        staleDownloads.scan(fiction.id, downloadedChapterIds, retainedChapterIds)
     }
 
     /**
@@ -1760,8 +1821,7 @@ private fun FictionScreen(
                                     val outdated = chapters.filter {
                                         it.resolvedChapterId in staleChapters
                                     }
-                                    staleDownloads.markUpdating(outdated.map { it.resolvedChapterId })
-                                    downloads.download(outdated, serverUrl)
+                                    downloads.download(outdated, serverUrl, replaceExisting = true)
                                 },
                             )
                         }
@@ -1825,9 +1885,8 @@ private fun FictionScreen(
                                 when {
                                     // A stale copy is replaced rather than deleted: what is wanted
                                     // here is the current narration, not the space back.
-                                    isStale && current.isAvailableOffline -> {
-                                        staleDownloads.markUpdating(listOf(chapter.resolvedChapterId))
-                                        downloads.download(chapter, serverUrl)
+                                    isStale && !current.isBusy -> {
+                                        downloads.download(chapter, serverUrl, replaceExisting = true)
                                     }
                                     // Anything already on disk or in flight is removed; anything
                                     // else (including a previous failure) is started.
@@ -3720,6 +3779,7 @@ private fun ListeningScreen(
 ) {
     val context = LocalContext.current
     val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
+    val capabilitiesResolved by repository.currentCapabilitiesResolved.collectAsStateWithLifecycle()
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val hasHistory by remember(historyStore) {
         historyStore.snapshots.map { it.isNotEmpty() }.distinctUntilChanged()
@@ -3733,7 +3793,7 @@ private fun ListeningScreen(
         canOpenBookmarks = capabilities.bookmarks,
         canOpenPronunciationReports = capabilities.pronunciationReports,
         canOpenLogs = canReadServerLogs(capabilities, session.isAdmin),
-        canOpenNewChapters = capabilities.notifications,
+        canOpenNewChapters = canUseChapterNotifications(capabilities, session, capabilitiesResolved),
         unreadNewChapters = unreadNewChapters,
         onOpenPlayer = onOpenPlayer,
         onOpenBookmarks = onOpenBookmarks,
@@ -4719,6 +4779,9 @@ internal fun SettingsScreen(
                     shelfNote = runCatching { repository.unfollowAllFictions() }
                         .fold(
                             onSuccess = { removed ->
+                                if (removed != null) {
+                                    ServiceLocator.libraryCache(context).invalidateFollowing()
+                                }
                                 when (removed) {
                                     null -> "This server cannot empty a shelf in one call."
                                     0 -> "Your shelf was already empty."
@@ -6480,7 +6543,7 @@ private fun downloadMetaLabel(
 }
 
 @Composable
-private fun FictionsScreen(
+internal fun FictionsScreen(
     padding: PaddingValues,
     repository: TtsRoadRepository,
     isAdmin: Boolean = false,
