@@ -33,6 +33,8 @@ import dk.perspektiva.ttsroad.media.recoverAudioPlaybackIfCurrent
 import dk.perspektiva.ttsroad.media.sameAudioServer
 import dk.perspektiva.ttsroad.media.recoverAudioPlayback
 import dk.perspektiva.ttsroad.media.withAudioAccount
+import dk.perspektiva.ttsroad.media.withAudioOrigin
+import dk.perspektiva.ttsroad.media.audioItemFromSession
 import dk.perspektiva.ttsroad.media.AudioAccountExtra
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -880,6 +882,33 @@ class AudioAuthSnapshotTest {
         // An item keeps the account it was queued for when a controller hands it back.
         val stamped = withAudioAccount(recoveryItems().first(), "admin")
         assertEquals("admin", withAudioAccount(stamped, "other").mediaMetadata.extras!!.getString(AudioAccountExtra))
+    }
+
+    @Test
+    fun `a browse item kept from a previous account is refused by the next one`() {
+        val address = "https://home.example/ttsroad/"
+        val origin = AudioAuthSnapshot(address, "Bearer a", "alice")
+        val chapter = withAudioOrigin(requireNotNull(TtsRoadMediaItems.chapter(
+            ChapterSummary(id = 7, fictionId = 1, audio = AudioInfo(url = "/audio/book/1.mp3")), serverUrl = address,
+        )), origin)
+        val folder = withAudioOrigin(TtsRoadMediaItems.fictionFolder(
+            dk.perspektiva.ttsroad.data.FictionSummary(id = 1, title = "Book"), address,
+        ), origin)
+        // What a car hands back across the binder: the playback URI is stripped, the extras are not.
+        val handedBack = chapter.buildUpon().setUri(null as android.net.Uri?).build()
+        for (item in listOf(chapter, folder, handedBack)) {
+            assertEquals("alice", item.mediaMetadata.extras!!.getString(AudioAccountExtra))
+            assertEquals(address, item.mediaMetadata.extras!!.getString(AudioServerUrlExtra))
+            assertTrue(audioItemFromSession(item, AudioAuthSnapshot(address, "Bearer rotated", "alice")))
+            assertFalse(audioItemFromSession(item, AudioAuthSnapshot(address, "Bearer b", "bob")))
+            assertFalse(audioItemFromSession(item, AudioAuthSnapshot("https://other.example/", "Bearer a", "alice")))
+            // Submitting it after the switch cannot re-stamp it as the new account's.
+            assertEquals("alice", withAudioAccount(item, "bob").mediaMetadata.extras!!.getString(AudioAccountExtra))
+        }
+        assertFalse(audioItemBelongsToSession(handedBack, SessionState(serverUrl = address, token = "b", username = "bob")))
+        // An item built by the in-app UI for the signed-in session records neither, and passes.
+        assertTrue(audioItemFromSession(MediaItem.fromUri("https://home.example/audio/book/1.mp3"),
+            AudioAuthSnapshot(address, "Bearer b", "bob")))
     }
 
     @Test

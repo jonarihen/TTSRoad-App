@@ -1,6 +1,8 @@
 package dk.perspektiva.ttsroad.player
 
 import android.content.Context
+import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.data.normalizeBaseUrl
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -27,7 +29,30 @@ data class PendingProgress(
     /** Epoch millis of the same moment, kept so entries can be ordered without reparsing. */
     val recordedAtMillis: Long,
     val recordId: String = UUID.randomUUID().toString(),
+    /**
+     * The server and account the position was listened under. Chapter ids are only meaningful to
+     * that account, so an entry is sent only while the same account is signed in (see [ownedBy]).
+     * Nullable so files written before 0.20 still parse; such an entry has no provable owner and
+     * is never sent.
+     */
+    val ownerServerUrl: String? = null,
+    val ownerAccount: String? = null,
 )
+
+/**
+ * Whether [this] entry may be sent with [session]'s credentials: same server, same account.
+ *
+ * An entry without an owner fails. It predates owners, and the one thing that must not happen is
+ * a position from one account landing in another — a one-off loss of an offline backlog that was
+ * already waiting across the upgrade is the lesser harm.
+ */
+fun PendingProgress.ownedBy(session: SessionState): Boolean {
+    val owner = ownerServerUrl ?: return false
+    if (!session.isLoggedIn) return false
+    val sameServer = runCatching { normalizeBaseUrl(owner) == normalizeBaseUrl(session.serverUrl) }
+        .getOrDefault(false)
+    return sameServer && ownerAccount == session.username
+}
 
 /**
  * The server's format for `client_updated_at`: ISO-8601 UTC with an explicit `Z` and **at most
@@ -100,6 +125,7 @@ class PendingProgressStore(
         chapterId: Int,
         positionSeconds: Double,
         isPlayed: Boolean,
+        owner: SessionState,
     ): PendingProgress {
         return synchronized(lock) {
             val now = clock().coerceAtLeast(lastRecordedMillis + 1)
@@ -111,8 +137,15 @@ class PendingProgressStore(
                 isPlayed = isPlayed,
                 clientUpdatedAt = iso8601Utc(now),
                 recordedAtMillis = now,
+                ownerServerUrl = owner.serverUrl,
+                ownerAccount = owner.username,
             )
-            entries.removeAll { it.chapterId == chapterId }
+            // Coalesced per chapter *and owner*: another account's position for the same chapter
+            // id is a different listener's, and waits for that account to come back.
+            entries.removeAll {
+                it.chapterId == chapterId && it.ownerServerUrl == entry.ownerServerUrl &&
+                    it.ownerAccount == entry.ownerAccount
+            }
             entries.add(entry)
             // Oldest first out. A position from last week matters less than one from this morning,
             // and the cap is only ever reached by a device that has been offline for a very long
@@ -127,6 +160,10 @@ class PendingProgressStore(
 
     /** Everything waiting, oldest first. */
     fun pending(): List<PendingProgress> = synchronized(lock) { entries.toList() }
+
+    /** What may be sent as [session], oldest first. */
+    fun pendingFor(session: SessionState): List<PendingProgress> =
+        synchronized(lock) { entries.filter { it.ownedBy(session) } }
 
     fun isEmpty(): Boolean = synchronized(lock) { entries.isEmpty() }
 

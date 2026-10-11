@@ -13,6 +13,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -95,11 +96,13 @@ class ProgressSyncTest {
     private fun pendingStore(clock: () -> Long = System::currentTimeMillis) =
         PendingProgressStore(RuntimeEnvironment.getApplication(), clock)
 
+    private val owner get() = SessionState(serverUrl = server.url("/").toString(), token = "t0ken", username = "reader")
+
     @Test
     fun `queued positions go to the batch endpoint with their stamps`() = runTest {
         val repository = repository(batchProgress = true)
         val store = pendingStore { 1_700_000_000_000L }
-        store.record(1, 7, 30.0, false)
+        store.record(1, 7, 30.0, false, owner = owner)
         server.enqueue(
             MockResponse()
                 .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}""")
@@ -125,7 +128,7 @@ class ProgressSyncTest {
         // newer position, the phone's older one loses, and the phone must not keep retrying it.
         val repository = repository(batchProgress = true)
         val store = pendingStore()
-        store.record(1, 7, 30.0, false)
+        store.record(1, 7, 30.0, false, owner = owner)
         server.enqueue(
             MockResponse()
                 .setBody(
@@ -153,8 +156,8 @@ class ProgressSyncTest {
     fun `rejections that cannot succeed on a retry are not retried forever`() = runTest {
         val repository = repository(batchProgress = true)
         val store = pendingStore()
-        store.record(1, 7, 30.0, false)
-        store.record(1, 8, 0.0, false)
+        store.record(1, 7, 30.0, false, owner = owner)
+        store.record(1, 8, 0.0, false, owner = owner)
         server.enqueue(
             MockResponse()
                 .setBody(
@@ -180,7 +183,7 @@ class ProgressSyncTest {
     fun `nothing is lost when the flush fails`() = runTest {
         val repository = repository(batchProgress = true)
         val store = pendingStore()
-        store.record(1, 7, 30.0, false)
+        store.record(1, 7, 30.0, false, owner = owner)
         server.enqueue(MockResponse().setResponseCode(500))
 
         val result = ProgressSync(repository, store).flush()
@@ -194,7 +197,7 @@ class ProgressSyncTest {
     fun `the backlog is split into batches the server will accept`() = runTest {
         val repository = repository(batchProgress = true, maxItems = 2)
         val store = pendingStore()
-        for (chapter in 1..5) store.record(1, chapter, 10.0, false)
+        for (chapter in 1..5) store.record(1, chapter, 10.0, false, owner = owner)
         repeat(3) {
             server.enqueue(
                 MockResponse()
@@ -218,7 +221,7 @@ class ProgressSyncTest {
         // their writes. It is unordered, but it is what an older server has.
         val repository = repository(batchProgress = false)
         val store = pendingStore()
-        store.record(1, 7, 30.0, false)
+        store.record(1, 7, 30.0, false, owner = owner)
         server.enqueue(
             MockResponse()
                 .setBody("""{"status": "ok", "chapter_id": 7}""")
@@ -237,7 +240,7 @@ class ProgressSyncTest {
     fun `the fallback path also keeps what it could not send`() = runTest {
         val repository = repository(batchProgress = false)
         val store = pendingStore()
-        store.record(1, 7, 30.0, false)
+        store.record(1, 7, 30.0, false, owner = owner)
         server.enqueue(MockResponse().setResponseCode(500))
 
         ProgressSync(repository, store).flush()
@@ -256,5 +259,58 @@ class ProgressSyncTest {
         assertEquals(0, result.sent)
         server.takeRequest()
         assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `an account switch without sign-out never posts the previous account's backlog`() = runTest {
+        for (batch in listOf(true, false)) {
+            server.shutdown()
+            server = okhttp3.mockwebserver.MockWebServer().also { it.start() }
+            val repository = repository(batchProgress = batch)
+            server.takeRequest() // capabilities
+            val store = pendingStore()
+            store.clear()
+            // Account "previous" listened offline on the same backend, then "reader" signed in over it.
+            store.record(1, 7, 30.0, false, owner = owner.copy(token = "previous-token", username = "previous"))
+            store.record(1, 8, 40.0, false, owner = owner)
+            server.enqueue(
+                MockResponse()
+                    .setBody(if (batch) """{"accepted": [{"chapter_id": 8}], "rejected": [], "server_state": []}"""
+                        else """{"status":"saved","chapter_id":8}""")
+                    .setHeader("Content-Type", "application/json"),
+            )
+
+            val result = ProgressSync(repository, store).flush()
+
+            val request = server.takeRequest()
+            val body = request.body.readUtf8()
+            assertTrue(body, """"chapter_id":8""" in body)
+            assertFalse(body, """"chapter_id":7""" in body)
+            assertEquals(2, server.requestCount)
+            assertEquals(1, result.sent)
+            assertTrue(result.drained)
+            // Kept for its own account rather than dropped: it is still that listener's position.
+            assertEquals(listOf(7), store.pending().map { it.chapterId })
+            assertEquals("previous", store.pending().single().ownerAccount)
+        }
+    }
+
+    @Test
+    fun `an entry written before owners existed parses but is never sent`() = runTest {
+        val repository = repository(batchProgress = true)
+        server.takeRequest() // capabilities
+        java.io.File(RuntimeEnvironment.getApplication().filesDir, "pending_progress.json").writeText(
+            """[{"fictionId":1,"chapterId":7,"positionSeconds":30.0,"isPlayed":false,""" +
+                """"clientUpdatedAt":"2023-11-14T22:13:20Z","recordedAtMillis":1700000000000,"recordId":"legacy"}]""",
+        )
+        val store = pendingStore()
+        assertEquals(listOf("legacy"), store.pending().map { it.recordId })
+        assertNull(store.pending().single().ownerServerUrl)
+
+        val result = ProgressSync(repository, store).flush()
+
+        assertEquals(0, result.sent)
+        assertEquals(1, server.requestCount)
+        assertEquals(1, store.pending().size)
     }
 }

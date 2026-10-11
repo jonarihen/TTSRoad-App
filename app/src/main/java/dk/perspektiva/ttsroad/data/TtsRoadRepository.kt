@@ -354,6 +354,9 @@ class TtsRoadRepository(
         }
     }
 
+    /** The session API calls are currently made as. */
+    suspend fun currentSession(): SessionState = tokenStore.current()
+
     private suspend fun clearEndedSession(end: SessionEnd) {
         tokenStore.clearToken()
         invalidateListeningStats()

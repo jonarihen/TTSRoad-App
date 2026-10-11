@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.player
 
 import dk.perspektiva.ttsroad.data.PlaybackSyncItem
 import dk.perspektiva.ttsroad.data.PlaybackSyncState
+import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -72,23 +73,27 @@ class ProgressSync(
      * and the correct behaviour is to leave the entry queued for next time.
      */
     suspend fun flush(): ProgressFlushResult = flushing.withLock {
-        val queued = store.pending()
+        // Only the signed-in account's own entries. Another account's wait for it to come back;
+        // posting them here would write that listener's chapter positions into this account.
+        val session = repository.currentSession()
+        val queued = store.pendingFor(session)
         if (queued.isEmpty()) return@withLock ProgressFlushResult(drained = true)
 
         return@withLock if (repository.currentCapabilities.value.batchProgress) {
-            flushBatched(queued)
+            flushBatched(queued, session)
         } else {
-            flushOneAtATime(queued)
+            flushOneAtATime(queued, session)
         }
     }
 
-    private suspend fun flushBatched(queued: List<PendingProgress>): ProgressFlushResult {
+    private suspend fun flushBatched(queued: List<PendingProgress>, session: SessionState): ProgressFlushResult {
         val limit = repository.playbackSyncBatchLimit()
         var accepted = 0
         var sent = 0
         val overridden = mutableListOf<PlaybackSyncState>()
 
         for (batch in queued.chunked(limit)) {
+            if (repository.currentSession() != session) break // Switched account mid-flush.
             val byChapter = batch.associateBy { it.chapterId }
             val response = runCatching {
                 repository.syncProgress(batch.map { it.asSyncItem() })
@@ -123,7 +128,7 @@ class ProgressSync(
             sent = sent,
             accepted = accepted,
             overriddenByServer = overridden,
-            drained = store.isEmpty(),
+            drained = store.pendingFor(session).isEmpty(),
         )
     }
 
@@ -133,9 +138,10 @@ class ProgressSync(
      * One call per chapter and no ordering, exactly as before this queue existed. The gain here is
      * only that a position recorded while offline is retried instead of discarded.
      */
-    private suspend fun flushOneAtATime(queued: List<PendingProgress>): ProgressFlushResult {
+    private suspend fun flushOneAtATime(queued: List<PendingProgress>, session: SessionState): ProgressFlushResult {
         var accepted = 0
         for (entry in queued) {
+            if (repository.currentSession() != session) break // Switched account mid-flush.
             val ok = runCatching {
                 repository.saveProgress(
                     fictionId = entry.fictionId,
@@ -151,7 +157,7 @@ class ProgressSync(
         return ProgressFlushResult(
             sent = accepted,
             accepted = accepted,
-            drained = store.isEmpty(),
+            drained = store.pendingFor(session).isEmpty(),
         )
     }
 }
