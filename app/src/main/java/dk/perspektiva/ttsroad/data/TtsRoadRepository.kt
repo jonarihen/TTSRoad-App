@@ -772,16 +772,22 @@ class TtsRoadRepository(
         return runCatching { withAuthorizedApi { it.audioHashes(fictionId) } }.getOrNull()
     }
 
+    /**
+     * Save one position. With [asSession], the request carries that session's credentials (bound
+     * by its [RequestAuth] tag) whatever is signed in by the time it is sent — a queued position
+     * belongs to the account that listened, not to whoever is current when the network returns.
+     */
     suspend fun saveProgress(
         fictionId: Int,
         chapterId: Int,
         positionSeconds: Double,
         isPlayed: Boolean,
+        asSession: SessionState? = null,
     ): PlaybackProgressResponse? = withContext(Dispatchers.IO) {
         // Progress saves fire in the background; a missing token is not worth an exception.
-        if (!tokenStore.current().isLoggedIn) return@withContext null
-        authorized {
-            it.saveProgress(
+        if (!(asSession ?: tokenStore.current()).isLoggedIn) return@withContext null
+        authorizedWithSession(asSession) { api, _ ->
+            api.saveProgress(
                 PlaybackProgressRequest(
                     fictionId = fictionId,
                     chapterId = chapterId,
@@ -1729,10 +1735,14 @@ class TtsRoadRepository(
      * Batched, timestamped progress. Answers null when the server has no `batch_progress` support,
      * which is the caller's signal to fall back to the single-item endpoint.
      */
-    suspend fun syncProgress(items: List<PlaybackSyncItem>): PlaybackSyncResponse? {
+    suspend fun syncProgress(items: List<PlaybackSyncItem>, asSession: SessionState? = null): PlaybackSyncResponse? {
         if (items.isEmpty()) return null
         if (!_currentCapabilities.value.batchProgress) return null
-        return withAuthorizedApi { it.syncProgress(PlaybackSyncRequest(items = items)) }
+        // [asSession] binds the request to the credentials the items were selected for; see
+        // [saveProgress].
+        return withContext(Dispatchers.IO) {
+            authorizedWithSession(asSession) { api, _ -> api.syncProgress(PlaybackSyncRequest(items = items)) }
+        }
     }
 
     /** How many items one `/playback/sync` call may carry against the current server. */
@@ -1793,8 +1803,19 @@ class TtsRoadRepository(
 
     private suspend fun <T> authorizedWithSession(
         block: suspend (TtsRoadApi, SessionState) -> T,
+    ): T = authorizedWithSession(null, block)
+
+    /**
+     * As [authorized], but made as [asSession] when given: the API is built with that session's
+     * [RequestAuth] tag, so the network interceptor attaches exactly its credentials (and only on
+     * its own origin) even if another account signs in while the call is in flight. A 401 ends
+     * the session only if that credential is still the current one.
+     */
+    private suspend fun <T> authorizedWithSession(
+        asSession: SessionState?,
+        block: suspend (TtsRoadApi, SessionState) -> T,
     ): T {
-        val session = tokenStore.current()
+        val session = asSession ?: tokenStore.current()
         require(session.isLoggedIn) { "Not logged in" }
         return try {
             block(api(session.serverUrl, session), session)

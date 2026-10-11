@@ -2,11 +2,11 @@ package dk.perspektiva.ttsroad.player
 
 import android.content.Context
 import dk.perspektiva.ttsroad.data.SessionState
-import dk.perspektiva.ttsroad.data.normalizeBaseUrl
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
@@ -32,8 +32,9 @@ data class PendingProgress(
     /**
      * The server and account the position was listened under. Chapter ids are only meaningful to
      * that account, so an entry is sent only while the same account is signed in (see [ownedBy]).
-     * Nullable so files written before 0.20 still parse; such an entry has no provable owner and
-     * is never sent.
+     * Nullable so files written before owners existed still parse; such an entry has no provable
+     * owner and is never sent. Stored as the session spelled it and compared canonically (see
+     * [sameProgressServer]), so entries already on disk keep matching.
      */
     val ownerServerUrl: String? = null,
     val ownerAccount: String? = null,
@@ -49,10 +50,24 @@ data class PendingProgress(
 fun PendingProgress.ownedBy(session: SessionState): Boolean {
     val owner = ownerServerUrl ?: return false
     if (!session.isLoggedIn) return false
-    val sameServer = runCatching { normalizeBaseUrl(owner) == normalizeBaseUrl(session.serverUrl) }
-        .getOrDefault(false)
-    return sameServer && ownerAccount == session.username
+    return sameProgressServer(owner, session.serverUrl) && ownerAccount == session.username
 }
+
+/**
+ * One backend, however it was spelled: host case and an explicit default port do not make a
+ * different server, while a different path prefix on the same origin does. The same comparison the
+ * audio ownership check makes, via okhttp's canonical [okhttp3.HttpUrl].
+ */
+internal fun sameProgressServer(first: String?, second: String?): Boolean {
+    if (first == null || second == null) return false
+    val a = canonicalServer(first) ?: return false
+    val b = canonicalServer(second) ?: return false
+    return a == b
+}
+
+// normalizeBaseUrl's trailing-slash rule, but parsed by okhttp so that scheme and host case and a
+// default port are canonicalised too.
+private fun canonicalServer(url: String) = "${url.trim().trimEnd('/')}/".toHttpUrlOrNull()
 
 /**
  * The server's format for `client_updated_at`: ISO-8601 UTC with an explicit `Z` and **at most
@@ -143,7 +158,7 @@ class PendingProgressStore(
             // Coalesced per chapter *and owner*: another account's position for the same chapter
             // id is a different listener's, and waits for that account to come back.
             entries.removeAll {
-                it.chapterId == chapterId && it.ownerServerUrl == entry.ownerServerUrl &&
+                it.chapterId == chapterId && sameProgressServer(it.ownerServerUrl, entry.ownerServerUrl) &&
                     it.ownerAccount == entry.ownerAccount
             }
             entries.add(entry)

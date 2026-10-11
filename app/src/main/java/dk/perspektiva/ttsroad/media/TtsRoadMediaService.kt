@@ -60,6 +60,7 @@ import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.InProcessPlayer
 import dk.perspektiva.ttsroad.player.PendingProgressStore
+import dk.perspektiva.ttsroad.player.OwnerProgressFlush
 import dk.perspektiva.ttsroad.player.adSkipTarget
 import dk.perspektiva.ttsroad.player.PlaybackFailure
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
@@ -156,6 +157,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     @Volatile
     private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
     private var boundQueueSession: dk.perspektiva.ttsroad.data.SessionState? = null
+    private val ownerProgressFlush = OwnerProgressFlush { serviceScope.launch { progressSync.flush() } }
 
     // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
     // and car transport read the preference from here rather than the DataStore.
@@ -174,13 +176,14 @@ class TtsRoadMediaService : MediaLibraryService() {
         pendingProgress = ServiceLocator.pendingProgress(this)
         progressSync = ServiceLocator.progressSync(this)
         nowPlayingStore = NowPlayingStore(this)
-        // Anything recorded while the last session was offline is still waiting. Flush it before
-        // playback adds to it, so a reconnect settles the backlog rather than deepening it.
-        serviceScope.launch { progressSync.flush() }
         serviceScope.launch {
             tokenStore.session.collectLatest { state ->
                 playbackSessionGeneration++
                 playbackSessionActive = state.isLoggedIn
+                // Anything recorded while this account was offline, or while another account was
+                // signed in over it, is still waiting and only this account may send it. This also
+                // covers service start, so a reconnect settles the backlog rather than deepening it.
+                ownerProgressFlush.onSession(state)
                 val queueOwner = boundQueueSession
                 if (queueOwner != null && (queueOwner.serverUrl != state.serverUrl || queueOwner.token != state.token || !state.isLoggedIn)) {
                     boundQueueSession = null

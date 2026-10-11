@@ -38,6 +38,14 @@ private class FakeSyncSessionStore(private var state: SessionState = SessionStat
     }
 }
 
+/** A session store whose answer the test controls, and which counts how often it is asked. */
+private class ScriptedSessionStore(var answer: (call: Int) -> SessionState) : SessionStore {
+    var calls = 0
+    override suspend fun current(): SessionState = answer(++calls)
+    override suspend fun saveLogin(baseUrl: String, response: LoginResponse) = Unit
+    override suspend fun clearToken() = Unit
+}
+
 /**
  * Draining the queue to the server.
  *
@@ -312,5 +320,144 @@ class ProgressSyncTest {
         assertEquals(0, result.sent)
         assertEquals(1, server.requestCount)
         assertEquals(1, store.pending().size)
+    }
+
+    private suspend fun scriptedRepository(batchProgress: Boolean, sessions: ScriptedSessionStore): TtsRoadRepository {
+        val repository = TtsRoadRepository(sessions)
+        server.enqueue(MockResponse().setBody(capabilities(batchProgress)).setHeader("Content-Type", "application/json"))
+        repository.refreshCurrentCapabilities()
+        server.takeRequest() // capabilities
+        sessions.calls = 0
+        return repository
+    }
+
+    @Test
+    fun `a progress request carries the selected account's credentials even if another signs in first`() = runTest {
+        for (batch in listOf(true, false)) {
+            server.shutdown()
+            server = MockWebServer().also { it.start() }
+            val alice = SessionState(serverUrl = server.url("/").toString(), token = "alice-token", username = "alice")
+            val bob = alice.copy(token = "bob-token", username = "bob")
+            // Alice for the ownership check and the per-batch re-check; Bob from then on, i.e. Bob
+            // signs in after the entries were selected but before the request is built.
+            val sessions = ScriptedSessionStore { call -> if (call <= 2) alice else bob }
+            val repository = scriptedRepository(batch, sessions)
+            val store = pendingStore()
+            store.clear()
+            store.record(1, 7, 30.0, false, owner = alice)
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                if (batch) """{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}"""
+                else """{"status":"saved","chapter_id":7}""",
+            ))
+
+            ProgressSync(repository, store).flush()
+
+            val request = server.takeRequest()
+            assertEquals("Bearer alice-token", request.getHeader("Authorization"))
+            assertTrue(store.pending().isEmpty())
+        }
+    }
+
+    @Test
+    fun `a repository progress call bound to a session never uses the current one's token`() = runTest {
+        val alice = SessionState(serverUrl = server.url("/").toString(), token = "alice-token", username = "alice")
+        val bob = alice.copy(token = "bob-token", username = "bob")
+        val repository = scriptedRepository(batchProgress = true, ScriptedSessionStore { bob })
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+            .setBody("""{"accepted": [], "rejected": [], "server_state": []}"""))
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+            .setBody("""{"status":"saved","chapter_id":7}"""))
+
+        repository.syncProgress(listOf(PlaybackSyncItemFor(7)), asSession = alice)
+        repository.saveProgress(1, 7, 30.0, false, asSession = alice)
+
+        assertEquals("Bearer alice-token", server.takeRequest().getHeader("Authorization"))
+        assertEquals("Bearer alice-token", server.takeRequest().getHeader("Authorization"))
+    }
+
+    private fun PlaybackSyncItemFor(chapterId: Int) = dk.perspektiva.ttsroad.data.PlaybackSyncItem(
+        chapterId = chapterId,
+        positionSeconds = 1.0,
+        isPlayed = false,
+        clientUpdatedAt = "2023-11-14T22:13:20Z",
+    )
+
+    @Test
+    fun `owners match however the server address was spelled, including entries already on disk`() = runTest {
+        val port = server.port
+        val session = SessionState(serverUrl = "http://localhost:$port/", token = "t", username = "reader")
+        for (spelling in listOf("http://LOCALHOST:$port", "http://localhost:$port/", "HTTP://Localhost:$port//")) {
+            val entry = PendingProgress(1, 7, 1.0, false, "2023-11-14T22:13:20Z", 1L,
+                ownerServerUrl = spelling, ownerAccount = "reader")
+            assertTrue(spelling, entry.ownedBy(session))
+            assertFalse(spelling, entry.ownedBy(session.copy(username = "other")))
+        }
+        val https = SessionState(serverUrl = "https://home.example/ttsroad/", token = "t", username = "reader")
+        for ((spelling, owned) in listOf(
+            "https://HOME.example:443/ttsroad" to true,
+            "https://home.example/other/" to false,
+            "http://home.example/ttsroad/" to false,
+        )) {
+            val entry = PendingProgress(1, 7, 1.0, false, "2023-11-14T22:13:20Z", 1L,
+                ownerServerUrl = spelling, ownerAccount = "reader")
+            assertEquals(spelling, owned, entry.ownedBy(https))
+        }
+
+        // A file written by the previous build with another spelling of this very server.
+        val repository = repository(batchProgress = true)
+        server.takeRequest() // capabilities
+        File(RuntimeEnvironment.getApplication().filesDir, "pending_progress.json").writeText(
+            """[{"fictionId":1,"chapterId":7,"positionSeconds":30.0,"isPlayed":false,""" +
+                """"clientUpdatedAt":"2023-11-14T22:13:20Z","recordedAtMillis":1700000000000,"recordId":"spelled",""" +
+                """"ownerServerUrl":"http://LOCALHOST:$port","ownerAccount":"reader"}]""",
+        )
+        val store = pendingStore()
+        // Recorded again under the canonical spelling: coalesced with the stored entry, not added.
+        store.record(1, 7, 31.0, false, owner = owner)
+        assertEquals(1, store.pending().size)
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+            .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}"""))
+
+        val result = ProgressSync(repository, store).flush()
+
+        assertEquals(1, result.sent)
+        assertTrue(store.pending().isEmpty())
+    }
+
+    @Test
+    fun `a returning account's retained progress is flushed when it becomes current again`() = runTest {
+        val alice = SessionState(serverUrl = server.url("/").toString(), token = "alice-token", username = "alice")
+        val bob = alice.copy(token = "bob-token", username = "bob")
+        var current = alice
+        val sessions = ScriptedSessionStore { current }
+        val repository = scriptedRepository(batchProgress = true, sessions)
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = alice)
+        val sync = ProgressSync(repository, store)
+        var requested = 0
+        val trigger = OwnerProgressFlush { requested++ }
+
+        current = bob
+        trigger.onSession(bob)
+        assertEquals(1, requested)
+        sync.flush()
+        assertEquals(0, server.requestCount - 1) // only the capabilities call so far
+        assertEquals(1, store.pending().size)
+
+        trigger.onSession(bob.copy(token = "bob-rotated"))
+        trigger.onSession(SessionState(serverUrl = alice.serverUrl))
+        assertEquals(1, requested)
+
+        current = alice
+        trigger.onSession(alice)
+        assertEquals(2, requested)
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+            .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}"""))
+        sync.flush()
+
+        val request = server.takeRequest()
+        assertEquals("/api/mobile/playback/sync", request.path)
+        assertEquals("Bearer alice-token", request.getHeader("Authorization"))
+        assertTrue(store.pending().isEmpty())
     }
 }

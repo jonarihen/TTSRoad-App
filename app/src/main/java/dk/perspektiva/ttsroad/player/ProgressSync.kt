@@ -95,8 +95,11 @@ class ProgressSync(
         for (batch in queued.chunked(limit)) {
             if (repository.currentSession() != session) break // Switched account mid-flush.
             val byChapter = batch.associateBy { it.chapterId }
+            // Bound to the session the entries were selected for: if another account signs in
+            // between the check above and the request, it still goes out as [session] — never with
+            // the newcomer's credentials.
             val response = runCatching {
-                repository.syncProgress(batch.map { it.asSyncItem() })
+                repository.syncProgress(batch.map { it.asSyncItem() }, asSession = session)
             }.getOrNull() ?: break // Offline again, or the call failed: keep the rest queued.
 
             sent += batch.size
@@ -148,6 +151,7 @@ class ProgressSync(
                     chapterId = entry.chapterId,
                     positionSeconds = entry.positionSeconds,
                     isPlayed = entry.isPlayed,
+                    asSession = session,
                 )
             }.isSuccess
             if (!ok) break // Still offline; keep this and everything after it.
@@ -168,3 +172,21 @@ fun PendingProgress.asSyncItem(): PlaybackSyncItem = PlaybackSyncItem(
     isPlayed = isPlayed,
     clientUpdatedAt = clientUpdatedAt,
 )
+
+/**
+ * Asks for a flush whenever a signed-in account becomes current: at start, after a sign-in, and
+ * when an account comes back after another was signed in over it. [ProgressSync] only ever sends
+ * the current account's own entries, so without this a returning account's backlog would sit
+ * until its next playback tick. Flushes are serialised inside [ProgressSync], so one triggered here
+ * cannot overlap the tick, pause or chapter-end flushes.
+ */
+class OwnerProgressFlush(private val flush: () -> Unit) {
+    private var current: Pair<String, String?>? = null
+
+    fun onSession(session: SessionState) {
+        val identity = if (session.isLoggedIn) session.serverUrl to session.username else null
+        if (identity == current) return
+        current = identity
+        if (identity != null) flush()
+    }
+}
