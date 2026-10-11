@@ -51,14 +51,18 @@ internal fun buildQueue(player: Player): List<QueueItem> {
 }
 
 /**
- * Map the player's current state onto the UI state, given an already-resolved [queue].
- *
- * [queue] is passed in rather than derived so the caller can reuse a cached list.
+ * Whether "next chapter" can be offered: either the queue already holds a successor, or the
+ * session advertises next for a fiction queue that the service can grow on demand.
  */
 internal fun canRequestNextChapter(player: Player): Boolean = player.hasNextMediaItem() ||
     (player.currentMediaItem?.mediaMetadata?.extras?.getInt("fiction_id", 0)?.let { it > 0 } == true &&
         player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM))
 
+/**
+ * Map the player's current state onto the UI state, given an already-resolved [queue].
+ *
+ * [queue] is passed in rather than derived so the caller can reuse a cached list.
+ */
 internal fun playerUiStateOf(player: Player, queue: List<QueueItem>): PlayerUiState {
     val metadata = player.currentMediaItem?.mediaMetadata
     // An unknown duration arrives as C.TIME_UNSET, which is Long.MIN_VALUE. Letting that reach the
