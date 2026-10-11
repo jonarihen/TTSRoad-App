@@ -98,6 +98,8 @@ class OfflineReaderPinLifecycleTest {
     private fun createDownloads(
         ignoreCancellation: Boolean = false,
         forgetAllAudioHashes: () -> Unit = {},
+        unpinReadAlong: (Int) -> Unit = repository::unpinReadAlong,
+        replacementHash: (Int) -> String? = { null },
         sendRemoveAllDownloads: () -> Unit = {
             DownloadService.sendRemoveAllDownloads(context, TtsRoadDownloadService::class.java, false)
         },
@@ -122,9 +124,10 @@ class OfflineReaderPinLifecycleTest {
                 throw e
             }
         },
-        unpinReadAlong = repository::unpinReadAlong,
+        unpinReadAlong = unpinReadAlong,
         forgetAllAudioHashes = forgetAllAudioHashes,
         initializeManager = false,
+        replacementHash = replacementHash,
         sendRemoveAllDownloads = sendRemoveAllDownloads,
         session = session,
     ).also { downloads = it }
@@ -480,5 +483,66 @@ class OfflineReaderPinLifecycleTest {
         assertTrue(runCatching { result() }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
         assertFalse(disk.isPinned(10))
         assertNull(shadowOf(context).nextStartedService)
+    }
+
+    @Test
+    fun `replacing stale audio keeps the pinned reader document held throughout`() = runBlocking {
+        val unpinned = mutableListOf<Int>()
+        val downloads = createDownloads(
+            unpinReadAlong = { id -> unpinned += id; repository.unpinReadAlong(id) },
+            replacementHash = { "replacement-hash" },
+        )
+        server.enqueue(MockResponse().setBody(body()))
+        downloads.download(chapter(), server.url("/").toString())
+        nextService()
+        assertTrue(result())
+        awaitReaderRequest()
+
+        downloads.download(chapter(), server.url("/").toString(), replaceExisting = true)
+        val replacement = requireNotNull(nextService().getParcelableExtra("download_request", DownloadRequest::class.java))
+        assertEquals("replacement-hash", decodeDownloadIds(replacement.data)?.replacementHash)
+        assertTrue(result(1))
+
+        assertTrue(unpinned.isEmpty())
+        assertEquals(1, server.requestCount)
+        val restarted = ReadAlongFileStore(directory)
+        assertTrue(restarted.isPinned(10))
+        assertEquals("Original text.", restarted.read(10)?.response?.text)
+    }
+
+    @Test
+    fun `a replacement issued while the first pin is in flight keeps its own pin`() = runBlocking {
+        deferFirstResponse()
+        val downloads = createDownloads(ignoreCancellation = true, replacementHash = { "replacement-hash" })
+        downloads.download(chapter(), server.url("/").toString())
+        nextService()
+        awaitReaderRequest()
+
+        downloads.download(chapter(), server.url("/").toString(), replaceExisting = true)
+        nextService()
+        assertTrue(result(1))
+        release.countDown()
+
+        assertFalse(result())
+        val restarted = ReadAlongFileStore(directory)
+        assertTrue(restarted.isPinned(10))
+        assertEquals("New intent.", restarted.read(10)?.response?.text)
+    }
+
+    @Test
+    fun `a replacement with no recorded hash neither queues audio nor touches the pin`() = runBlocking {
+        val unpinned = mutableListOf<Int>()
+        val downloads = createDownloads(unpinReadAlong = { id -> unpinned += id; repository.unpinReadAlong(id) })
+        server.enqueue(MockResponse().setBody(body()))
+        downloads.download(chapter(), server.url("/").toString())
+        nextService()
+        assertTrue(result())
+
+        downloads.download(chapter(), server.url("/").toString(), replaceExisting = true)
+
+        assertNull(shadowOf(context).nextStartedService)
+        assertEquals(1, synchronized(results) { results.size })
+        assertTrue(unpinned.isEmpty())
+        assertTrue(ReadAlongFileStore(directory).isPinned(10))
     }
 }
