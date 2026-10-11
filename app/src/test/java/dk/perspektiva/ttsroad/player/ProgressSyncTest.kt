@@ -403,13 +403,17 @@ class ProgressSyncTest {
             assertEquals(spelling, owned, entry.ownedBy(https))
         }
 
-        // A file written by the previous build with another spelling of this very server.
+        // A file written by the previous build with another spelling of this very server. Spelled
+        // from the server's own host: MockWebServer binds to whatever the machine resolves
+        // "localhost" to, which on CI is not the literal name, so a hard-coded "LOCALHOST" there
+        // was a different server and the entry (rightly) did not coalesce.
+        val spelled = server.url("/").toString().uppercase().trimEnd('/')
         val repository = repository(batchProgress = true)
         server.takeRequest() // capabilities
         File(RuntimeEnvironment.getApplication().filesDir, "pending_progress.json").writeText(
             """[{"fictionId":1,"chapterId":7,"positionSeconds":30.0,"isPlayed":false,""" +
                 """"clientUpdatedAt":"2023-11-14T22:13:20Z","recordedAtMillis":1700000000000,"recordId":"spelled",""" +
-                """"ownerServerUrl":"http://LOCALHOST:$port","ownerAccount":"reader"}]""",
+                """"ownerServerUrl":"$spelled","ownerAccount":"reader"}]""",
         )
         val store = pendingStore()
         // Recorded again under the canonical spelling: coalesced with the stored entry, not added.
@@ -459,5 +463,89 @@ class ProgressSyncTest {
         assertEquals("/api/mobile/playback/sync", request.path)
         assertEquals("Bearer alice-token", request.getHeader("Authorization"))
         assertTrue(store.pending().isEmpty())
+    }
+
+    /**
+     * Published capabilities from [previous] (as if TtsRoadApp had discovered them for the account
+     * signed in before), with [owner] now current and its own capabilities not yet discovered.
+     */
+    private suspend fun switchedRepository(previous: MockWebServer, previousBatch: Boolean, owner: SessionState): TtsRoadRepository {
+        val before = SessionState(serverUrl = previous.url("/").toString(), token = "before", username = "before")
+        var current = before
+        val repository = TtsRoadRepository(ScriptedSessionStore { current })
+        previous.enqueue(MockResponse().setBody(capabilities(previousBatch)).setHeader("Content-Type", "application/json"))
+        repository.refreshCurrentCapabilities()
+        assertEquals(previousBatch, repository.currentCapabilities.value.batchProgress)
+        current = owner
+        return repository
+    }
+
+    @Test
+    fun `a flush right after a switch uses the owner's server capabilities, not the published ones`() = runTest {
+        for (ownerBatch in listOf(true, false)) {
+            server.shutdown()
+            server = MockWebServer().also { it.start() }
+            val previous = MockWebServer().also { it.start() }
+            try {
+                val owner = SessionState(serverUrl = server.url("/").toString(), token = "owner-token", username = "reader")
+                val repository = switchedRepository(previous, previousBatch = !ownerBatch, owner = owner)
+                val store = pendingStore { 1_700_000_000_000L }
+                store.clear()
+                store.record(1, 7, 30.0, false, owner = owner)
+                server.enqueue(MockResponse().setBody(capabilities(ownerBatch)).setHeader("Content-Type", "application/json"))
+                server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                    if (ownerBatch) """{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}"""
+                    else """{"status":"saved","chapter_id":7}""",
+                ))
+
+                ProgressSync(repository, store).flush()
+
+                assertEquals("/api/mobile/capabilities", server.takeRequest().path)
+                val request = server.takeRequest()
+                assertEquals(
+                    if (ownerBatch) "/api/mobile/playback/sync" else "/api/mobile/playback/progress",
+                    request.path,
+                )
+                if (ownerBatch) assertTrue(""""client_updated_at":"2023-11-14T22:13:20Z"""" in request.body.readUtf8())
+                assertEquals("Bearer owner-token", request.getHeader("Authorization"))
+                assertEquals(1, previous.requestCount) // only its own discovery, nothing posted there
+                assertTrue(store.pending().isEmpty())
+            } finally {
+                previous.shutdown()
+            }
+        }
+    }
+
+    @Test
+    fun `unresolved capabilities leave the backlog untouched instead of using the legacy endpoint`() = runTest {
+        val previous = MockWebServer().also { it.start() }
+        try {
+            val owner = SessionState(serverUrl = server.url("/").toString(), token = "owner-token", username = "reader")
+            // The previous server had batch support; the owner's discovery fails transiently.
+            val repository = switchedRepository(previous, previousBatch = true, owner = owner)
+            val store = pendingStore()
+            store.record(1, 7, 30.0, false, owner = owner)
+            server.enqueue(MockResponse().setResponseCode(503))
+
+            val result = ProgressSync(repository, store).flush()
+
+            assertFalse(result.drained)
+            assertEquals(0, result.sent)
+            assertEquals("/api/mobile/capabilities", server.takeRequest().path)
+            assertEquals(1, server.requestCount)
+            assertEquals(1, previous.requestCount)
+            assertEquals(1, store.pending().size)
+
+            // Once the owner's server answers, the same entry goes out stamped.
+            server.enqueue(MockResponse().setBody(capabilities(true)).setHeader("Content-Type", "application/json"))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}"""))
+            ProgressSync(repository, store).flush()
+            assertEquals("/api/mobile/capabilities", server.takeRequest().path)
+            assertEquals("/api/mobile/playback/sync", server.takeRequest().path)
+            assertTrue(store.pending().isEmpty())
+        } finally {
+            previous.shutdown()
+        }
     }
 }

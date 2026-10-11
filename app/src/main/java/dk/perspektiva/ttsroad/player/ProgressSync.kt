@@ -79,15 +79,21 @@ class ProgressSync(
         val queued = store.pendingFor(session)
         if (queued.isEmpty()) return@withLock ProgressFlushResult(drained = true)
 
-        return@withLock if (repository.currentCapabilities.value.batchProgress) {
-            flushBatched(queued, session)
+        // The endpoint is chosen by what *this session's* server supports, resolved for it — not by
+        // the published flags, which right after a sign-in or an account switch can still be the
+        // placeholder or the previous server's. Unknown means wait: the legacy endpoint would drop
+        // the stamps and let an offline position overwrite a newer one from the browser.
+        val capabilities = repository.resolvedCapabilitiesFor(session.serverUrl)
+            ?: return@withLock ProgressFlushResult(drained = false)
+
+        return@withLock if (capabilities.batchProgress) {
+            flushBatched(queued, session, repository.playbackSyncBatchLimit(capabilities))
         } else {
             flushOneAtATime(queued, session)
         }
     }
 
-    private suspend fun flushBatched(queued: List<PendingProgress>, session: SessionState): ProgressFlushResult {
-        val limit = repository.playbackSyncBatchLimit()
+    private suspend fun flushBatched(queued: List<PendingProgress>, session: SessionState, limit: Int): ProgressFlushResult {
         var accepted = 0
         var sent = 0
         val overridden = mutableListOf<PlaybackSyncState>()

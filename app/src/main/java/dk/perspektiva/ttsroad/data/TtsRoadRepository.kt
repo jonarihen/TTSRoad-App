@@ -461,6 +461,19 @@ class TtsRoadRepository(
         }
     }
 
+    /**
+     * What [baseUrl] supports, but only once that is actually known: a successful discovery or a
+     * definitive old-server 404, fresh or cached. Null while it is unresolved (a transient failure
+     * with no earlier answer), which callers must treat as "do not decide yet" rather than as the
+     * baseline — unlike [currentCapabilities], this never answers with another server's flags or
+     * with the placeholder published before discovery for a new session has finished.
+     */
+    suspend fun resolvedCapabilitiesFor(baseUrl: String): ServerCapabilities? {
+        val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull() ?: return null
+        val discovered = capabilities(normalized)
+        return discovered.takeIf { synchronized(capabilityCache) { capabilityCache.containsKey(normalized) } }
+    }
+
     /** Drop discovered capabilities for [baseUrl], so the next call re-asks. Used on sign-out. */
     fun forgetCapabilities(baseUrl: String) {
         val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull() ?: return
@@ -1737,7 +1750,10 @@ class TtsRoadRepository(
      */
     suspend fun syncProgress(items: List<PlaybackSyncItem>, asSession: SessionState? = null): PlaybackSyncResponse? {
         if (items.isEmpty()) return null
-        if (!_currentCapabilities.value.batchProgress) return null
+        // Bound to a session, the endpoint is chosen by that session's own server's resolved
+        // capabilities — the published ones may still be another server's, or the placeholder.
+        val capabilities = if (asSession != null) resolvedCapabilitiesFor(asSession.serverUrl) else _currentCapabilities.value
+        if (capabilities?.batchProgress != true) return null
         // [asSession] binds the request to the credentials the items were selected for; see
         // [saveProgress].
         return withContext(Dispatchers.IO) {
@@ -1746,8 +1762,8 @@ class TtsRoadRepository(
     }
 
     /** How many items one `/playback/sync` call may carry against the current server. */
-    fun playbackSyncBatchLimit(): Int =
-        _currentCapabilities.value.maxPlaybackSyncItems?.takeIf { it > 0 }
+    fun playbackSyncBatchLimit(capabilities: ServerCapabilities = _currentCapabilities.value): Int =
+        capabilities.maxPlaybackSyncItems?.takeIf { it > 0 }
             ?: DefaultPlaybackSyncBatchLimit
 
     /** Every mobile session on this account, or null on a server that has no devices endpoint. */
