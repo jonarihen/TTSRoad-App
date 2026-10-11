@@ -31,6 +31,9 @@ import dk.perspektiva.ttsroad.media.endAudioSession
 import dk.perspektiva.ttsroad.media.handleAudioRejection
 import dk.perspektiva.ttsroad.media.recoverAudioPlaybackIfCurrent
 import dk.perspektiva.ttsroad.media.sameAudioServer
+import dk.perspektiva.ttsroad.media.recoverAudioPlayback
+import dk.perspektiva.ttsroad.media.withAudioAccount
+import dk.perspektiva.ttsroad.media.AudioAccountExtra
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -163,7 +166,7 @@ class AudioAuthSnapshotTest {
         var cleared = 0
         val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ })
         val session = store.current()
-        val snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+        val snapshot = session.audioAuthSnapshot()
         val failure = delayedFailure({ snapshot }) { request ->
             assertEquals("Bearer stale-token", request.getHeader("Authorization"))
         }
@@ -184,7 +187,7 @@ class AudioAuthSnapshotTest {
         val store = loggedInStore()
         val repository = TtsRoadRepository(store)
         val session = store.current()
-        val failure = delayedFailure({ AudioAuthSnapshot(session.serverUrl, session.authorizationHeader) })
+        val failure = delayedFailure({ session.audioAuthSnapshot() })
         val empty = HttpDataSource.InvalidResponseCodeException(
             401, failure.responseMessage, null, failure.headerFields, failure.dataSpec, byteArrayOf(),
         )
@@ -200,7 +203,7 @@ class AudioAuthSnapshotTest {
         val store = loggedInStore()
         val repository = TtsRoadRepository(store)
         val session = store.current()
-        val failure = delayedFailure({ AudioAuthSnapshot(session.serverUrl, session.authorizationHeader) })
+        val failure = delayedFailure({ session.audioAuthSnapshot() })
         val forbidden = HttpDataSource.InvalidResponseCodeException(
             403, failure.responseMessage, null, failure.headerFields, failure.dataSpec, failure.responseBody,
         )
@@ -219,12 +222,12 @@ class AudioAuthSnapshotTest {
         repository.refreshCurrentCapabilities()
         server.takeRequest()
         val session = store.current()
-        var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+        var snapshot = session.audioAuthSnapshot()
         val failure = delayedFailure({ snapshot }) { request ->
             assertEquals("Bearer stale-token", request.getHeader("Authorization"))
             assertTrue(repository.changePassword("old password", "new password") is AccountActionResult.Done)
             val fresh = store.current()
-            snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+            snapshot = fresh.audioAuthSnapshot()
         }
 
         assertEquals("Bearer stale-token", (failure.dataSpec.customData as AudioAuthSnapshot).authorizationHeader)
@@ -254,11 +257,11 @@ class AudioAuthSnapshotTest {
         var cleared = 0
         val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ })
         val session = store.current()
-        var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+        var snapshot = session.audioAuthSnapshot()
         val failure = delayedFailure({ snapshot }) {
             assertEquals(LoginResult.Success, repository.login(session.serverUrl, "admin", "password", "Phone"))
             val fresh = store.current()
-            snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+            snapshot = fresh.audioAuthSnapshot()
         }
 
         assertFalse(endAudioSession(repository, failure))
@@ -277,7 +280,7 @@ class AudioAuthSnapshotTest {
             var cleared = 0
             val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ })
             val session = store.current()
-            var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+            var snapshot = session.audioAuthSnapshot()
             val failure = delayedFailure({ snapshot }) { request ->
                 assertEquals("Bearer stale-token", request.getHeader("Authorization"))
                 replacement.enqueue(MockResponse().setBody(
@@ -287,7 +290,7 @@ class AudioAuthSnapshotTest {
                     replacement.url("/").toString(), "admin", "password", "Phone",
                 ))
                 val fresh = store.current()
-                snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+                snapshot = fresh.audioAuthSnapshot()
             }
 
             assertFalse(endAudioSession(repository, failure))
@@ -316,7 +319,7 @@ class AudioAuthSnapshotTest {
         var cleared = 0
         val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ }, httpClient = client)
         val session = store.current()
-        var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+        var snapshot = session.audioAuthSnapshot()
         val pendingApi = async(Dispatchers.IO) { runCatching { repository.library() }.exceptionOrNull() }
         val replacement = MockWebServer()
         replacement.start()
@@ -331,7 +334,7 @@ class AudioAuthSnapshotTest {
                 assertEquals("/api/mobile/login", login.path)
                 assertNull(login.getHeader("Authorization"))
                 val fresh = store.current()
-                snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+                snapshot = fresh.audioAuthSnapshot()
                 replacement.enqueue(MockResponse().setBody("""{"api_version":1,"fictions":[]}"""))
                 repository.library()
                 val request = requireNotNull(replacement.takeRequest(10, TimeUnit.SECONDS))
@@ -469,11 +472,11 @@ class AudioAuthSnapshotTest {
             val store = loggedInStore()
             val repository = TtsRoadRepository(store)
             val session = store.current()
-            var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+            var snapshot = session.audioAuthSnapshot()
             val failure = delayedFailure({ snapshot }, responseCode = code) {
                 assertEquals(LoginResult.Success, repository.login(session.serverUrl, "admin", "password", "Phone"))
                 val fresh = store.current()
-                snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+                snapshot = fresh.audioAuthSnapshot()
             }
             server.takeRequest()
             val player = RecoveryPlayer(recoveryItems(), playing = code == 401)
@@ -538,11 +541,11 @@ class AudioAuthSnapshotTest {
                 val store = loggedInStore()
                 val repository = TtsRoadRepository(store)
                 val session = store.current()
-                var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+                var snapshot = session.audioAuthSnapshot()
                 val failure = delayedFailure({ snapshot }, responseCode = code) {
                     assertEquals(LoginResult.Success, repository.login(replacement.url("/").toString(), "admin", "password", "Phone"))
                     val fresh = store.current()
-                    snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+                    snapshot = fresh.audioAuthSnapshot()
                 }
                 replacement.takeRequest()
                 val player = RecoveryPlayer(recoveryItems())
@@ -672,7 +675,7 @@ class AudioAuthSnapshotTest {
     fun `cross server rejection does not clear an already replaced current server queue`() = runTest {
         val store = loggedInStore()
         val session = store.current()
-        val current = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+        val current = session.audioAuthSnapshot()
         val rejected = AudioAuthSnapshot("https://old.example/", "Bearer old")
         val player = RecoveryPlayer(recoveryItems())
         try {
@@ -715,11 +718,11 @@ class AudioAuthSnapshotTest {
             val store = loggedInStore()
             val repository = TtsRoadRepository(store)
             val session = store.current()
-            var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+            var snapshot = session.audioAuthSnapshot()
             val failure = delayedFailure({ snapshot }) {
                 assertEquals(LoginResult.Success, repository.login(session.serverUrl, "admin", "password", "Phone"))
                 val fresh = store.current()
-                snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+                snapshot = fresh.audioAuthSnapshot()
             }
             server.takeRequest()
             val player = RecoveryPlayer(recoveryItems())
@@ -743,7 +746,7 @@ class AudioAuthSnapshotTest {
                         user = dk.perspektiva.ttsroad.data.MobileUser(id = 1, username = "admin"),
                     ),
                 )
-                val newest = store.current().let { AudioAuthSnapshot(it.serverUrl, it.authorizationHeader) }
+                val newest = store.current().audioAuthSnapshot()
                 assertEquals("Bearer newest-token", newest.authorizationHeader)
                 requireNotNull(scheduled).invoke()
 
@@ -769,13 +772,123 @@ class AudioAuthSnapshotTest {
         }
     }
 
+    private fun login(token: String, username: String) = dk.perspektiva.ttsroad.data.LoginResponse(
+        token = token,
+        user = dk.perspektiva.ttsroad.data.MobileUser(id = 1, username = username),
+    )
+
+    @Test
+    fun `a different account on the same server during the backoff never recovers or saves progress`() = runTest {
+        val store = loggedInStore()
+        val repository = TtsRoadRepository(store)
+        val session = store.current()
+        var snapshot = session.audioAuthSnapshot()
+        val failure = delayedFailure({ snapshot }) {
+            assertEquals(LoginResult.Success, repository.login(session.serverUrl, "admin", "password", "Phone"))
+            snapshot = store.current().audioAuthSnapshot()
+        }
+        server.takeRequest()
+        val player = RecoveryPlayer(recoveryItems().map { withAudioAccount(it, "admin") })
+        try {
+            val oldItem = requireNotNull(player.currentMediaItem)
+            assertEquals("admin", oldItem.mediaMetadata.extras!!.getString(AudioAccountExtra))
+            val error = requireNotNull(player.playerError)
+            var scheduled: (suspend () -> Unit)? = null
+            var expected: AudioAuthSnapshot? = null
+            var published: AudioAuthSnapshot? = null
+            handleAudioRejection(repository, failure, store::current) { rejected, current ->
+                expected = current
+                scheduled = {
+                    recoverAudioPlaybackIfCurrent(player, error, rejected, current, store::current) { published = it }
+                }
+            }
+
+            // Someone else signs in to the same backend while the recovery waits out its backoff.
+            store.saveLogin(session.serverUrl, login("other-token", "other"))
+            val other = store.current()
+            assertTrue(sameAudioServer(requireNotNull(expected), other.audioAuthSnapshot()))
+            assertFalse(audioItemBelongsToSession(oldItem, other))
+            requireNotNull(scheduled).invoke()
+            assertNull(published)
+            assertEquals(0, player.prepares)
+            assertTrue(player.playerError === error)
+
+            // The session collector's half: the previous account's queue goes, and nothing that
+            // departs on the way out is saved into the new account.
+            val requestsBefore = server.requestCount
+            val saves = mutableListOf<MediaItem>()
+            val departing = mutableListOf<MediaItem>()
+            player.addListener(DepartingChapterProgressListener(player) { item, _, _, _ ->
+                departing += item
+                if (audioItemBelongsToSession(item, other)) saves += item
+            })
+            discardCrossServerPlayback(player, requireNotNull(expected), other.audioAuthSnapshot())
+            org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle()
+            for (item in saves) {
+                repository.saveProgress(item.mediaMetadata.extras!!.getInt("fiction_id"),
+                    item.mediaMetadata.extras!!.getInt("chapter_id"), 12.345, false)
+            }
+            assertEquals(1, player.stops)
+            assertEquals(0, player.mediaItemCount)
+            assertTrue(departing.contains(oldItem))
+            assertTrue(saves.isEmpty())
+            assertEquals(requestsBefore, server.requestCount)
+            assertEquals(0, store.clearTokenCalls)
+            assertNull(repository.sessionEnd.value)
+        } finally {
+            player.release()
+        }
+    }
+
+    @Test
+    fun `an immediate rejection after a same server account switch discards instead of preparing`() {
+        val address = server.url("/").toString()
+        val player = RecoveryPlayer(recoveryItems().map { withAudioAccount(it, "admin") })
+        try {
+            recoverAudioPlayback(player, AudioAuthSnapshot(address, "Bearer old", "admin"),
+                AudioAuthSnapshot(address, "Bearer other", "other"))
+            assertEquals(0, player.prepares)
+            assertEquals(1, player.stops)
+            assertEquals(0, player.mediaItemCount)
+        } finally {
+            player.release()
+        }
+    }
+
+    @Test
+    fun `an account switch on the same server clears the queue while a rotation keeps it`() {
+        val address = server.url("/").toString()
+        val previous = AudioAuthSnapshot(address, "Bearer old", "admin")
+        for ((current, cleared) in listOf(
+            AudioAuthSnapshot(address, "Bearer other", "other") to true,
+            AudioAuthSnapshot(address, "Bearer rotated", "admin") to false,
+        )) {
+            val player = RecoveryPlayer(recoveryItems().map { withAudioAccount(it, "admin") })
+            try {
+                discardCrossServerPlayback(player, previous, current)
+                assertEquals(if (cleared) 0 else 3, player.mediaItemCount)
+                assertEquals(if (cleared) 1 else 0, player.stops)
+                val item = player.currentMediaItem
+                if (!cleared) {
+                    assertTrue(audioItemBelongsToSession(item, SessionState(serverUrl = address, token = "rotated", username = "admin")))
+                    assertFalse(audioItemBelongsToSession(item, SessionState(serverUrl = address, token = "other", username = "other")))
+                }
+            } finally {
+                player.release()
+            }
+        }
+        // An item keeps the account it was queued for when a controller hands it back.
+        val stamped = withAudioAccount(recoveryItems().first(), "admin")
+        assertEquals("admin", withAudioAccount(stamped, "other").mediaMetadata.extras!!.getString(AudioAccountExtra))
+    }
+
     @Test
     fun `active 401 and 403 end the session with a reason and never schedule recovery`() = runTest {
         for (code in listOf(401, 403)) {
             val store = loggedInStore()
             val repository = TtsRoadRepository(store)
             val session = store.current()
-            val failure = delayedFailure({ AudioAuthSnapshot(session.serverUrl, session.authorizationHeader) }, responseCode = code)
+            val failure = delayedFailure({ session.audioAuthSnapshot() }, responseCode = code)
             var scheduled = 0
 
             handleAudioRejection(repository, failure, store::current) { _, _ -> scheduled++ }
@@ -794,7 +907,7 @@ class AudioAuthSnapshotTest {
             val store = loggedInStore()
             val repository = TtsRoadRepository(store)
             val session = store.current()
-            val snapshot = if (authenticated) AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+            val snapshot = if (authenticated) session.audioAuthSnapshot()
                 else AudioAuthSnapshot("https://foreign.example", "Bearer foreign")
             val failure = delayedFailure({ snapshot })
             if (authenticated) store.clearToken()

@@ -60,6 +60,9 @@ private fun Bundle.putCompletion(chapter: ChapterSummary) {
 
 internal const val AudioServerUrlExtra = "audio_server_url"
 
+/** The account a queued item was queued for; stamped by the media service, see `withAudioAccount`. */
+internal const val AudioAccountExtra = "audio_account"
+
 object TtsRoadMediaItems {
     /**
      * Browse-node styling hints. Fictions are cover-led, so they read far better as a grid; chapters
