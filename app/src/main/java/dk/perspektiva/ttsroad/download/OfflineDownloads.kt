@@ -136,7 +136,16 @@ class OfflineDownloads(
         val identity: String,
         val session: dk.perspektiva.ttsroad.core.AudioAuthSnapshot,
         val capabilities: ServerCapabilities,
+        /** Only dispatch rekeys retained for [identity]; no index read, cleanup or adoption. */
+        val retainedOnly: Boolean = false,
     )
+
+    /**
+     * The identity the signed-in address was verified under, whose retained rekeys a deletion or a
+     * fresh download here may touch. Never the address fallback: rekeys are only ever retained under
+     * an identity a server advertised for itself.
+     */
+    private fun retainedScope(): String? = cacheIdentities.rememberedForServer(audioAuth.serverUrl)
 
     /**
      * Whether this server can serve read-along documents at all.
@@ -439,7 +448,7 @@ class OfflineDownloads(
         } else emptySet()
         val request = spec.toDownloadRequest(hash, invalidationKeys)
         // Asked for again, so an earlier deletion must not keep the migration from moving it.
-        identityMigration.restore(request.id)
+        identityMigration.restore(request.id, retainedScope())
         send(request)
         pinReadAlongFor(chapter)
     }
@@ -539,7 +548,7 @@ class OfflineDownloads(
         unpinReadAlong(chapterId)
         // Before the remove is sent: a rekey retained from a failed migration dispatch would
         // otherwise queue this chapter again on the next foreground retry.
-        identityMigration.forget(TtsRoadMediaIds.chapter(chapterId))
+        identityMigration.forget(TtsRoadMediaIds.chapter(chapterId), retainedScope())
         DownloadService.sendRemoveDownload(
             context,
             TtsRoadDownloadService::class.java,
@@ -556,7 +565,7 @@ class OfflineDownloads(
      * there for anyone who only wants the disposable half back.
      */
     fun removeAll() {
-        identityMigration.forgetAll()
+        identityMigration.forgetAll(retainedScope())
         DownloadService.sendRemoveAllDownloads(
             context,
             TtsRoadDownloadService::class.java,
@@ -598,6 +607,7 @@ class OfflineDownloads(
     }
 
     fun retryPendingIdentityMigration() {
+        if (pendingMigration == null) armRetainedRekeys()
         val attempt = pendingMigration ?: return
         if (attempt.session != audioAuth) {
             pendingMigration = null
@@ -709,6 +719,8 @@ class OfflineDownloads(
     private fun adoptServerIdentity(identity: String?) {
         if (!shouldAdoptIdentity(current = identityMigration.identity, incoming = identity)) {
             pendingMigration = null
+            armRetainedRekeys()
+            if (pendingMigration != null && (initializeManager || migrationIndex != null)) retryPendingIdentityMigration()
             return
         }
         val attempt = IdentityMigrationAttempt(identity ?: return, audioAuth, activeCapabilities)
@@ -716,41 +728,67 @@ class OfflineDownloads(
         if (initializeManager || migrationIndex != null) retryPendingIdentityMigration()
     }
 
+    /**
+     * Arm a dispatch of the rekeys retained for the signed-in address's verified identity.
+     *
+     * Retained rekeys survive a restart on disk, but a full migration only starts when discovery
+     * advertises an identity — and a first discovery that transiently answers as Baseline would
+     * leave them waiting for a whole process. The identity remembered for this address is enough to
+     * finish what was already verified and started; only that identity's entries are dispatched,
+     * never another server's.
+     */
+    private fun armRetainedRekeys() {
+        val session = audioAuth
+        if (session.authorizationHeader == null) return
+        val identity = cacheIdentities.rememberedForServer(session.serverUrl) ?: return
+        if (!identityMigration.hasRetained(identity)) return
+        pendingMigration = IdentityMigrationAttempt(identity, session, activeCapabilities, retainedOnly = true)
+    }
+
     private fun performIdentityMigration(attempt: IdentityMigrationAttempt): Boolean =
         synchronized(identityMigrationLock) {
             if (pendingMigration !== attempt || audioAuth != attempt.session) return@synchronized false
-            val migrated = identityMigration.migrate(
-                incoming = attempt.identity,
-                index = migrationIndex ?: downloadManager.downloadIndex,
-                cache = downloadCache,
-                isCurrent = { pendingMigration === attempt && audioAuth == attempt.session },
-                ownsLegacyRequest = { request ->
-                    cacheIdentities.ownsLegacyUrl(attempt.session.serverUrl, request.uri.toString(), attempt.capabilities)
-                },
-            ) { request ->
-                check(audioAuth == attempt.session && pendingMigration === attempt)
-                DownloadService.sendRemoveDownload(
-                    context,
-                    TtsRoadDownloadService::class.java,
-                    request.id,
-                    false,
-                )
-                send(
-                    DownloadRequest.Builder(
-                        request.id,
-                        ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), attempt.session.serverUrl)?.toUri() ?: request.uri,
-                    )
-                        .setCustomCacheKey(
-                            DownloadCacheKeys.forUrl(request.uri.toString(), attempt.identity),
-                        )
-                        .setData(request.data)
-                        .build(),
+            val isCurrent = { pendingMigration === attempt && audioAuth == attempt.session }
+            val rekey: (DownloadRequest) -> Unit = { request -> rekey(attempt, request) }
+            val migrated = if (attempt.retainedOnly) {
+                identityMigration.dispatchRetained(attempt.identity, isCurrent, rekey)
+            } else {
+                identityMigration.migrate(
+                    incoming = attempt.identity,
+                    index = migrationIndex ?: downloadManager.downloadIndex,
+                    cache = downloadCache,
+                    isCurrent = isCurrent,
+                    ownsLegacyRequest = { request ->
+                        cacheIdentities.ownsLegacyUrl(attempt.session.serverUrl, request.uri.toString(), attempt.capabilities)
+                    },
+                    rekey = rekey,
                 )
             }
             if (migrated && pendingMigration === attempt) pendingMigration = null
             if (migrated) refreshCacheBytes()
             migrated
         }
+
+    private fun rekey(attempt: IdentityMigrationAttempt, request: DownloadRequest) {
+        check(audioAuth == attempt.session && pendingMigration === attempt)
+        DownloadService.sendRemoveDownload(
+            context,
+            TtsRoadDownloadService::class.java,
+            request.id,
+            false,
+        )
+        send(
+            DownloadRequest.Builder(
+                request.id,
+                ServerUrls.rewriteAudioUrlOrNull(request.uri.toString(), attempt.session.serverUrl)?.toUri() ?: request.uri,
+            )
+                .setCustomCacheKey(
+                    DownloadCacheKeys.forUrl(request.uri.toString(), attempt.identity),
+                )
+                .setData(request.data)
+                .build(),
+        )
+    }
 
     /** Read every persisted download, including the completed ones the manager does not hold. */
     private fun loadIndex() {

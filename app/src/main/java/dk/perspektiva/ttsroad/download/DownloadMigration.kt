@@ -119,29 +119,38 @@ internal class DownloadIdentityMigration(
 
     private fun persist(): Boolean = store.save(undispatched)
 
+    /** Whether rekeys retained for [identity] are still waiting to be dispatched. */
+    fun hasRetained(identity: String): Boolean =
+        synchronized(pendingLock) { undispatched[identity]?.isNotEmpty() == true }
+
     /**
-     * The user deleted [requestId]: never rekey it again, whether it is retained from a failed
-     * dispatch or still standing in the index the next migration reads.
+     * The user deleted [requestId] while signed in to the server filed under [identity]: never
+     * rekey it again, whether it is retained from a failed dispatch or still standing in the index
+     * the next migration reads.
+     *
+     * Only [identity]'s retained copy is dropped. Request ids are `chapter:<id>`, which another
+     * server reuses for a different chapter, and a retained rekey may be the only copy of that one —
+     * deleting a chapter on one server must not erase another server's download. A null [identity]
+     * (a server that never named itself) owns no retained rekeys, so none are touched.
+     *
+     * The withdrawal mark is not scoped: it guards a row in the one download index every server
+     * shares, and the user's remove takes that row whichever server queued it.
      *
      * Call before sending the remove command, so any add a running dispatch has already queued is
      * followed by that remove rather than overtaking it.
      */
-    fun forget(requestId: String) {
+    fun forget(requestId: String, identity: String?) {
         synchronized(pendingLock) {
-            var removed = false
-            undispatched.values.forEach { if (it.remove(requestId) != null) removed = true }
-            if (removed) persist()
+            if (identity != null && undispatched[identity]?.remove(requestId) != null) persist()
             withdrawn += requestId
             restored -= requestId
         }
     }
 
-    /** The user deleted every download. Same contract as [forget], for all of them. */
-    fun forgetAll() {
+    /** The user deleted every download. Same contract and scoping as [forget], for all of them. */
+    fun forgetAll(identity: String?) {
         synchronized(pendingLock) {
-            val hadPending = undispatched.values.any { it.isNotEmpty() }
-            undispatched.clear()
-            if (hadPending) persist()
+            if (identity != null && undispatched.remove(identity)?.isNotEmpty() == true) persist()
             withdrawn.clear()
             restored.clear()
             withdrewAll = true
@@ -149,11 +158,16 @@ internal class DownloadIdentityMigration(
     }
 
     /**
-     * [requestId] is being downloaded again on purpose, so a deletion recorded for it no longer
-     * applies. Call before sending the add, so the new record is migrated like any other.
+     * [requestId] is being downloaded again on purpose from the server filed under [identity], so a
+     * deletion recorded for it no longer applies, and neither does a rekey retained for it there:
+     * dispatched later, that would remove the fresh download and queue the old request's data in its
+     * place — a manual download turned automatic, or a replacement stripped of its hash.
+     *
+     * Call before sending the add, so the new record is migrated like any other.
      */
-    fun restore(requestId: String) {
+    fun restore(requestId: String, identity: String?) {
         synchronized(pendingLock) {
+            if (identity != null && undispatched[identity]?.remove(requestId) != null) persist()
             withdrawn -= requestId
             if (withdrewAll) restored += requestId
         }
@@ -202,23 +216,7 @@ internal class DownloadIdentityMigration(
             if (added && !persist()) return false
             pending.keys.toList()
         }
-        try {
-            for (id in ids) {
-                synchronized(pendingLock) {
-                    // Re-read under the lock: the user may have deleted it since the list was taken.
-                    val pending = undispatched[incoming] ?: return@synchronized
-                    val request = pending[id] ?: return@synchronized
-                    if (isWithdrawn(id)) return@synchronized
-                    if (!isCurrent()) return false
-                    if (runCatching { rekey(request) }.isFailure) return false
-                    pending.remove(id)
-                }
-            }
-        } finally {
-            // One write for the run rather than one per chapter. A crash before it re-dispatches
-            // what already went, which costs a redundant re-download, never a lost one.
-            synchronized(pendingLock) { persist() }
-        }
+        if (!dispatch(incoming, ids, isCurrent, rekey)) return false
         if (!isCurrent()) return false
         runCatching {
             orphanedCacheKeys(cache.keys, indexed).forEach(cache::removeResource)
@@ -229,5 +227,54 @@ internal class DownloadIdentityMigration(
         }
         identity = incoming
         return true
+    }
+
+    /**
+     * Dispatch only what is retained for [incoming], without reading the index, cleaning the cache
+     * or adopting the identity.
+     *
+     * For a process that loaded retained rekeys from disk but has no fresh discovery to start a full
+     * migration with: [incoming] is then the identity this address was verified under before, and
+     * these requests already passed their ownership check when they were retained. Nothing filed
+     * under any other identity is touched.
+     */
+    @Synchronized
+    fun dispatchRetained(
+        incoming: String,
+        isCurrent: () -> Boolean = { true },
+        rekey: (DownloadRequest) -> Unit,
+    ): Boolean {
+        val ids = synchronized(pendingLock) { undispatched[incoming]?.keys?.toList() } ?: return true
+        if (!dispatch(incoming, ids, isCurrent, rekey)) return false
+        synchronized(pendingLock) {
+            if (undispatched[incoming]?.isEmpty() == true) undispatched.remove(incoming)
+            persist()
+        }
+        return true
+    }
+
+    private fun dispatch(
+        incoming: String,
+        ids: List<String>,
+        isCurrent: () -> Boolean,
+        rekey: (DownloadRequest) -> Unit,
+    ): Boolean {
+        try {
+            for (id in ids) {
+                synchronized(pendingLock) {
+                    // Re-read under the lock: the user may have deleted it since the list was taken.
+                    val pending = undispatched[incoming] ?: return@synchronized
+                    val request = pending[id] ?: return@synchronized
+                    if (!isCurrent()) return false
+                    if (runCatching { rekey(request) }.isFailure) return false
+                    pending.remove(id)
+                }
+            }
+            return true
+        } finally {
+            // One write for the run rather than one per chapter. A crash before it re-dispatches
+            // what already went, which costs a redundant re-download, never a lost one.
+            synchronized(pendingLock) { persist() }
+        }
     }
 }

@@ -470,6 +470,48 @@ class OfflineDownloadSessionIdentityTest {
     }
 
     @Test
+    fun `persisted rekeys for the remembered identity re-arm without fresh discovery`() = runTest {
+        val server = server()
+        val address = server.url("/").toString()
+        val url = address + "audio/chapter.mp3"
+        val stranded = DownloadRequest.Builder("chapter:7", Uri.parse(url))
+            .setCustomCacheKey(DownloadCacheKeys.forUrl(url)).setData(byteArrayOf(7)).build()
+        val foreign = DownloadRequest.Builder("chapter:9", Uri.parse("https://other.example/audio/9.mp3"))
+            .setCustomCacheKey("/audio/9.mp3").build()
+        // The state a reaped process leaves: this address verified as canonical.example earlier,
+        // and a rekey whose old row is gone retained on disk next to another server's.
+        closeOfflineDownloads()
+        context.getSharedPreferences("download_server_identities", Context.MODE_PRIVATE)
+            .edit().putString(address, "canonical.example").commit()
+        val rekeys = java.io.File(context.filesDir, "download_migration_rekeys.json")
+        RetainedRekeyFile(rekeys).save(
+            mapOf("canonical.example" to mapOf(stranded.id to stranded), "other.example" to mapOf(foreign.id to foreign)),
+        )
+        openOfflineDownloads()
+
+        // First discovery of the new process fails transiently and answers as Baseline.
+        session.value = SessionState(serverUrl = address, token = "a")
+        server.enqueue(MockResponse().setResponseCode(503))
+        repository.refreshCurrentCapabilities()
+        runCurrent()
+        offline.retryPendingIdentityMigration()
+        runCurrent()
+
+        val application = shadowOf(RuntimeEnvironment.getApplication())
+        val removed = application.nextStartedService
+        assertEquals(DownloadService.ACTION_REMOVE_DOWNLOAD, removed.action)
+        assertEquals("chapter:7", removed.getStringExtra(DownloadService.KEY_CONTENT_ID))
+        val added = application.nextStartedService
+        val request = added.getParcelableExtra(DownloadService.KEY_DOWNLOAD_REQUEST, DownloadRequest::class.java)!!
+        assertEquals("chapter:7", request.id)
+        assertEquals("canonical.example /audio/chapter.mp3", request.customCacheKey)
+        assertArrayEquals(byteArrayOf(7), request.data)
+        assertEquals(null, application.nextStartedService)
+        assertEquals("no full migration without discovery", 0, migrationReads)
+        assertEquals(mapOf("other.example" to mapOf(foreign.id to foreign)), RetainedRekeyFile(rekeys).load())
+    }
+
+    @Test
     fun `failed A migration is cancelled when B has old server discovery`() = runTest {
         assertFailedMigrationServerSwitch(MockResponse().setResponseCode(404))
     }
