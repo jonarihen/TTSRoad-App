@@ -117,16 +117,37 @@ internal class DownloadIdentityMigration(
 
     private fun isWithdrawn(id: String) = id in withdrawn || (withdrewAll && id !in restored)
 
-    private fun persist(): Boolean = store.save(undispatched)
+    /**
+     * Whether [undispatched] may differ from what [store] holds.
+     *
+     * The rules every path below keeps, so that a failed write, a refused service start or the
+     * process dying at any point never loses a stranded chapter and never resurrects a deleted one:
+     * - Nothing is dispatched while this is set. A rekey that is not on disk before its remove is
+     *   sent is a chapter a reaped process can lose (#285).
+     * - A user's delete or re-download commits the removal of its retained copy to disk *before*
+     *   the service is told, and does nothing at all if that write fails. Memory can be ahead of the
+     *   disk, and a stale entry on disk would be dispatched over the user's choice after a restart.
+     * - The one direction the disk may lag on purpose is a rekey dispatched mid-run, whose removal
+     *   is written once at the end: a restart before that write re-sends an identical request, a
+     *   redundant re-download, never a lost or resurrected one. It still sets this flag, so a user
+     *   action on that chapter in the meantime writes the disk first.
+     */
+    private var dirty = false
+
+    private fun persist(): Boolean = store.save(undispatched).also { dirty = !it }
 
     /** Whether rekeys retained for [identity] are still waiting to be dispatched. */
     fun hasRetained(identity: String): Boolean =
         synchronized(pendingLock) { undispatched[identity]?.isNotEmpty() == true }
 
     /**
-     * The user deleted [requestId] while signed in to the server filed under [identity]: never
+     * The user deletes [requestId] while signed in to the server filed under [identity]: never
      * rekey it again, whether it is retained from a failed dispatch or still standing in the index
-     * the next migration reads.
+     * the next migration reads. [remove] sends the actual remove command.
+     *
+     * Transactional with [remove]. Answers false — and neither changes anything nor calls [remove] —
+     * when dropping the retained copy cannot be made durable; if [remove] throws, the retained copy
+     * and the marks are put back and the exception propagates.
      *
      * Only [identity]'s retained copy is dropped. Request ids are `chapter:<id>`, which another
      * server reuses for a different chapter, and a retained rekey may be the only copy of that one —
@@ -134,44 +155,96 @@ internal class DownloadIdentityMigration(
      * (a server that never named itself) owns no retained rekeys, so none are touched.
      *
      * The withdrawal mark is not scoped: it guards a row in the one download index every server
-     * shares, and the user's remove takes that row whichever server queued it.
+     * shares, and the user's remove takes that row whichever server queued it. It is not persisted:
+     * if the process dies before the service carries out the remove, the row survives and is
+     * migrated like any other — the outcome of the delete never having happened, not a resurrection.
      *
-     * Call before sending the remove command, so any add a running dispatch has already queued is
-     * followed by that remove rather than overtaking it.
+     * [remove] runs under the dispatch lock, so a remove is never overtaken by an add a running
+     * dispatch queues for the same chapter.
      */
-    fun forget(requestId: String, identity: String?) {
+    fun forget(requestId: String, identity: String?, remove: () -> Unit = {}): Boolean =
         synchronized(pendingLock) {
-            if (identity != null && undispatched[identity]?.remove(requestId) != null) persist()
+            val bucket = identity?.let { undispatched[it] }
+            val previous = bucket?.remove(requestId)
+            if ((previous != null || dirty) && !persist()) {
+                if (previous != null) bucket[requestId] = previous
+                return false
+            }
+            val wasWithdrawn = requestId in withdrawn
+            val wasRestored = requestId in restored
             withdrawn += requestId
             restored -= requestId
+            try {
+                remove()
+            } catch (e: Throwable) {
+                if (previous != null) bucket[requestId] = previous
+                if (!wasWithdrawn) withdrawn -= requestId
+                if (wasRestored) restored += requestId
+                if (previous != null) persist()
+                throw e
+            }
+            true
         }
-    }
 
-    /** The user deleted every download. Same contract and scoping as [forget], for all of them. */
-    fun forgetAll(identity: String?) {
+    /** The user deletes every download. Same contract and scoping as [forget], for all of them. */
+    fun forgetAll(identity: String?, removeAll: () -> Unit = {}): Boolean =
         synchronized(pendingLock) {
-            if (identity != null && undispatched.remove(identity)?.isNotEmpty() == true) persist()
+            val previous = identity?.let { undispatched.remove(it) }
+            if ((previous?.isNotEmpty() == true || dirty) && !persist()) {
+                if (previous != null && identity != null) undispatched[identity] = previous
+                return false
+            }
+            val marks = Triple(withdrawn.toSet(), restored.toSet(), withdrewAll)
             withdrawn.clear()
             restored.clear()
             withdrewAll = true
+            try {
+                removeAll()
+            } catch (e: Throwable) {
+                if (previous != null && identity != null) undispatched[identity] = previous
+                withdrawn += marks.first
+                restored += marks.second
+                withdrewAll = marks.third
+                if (previous?.isNotEmpty() == true) persist()
+                throw e
+            }
+            true
         }
-    }
 
     /**
-     * [requestId] is being downloaded again on purpose from the server filed under [identity], so a
-     * deletion recorded for it no longer applies, and neither does a rekey retained for it there:
-     * dispatched later, that would remove the fresh download and queue the old request's data in its
-     * place — a manual download turned automatic, or a replacement stripped of its hash.
+     * [requestId] is being downloaded again on purpose from the server filed under [identity]; [add]
+     * sends the fresh request. A deletion recorded for it no longer applies, and neither does a rekey
+     * retained for it there: dispatched later, that would remove the fresh download and queue the
+     * old request's data in its place — a manual download turned automatic, or a replacement
+     * stripped of its hash.
      *
-     * Call before sending the add, so the new record is migrated like any other.
+     * Transactional with [add], like [forget]: false and no [add] when the removal cannot be made
+     * durable; the retained copy back in place if [add] throws — a refused background start must not
+     * leave the chapter with neither its fresh request nor its retained one.
      */
-    fun restore(requestId: String, identity: String?) {
+    fun restore(requestId: String, identity: String?, add: () -> Unit = {}): Boolean =
         synchronized(pendingLock) {
-            if (identity != null && undispatched[identity]?.remove(requestId) != null) persist()
+            val bucket = identity?.let { undispatched[it] }
+            val previous = bucket?.remove(requestId)
+            if ((previous != null || dirty) && !persist()) {
+                if (previous != null) bucket[requestId] = previous
+                return false
+            }
+            val wasWithdrawn = requestId in withdrawn
+            val wasRestored = requestId in restored
             withdrawn -= requestId
             if (withdrewAll) restored += requestId
+            try {
+                add()
+            } catch (e: Throwable) {
+                if (previous != null) bucket[requestId] = previous
+                if (wasWithdrawn) withdrawn += requestId
+                if (!wasRestored) restored -= requestId
+                if (previous != null) persist()
+                throw e
+            }
+            true
         }
-    }
 
     @Synchronized
     fun migrate(
@@ -213,7 +286,8 @@ internal class DownloadIdentityMigration(
                 if (pending.put(it.id, it) != it) added = true
             }
             // Durable before the first dispatch, or a reaped process could lose a removed record.
-            if (added && !persist()) return false
+            // A write that failed last time is retried here even when nothing new was added.
+            if ((added || dirty) && !persist()) return false
             pending.keys.toList()
         }
         if (!dispatch(incoming, ids, isCurrent, rekey)) return false
@@ -259,6 +333,8 @@ internal class DownloadIdentityMigration(
         isCurrent: () -> Boolean,
         rekey: (DownloadRequest) -> Unit,
     ): Boolean {
+        // Nothing destructive until what is retained is on disk.
+        if (synchronized(pendingLock) { dirty && !persist() }) return false
         try {
             for (id in ids) {
                 synchronized(pendingLock) {
@@ -268,6 +344,7 @@ internal class DownloadIdentityMigration(
                     if (!isCurrent()) return false
                     if (runCatching { rekey(request) }.isFailure) return false
                     pending.remove(id)
+                    dirty = true
                 }
             }
             return true

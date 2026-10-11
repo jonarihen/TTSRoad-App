@@ -429,16 +429,22 @@ class OfflineDownloads(
             streamingCacheKeyFactory = scopedCacheKeyFactory,
         )
 
-    /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
+    /**
+     * Queue [chapter] for download. A chapter with no audio yet is silently ignored.
+     *
+     * Answers false, having queued nothing, only when a migration rekey retained for this chapter
+     * could not be durably dropped first — queuing anyway would let that stale request overwrite
+     * this one after a restart. A refused service start still throws, as it always has.
+     */
     fun download(
         chapter: ChapterSummary,
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
         replaceExisting: Boolean = false,
-    ) {
+    ): Boolean {
         val identity = cacheIdentities.forServer(serverUrl.orEmpty(), activeCapabilities)
-        val spec = chapterDownloadSpec(chapter, serverUrl, identity, origin) ?: return
-        val hash = if (replaceExisting) replacementHash(spec.chapterId) ?: return else null
+        val spec = chapterDownloadSpec(chapter, serverUrl, identity, origin) ?: return true
+        val hash = if (replaceExisting) replacementHash(spec.chapterId) ?: return true else null
         val invalidationKeys = if (replaceExisting) {
             buildSet {
                 add(spec.cacheKey)
@@ -447,10 +453,11 @@ class OfflineDownloads(
             }
         } else emptySet()
         val request = spec.toDownloadRequest(hash, invalidationKeys)
-        // Asked for again, so an earlier deletion must not keep the migration from moving it.
-        identityMigration.restore(request.id, retainedScope())
-        send(request)
+        // Asked for again: an earlier deletion must not keep the migration from moving it, and a
+        // rekey retained for it must not later overwrite it. Committed together with the add.
+        if (!identityMigration.restore(request.id, retainedScope()) { send(request) }) return false
         pinReadAlongFor(chapter)
+        return true
     }
 
     /**
@@ -477,9 +484,7 @@ class OfflineDownloads(
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
         replaceExisting: Boolean = false,
-    ) {
-        chapters.forEach { download(it, serverUrl, origin, replaceExisting) }
-    }
+    ): Boolean = chapters.map { download(it, serverUrl, origin, replaceExisting) }.all { it }
 
     /**
      * Move the keep-ahead window to [currentChapterId] within [chapters].
@@ -538,23 +543,31 @@ class OfflineDownloads(
         // allowed. A refused start leaves the honest state — not downloaded — rather than killing
         // playback, which is the thing the user actually asked for.
         return runCatching {
-            download(plan.download, serverUrl, DownloadOrigin.Auto)
-            plan.release.forEach(::remove)
+            check(download(plan.download, serverUrl, DownloadOrigin.Auto)) { "retained rekey state not durable" }
+            plan.release.forEach { check(remove(it)) { "retained rekey state not durable" } }
         }.isSuccess && settled
     }
 
-    /** Delete a chapter's audio and its read-along document, or cancel it if it is still downloading. */
-    fun remove(chapterId: Int) {
+    /**
+     * Delete a chapter's audio and its read-along document, or cancel it if it is still downloading.
+     *
+     * Answers false, having changed nothing, only when a migration rekey retained for the chapter
+     * could not be durably dropped — deleting anyway would let a restart queue it straight back.
+     */
+    fun remove(chapterId: Int): Boolean {
+        // Committed together with the remove: a rekey retained from a failed migration dispatch
+        // would otherwise queue this chapter again on the next retry.
+        val removed = identityMigration.forget(TtsRoadMediaIds.chapter(chapterId), retainedScope()) {
+            DownloadService.sendRemoveDownload(
+                context,
+                TtsRoadDownloadService::class.java,
+                TtsRoadMediaIds.chapter(chapterId),
+                /* foreground= */ false,
+            )
+        }
+        if (!removed) return false
         unpinReadAlong(chapterId)
-        // Before the remove is sent: a rekey retained from a failed migration dispatch would
-        // otherwise queue this chapter again on the next foreground retry.
-        identityMigration.forget(TtsRoadMediaIds.chapter(chapterId), retainedScope())
-        DownloadService.sendRemoveDownload(
-            context,
-            TtsRoadDownloadService::class.java,
-            TtsRoadMediaIds.chapter(chapterId),
-            /* foreground= */ false,
-        )
+        return true
     }
 
     /**
@@ -564,13 +577,15 @@ class OfflineDownloads(
      * eviction policy, not to make emptying them a two-step chore, and [clearStreamingCache] is
      * there for anyone who only wants the disposable half back.
      */
-    fun removeAll() {
-        identityMigration.forgetAll(retainedScope())
-        DownloadService.sendRemoveAllDownloads(
-            context,
-            TtsRoadDownloadService::class.java,
-            /* foreground= */ false,
-        )
+    fun removeAll(): Boolean {
+        val removed = identityMigration.forgetAll(retainedScope()) {
+            DownloadService.sendRemoveAllDownloads(
+                context,
+                TtsRoadDownloadService::class.java,
+                /* foreground= */ false,
+            )
+        }
+        if (!removed) return false
         // Every document held for a download goes with it. A chapter still in the browse cache
         // keeps its copy there, bounded and evictable as it was before it was ever downloaded.
         _downloads.value.keys.mapNotNull(TtsRoadMediaIds::chapterId).forEach(unpinReadAlong)
@@ -582,6 +597,7 @@ class OfflineDownloads(
             runCatching { streamingCache.keys.toList().forEach(streamingCache::removeResource) }
             refreshCacheBytes()
         }
+        return true
     }
 
     /**
