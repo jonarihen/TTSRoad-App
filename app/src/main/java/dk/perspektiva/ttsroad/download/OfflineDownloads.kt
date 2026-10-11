@@ -359,7 +359,7 @@ class OfflineDownloads(
                 .collect { release ->
                     val present = _downloads.value.keys.mapNotNullTo(mutableSetOf()) { TtsRoadMediaIds.chapterId(it) }
                     keepAheadReleaseRequested.retainAll(present)
-                    val sent = release.filter { runCatching { remove(it) }.isSuccess }
+                    val sent = sentReleases(release, ::remove)
                     keepAheadReleaseRequested += sent
                     keepAheadReleasePending = sent.size < release.size
                 }
@@ -429,22 +429,16 @@ class OfflineDownloads(
             streamingCacheKeyFactory = scopedCacheKeyFactory,
         )
 
-    /**
-     * Queue [chapter] for download. A chapter with no audio yet is silently ignored.
-     *
-     * Answers false, having queued nothing, only when a migration rekey retained for this chapter
-     * could not be durably dropped first — queuing anyway would let that stale request overwrite
-     * this one after a restart. A refused service start still throws, as it always has.
-     */
+    /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
     fun download(
         chapter: ChapterSummary,
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
         replaceExisting: Boolean = false,
-    ): Boolean {
+    ) {
         val identity = cacheIdentities.forServer(serverUrl.orEmpty(), activeCapabilities)
-        val spec = chapterDownloadSpec(chapter, serverUrl, identity, origin) ?: return true
-        val hash = if (replaceExisting) replacementHash(spec.chapterId) ?: return true else null
+        val spec = chapterDownloadSpec(chapter, serverUrl, identity, origin) ?: return
+        val hash = if (replaceExisting) replacementHash(spec.chapterId) ?: return else null
         val invalidationKeys = if (replaceExisting) {
             buildSet {
                 add(spec.cacheKey)
@@ -454,10 +448,9 @@ class OfflineDownloads(
         } else emptySet()
         val request = spec.toDownloadRequest(hash, invalidationKeys)
         // Asked for again: an earlier deletion must not keep the migration from moving it, and a
-        // rekey retained for it must not later overwrite it. Committed together with the add.
-        if (!identityMigration.restore(request.id, retainedScope()) { send(request) }) return false
+        // rekey retained for it must not later overwrite it. Dropped only once the add went out.
+        identityMigration.restore(request.id, retainedScope()) { send(request) }
         pinReadAlongFor(chapter)
-        return true
     }
 
     /**
@@ -484,7 +477,9 @@ class OfflineDownloads(
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
         replaceExisting: Boolean = false,
-    ): Boolean = chapters.map { download(it, serverUrl, origin, replaceExisting) }.all { it }
+    ) {
+        chapters.forEach { download(it, serverUrl, origin, replaceExisting) }
+    }
 
     /**
      * Move the keep-ahead window to [currentChapterId] within [chapters].
@@ -543,8 +538,9 @@ class OfflineDownloads(
         // allowed. A refused start leaves the honest state — not downloaded — rather than killing
         // playback, which is the thing the user actually asked for.
         return runCatching {
-            check(download(plan.download, serverUrl, DownloadOrigin.Auto)) { "retained rekey state not durable" }
-            plan.release.forEach { check(remove(it)) { "retained rekey state not durable" } }
+            download(plan.download, serverUrl, DownloadOrigin.Auto)
+            // A false remove sent nothing: the window is not settled, and is planned again.
+            plan.release.forEach { check(remove(it)) { "chapter $it was not released" } }
         }.isSuccess && settled
     }
 
@@ -767,7 +763,12 @@ class OfflineDownloads(
             val isCurrent = { pendingMigration === attempt && audioAuth == attempt.session }
             val rekey: (DownloadRequest) -> Unit = { request -> rekey(attempt, request) }
             val migrated = if (attempt.retainedOnly) {
-                identityMigration.dispatchRetained(attempt.identity, isCurrent, rekey)
+                identityMigration.dispatchRetained(
+                    attempt.identity,
+                    migrationIndex ?: downloadManager.downloadIndex,
+                    isCurrent,
+                    rekey,
+                )
             } else {
                 identityMigration.migrate(
                     incoming = attempt.identity,

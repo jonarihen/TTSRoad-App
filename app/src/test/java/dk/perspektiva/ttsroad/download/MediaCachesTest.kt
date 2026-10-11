@@ -764,7 +764,7 @@ class MediaCachesTest {
         val migration = DownloadIdentityMigration(RetainedRekeyFile(file))
         val dispatched = mutableListOf<DownloadRequest>()
 
-        assertTrue(migration.dispatchRetained("ttsroad.example") { dispatched += it })
+        assertTrue(migration.dispatchRetained("ttsroad.example", downloadIndex) { dispatched += it })
 
         assertEquals(listOf(mine), dispatched)
         assertEquals(null, migration.identity)
@@ -808,23 +808,80 @@ class MediaCachesTest {
     }
 
     @Test
-    fun `a re-download whose retained copy cannot be dropped durably queues nothing`() {
+    fun `a re-download whose retained copy stays on disk is superseded after a restart`() {
         seedMigrationLibrary()
         val store = flakyStore()
         val migration = DownloadIdentityMigration(store)
         val stranded = strand(migration)
         store.failing = true
-        var added = 0
+        val fresh = DownloadRequest.Builder(stranded, Uri.parse("https://ttsroad.example/audio/fresh.mp3"))
+            .setCustomCacheKey("ttsroad.example /audio/fresh.mp3")
+            .setData(byteArrayOf(42))
+            .build()
 
-        assertFalse(migration.restore(stranded, "ttsroad.example") { added++ })
-
-        assertEquals(0, added)
+        // The add goes out; the write that would drop the retained copy does not land.
+        migration.restore(stranded, "ttsroad.example") {
+            downloadIndex.putDownload(Download(fresh, Download.STATE_QUEUED, 0, 0, -1, 0, 0))
+        }
         assertTrue(stranded in store.onDisk())
-        assertTrue(migration.hasRetained("ttsroad.example"))
         store.failing = false
-        assertTrue(migration.restore(stranded, "ttsroad.example") { added++ })
-        assertEquals(1, added)
+
+        // A new process loads the stale entry, and the live row tells it the chapter is taken care of.
+        val dispatched = mutableListOf<String>()
+        val restarted = DownloadIdentityMigration(store)
+        assertTrue(restarted.dispatchRetained("ttsroad.example", downloadIndex) { dispatched += it.id })
+        assertTrue(
+            restarted.migrate("ttsroad.example", downloadIndex, downloadCache) { if (it.id == stranded) dispatched += it.id },
+        )
+
+        assertFalse("$stranded was overwritten", stranded in dispatched)
+        assertEquals(fresh, downloadIndex.getDownload(stranded)!!.request)
         assertFalse(stranded in store.onDisk())
+    }
+
+    @Test
+    fun `a refused re-download loses nothing even when the disk cannot be written`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val stranded = strand(DownloadIdentityMigration(store))
+        store.failing = true
+
+        assertTrue(
+            runCatching {
+                DownloadIdentityMigration(store).restore(stranded, "ttsroad.example") { error("background start refused") }
+            }.isFailure,
+        )
+
+        // Process death: whatever was in memory is gone, and the disk still owes the chapter.
+        store.failing = false
+        val replacementIds = mutableListOf<String>()
+        assertTrue(
+            DownloadIdentityMigration(store).dispatchRetained(
+                "ttsroad.example",
+                downloadIndex,
+                rekey = rekeyRemovingFirst(mutableListOf(), replacementIds) { false },
+            ),
+        )
+        assertTrue("$stranded was lost", stranded in replacementIds)
+    }
+
+    @Test
+    fun `a retained rekey behind another server's row is held, neither dispatched nor dropped`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val migration = DownloadIdentityMigration(store)
+        val stranded = strand(migration)
+        val theirs = DownloadRequest.Builder(stranded, Uri.parse("https://b.example/audio/x.mp3"))
+            .setCustomCacheKey("b.example /audio/x.mp3").build()
+        downloadIndex.putDownload(Download(theirs, Download.STATE_COMPLETED, 0, 0, 1, 0, 0))
+        val dispatched = mutableListOf<String>()
+
+        assertTrue(migration.dispatchRetained("ttsroad.example", downloadIndex) { dispatched += it.id })
+
+        assertFalse("$stranded overwrote another server's download", stranded in dispatched)
+        assertEquals(theirs, downloadIndex.getDownload(stranded)!!.request)
+        assertTrue(migration.hasRetained("ttsroad.example"))
+        assertTrue(stranded in store.onDisk())
     }
 
     @Test
@@ -870,7 +927,7 @@ class MediaCachesTest {
         assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
         // Same index, same requests: they are already pending in memory and nothing is "added".
         assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
-        assertFalse(migration.dispatchRetained("ttsroad.example", rekey = rekey))
+        assertFalse(migration.dispatchRetained("ttsroad.example", downloadIndex, rekey = rekey))
         assertTrue(dispatched.isEmpty())
 
         store.failing = false
@@ -936,7 +993,7 @@ class MediaCachesTest {
 
         assertTrue(store.onDisk().isEmpty())
         val redispatched = mutableListOf<String>()
-        assertTrue(DownloadIdentityMigration(store).dispatchRetained("ttsroad.example") { redispatched += it.id })
+        assertTrue(DownloadIdentityMigration(store).dispatchRetained("ttsroad.example", downloadIndex) { redispatched += it.id })
         assertTrue("resurrected $redispatched", redispatched.isEmpty())
     }
 

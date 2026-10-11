@@ -1893,7 +1893,10 @@ private fun FictionScreen(
                                     // Anything already on disk or in flight is removed; anything
                                     // else (including a previous failure) is started.
                                     current.isAvailableOffline || current.isBusy ->
-                                        downloads.remove(chapter.resolvedChapterId)
+                                        if (!downloads.remove(chapter.resolvedChapterId)) {
+                                            error = "Could not delete the download: storage is " +
+                                                "not writable. Nothing was removed."
+                                        }
 
                                     else -> downloads.download(chapter, serverUrl)
                                 }
@@ -3965,6 +3968,7 @@ internal fun SettingsScreen(
     val downloadCacheBytes by downloads.downloadCacheBytes.collectAsStateWithLifecycle()
     val streamedBytes by downloads.streamingCacheBytes.collectAsStateWithLifecycle()
     var confirmDeleteDownloads by remember { mutableStateOf(false) }
+    var deleteDownloadsError by remember { mutableStateOf<String?>(null) }
     var confirmClearStreamed by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
 
@@ -4475,6 +4479,7 @@ internal fun SettingsScreen(
                 ) {
                     Text("DELETE ALL DOWNLOADS")
                 }
+                deleteDownloadsError?.let { MetaText(text = it, color = AarisColor.Danger) }
             }
         }
 
@@ -4870,7 +4875,11 @@ internal fun SettingsScreen(
                 Button(
                     onClick = {
                         confirmDeleteDownloads = false
-                        downloads.removeAll()
+                        deleteDownloadsError = if (downloads.removeAll()) {
+                            null
+                        } else {
+                            "Could not delete downloads: storage is not writable. Nothing was removed."
+                        }
                     },
                     shape = RectangleShape,
                 ) {
