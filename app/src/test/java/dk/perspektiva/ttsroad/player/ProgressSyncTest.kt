@@ -548,4 +548,69 @@ class ProgressSyncTest {
             previous.shutdown()
         }
     }
+
+    @Test
+    fun `a flush that met unresolved capabilities retries with backoff until discovery recovers`() = runTest {
+        val previous = MockWebServer().also { it.start() }
+        try {
+            val owner = SessionState(serverUrl = server.url("/").toString(), token = "owner-token", username = "reader")
+            val repository = switchedRepository(previous, previousBatch = false, owner = owner)
+            val store = pendingStore()
+            store.record(1, 7, 30.0, false, owner = owner)
+            server.enqueue(MockResponse().setResponseCode(503))
+            server.enqueue(MockResponse().setResponseCode(503))
+            server.enqueue(MockResponse().setBody(capabilities(true)).setHeader("Content-Type", "application/json"))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}"""))
+            val slept = mutableListOf<Long>()
+
+            val result = ProgressSync(repository, store).flushUntilCapabilitiesResolve(listOf(1L, 2L, 3L)) { slept += it }
+
+            assertEquals(listOf(1L, 2L), slept)
+            assertFalse(result.capabilitiesUnresolved)
+            assertTrue(result.drained)
+            assertEquals(List(3) { "/api/mobile/capabilities" } + "/api/mobile/playback/sync",
+                List(4) { server.takeRequest().path })
+            assertTrue(store.pending().isEmpty())
+        } finally {
+            previous.shutdown()
+        }
+    }
+
+    @Test
+    fun `the capability retry is bounded and keeps the backlog when discovery never recovers`() = runTest {
+        val previous = MockWebServer().also { it.start() }
+        try {
+            val owner = SessionState(serverUrl = server.url("/").toString(), token = "owner-token", username = "reader")
+            val repository = switchedRepository(previous, previousBatch = true, owner = owner)
+            val store = pendingStore()
+            store.record(1, 7, 30.0, false, owner = owner)
+            repeat(4) { server.enqueue(MockResponse().setResponseCode(503)) }
+            val slept = mutableListOf<Long>()
+
+            val result = ProgressSync(repository, store).flushUntilCapabilitiesResolve(listOf(1L, 2L, 3L)) { slept += it }
+
+            assertEquals(listOf(1L, 2L, 3L), slept)
+            assertTrue(result.capabilitiesUnresolved)
+            assertEquals(4, server.requestCount) // four discovery attempts, no progress request
+            assertEquals(1, store.pending().size)
+        } finally {
+            previous.shutdown()
+        }
+    }
+
+    @Test
+    fun `a flush whose capabilities are known never waits`() = runTest {
+        val repository = repository(batchProgress = true)
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+            .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}"""))
+        val slept = mutableListOf<Long>()
+
+        ProgressSync(repository, store).flushUntilCapabilitiesResolve { slept += it }
+
+        assertTrue(slept.isEmpty())
+        assertTrue(store.pending().isEmpty())
+    }
 }

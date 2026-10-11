@@ -5,6 +5,7 @@ import dk.perspektiva.ttsroad.data.PlaybackSyncState
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -32,7 +33,12 @@ data class ProgressFlushResult(
     val overriddenByServer: List<PlaybackSyncState> = emptyList(),
     /** True when everything queued has now been dealt with one way or the other. */
     val drained: Boolean = false,
+    /** Nothing was tried because the owner's server capabilities are not known yet. */
+    val capabilitiesUnresolved: Boolean = false,
 )
+
+/** How long [ProgressSync.flushUntilCapabilitiesResolve] waits between attempts: about four minutes in all. */
+val CapabilityRetryDelaysMs: List<Long> = listOf(5_000L, 15_000L, 45_000L, 180_000L)
 
 /**
  * Drains [PendingProgressStore] to the server.
@@ -84,13 +90,35 @@ class ProgressSync(
         // placeholder or the previous server's. Unknown means wait: the legacy endpoint would drop
         // the stamps and let an offline position overwrite a newer one from the browser.
         val capabilities = repository.resolvedCapabilitiesFor(session.serverUrl)
-            ?: return@withLock ProgressFlushResult(drained = false)
+            ?: return@withLock ProgressFlushResult(drained = false, capabilitiesUnresolved = true)
 
         return@withLock if (capabilities.batchProgress) {
             flushBatched(queued, session, repository.playbackSyncBatchLimit(capabilities))
         } else {
             flushOneAtATime(queued, session)
         }
+    }
+
+    /**
+     * [flush], retried after [delays] for as long as the only obstacle is capability discovery.
+     *
+     * The owner-return flush runs once, at the moment an account becomes current — often while the
+     * network is still settling — and nothing else would retry it with nothing playing. Each
+     * attempt is an ordinary [flush], so it stays serialised with every other flush; the wait
+     * between attempts holds no lock. Gives up after the last delay, and stops as soon as an
+     * attempt gets past discovery, whatever it then sent.
+     */
+    suspend fun flushUntilCapabilitiesResolve(
+        delays: List<Long> = CapabilityRetryDelaysMs,
+        sleep: suspend (Long) -> Unit = { delay(it) },
+    ): ProgressFlushResult {
+        var result = flush()
+        for (wait in delays) {
+            if (!result.capabilitiesUnresolved) break
+            sleep(wait)
+            result = flush()
+        }
+        return result
     }
 
     private suspend fun flushBatched(queued: List<PendingProgress>, session: SessionState, limit: Int): ProgressFlushResult {

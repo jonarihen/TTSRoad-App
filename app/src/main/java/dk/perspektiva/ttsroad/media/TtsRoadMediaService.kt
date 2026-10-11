@@ -157,7 +157,17 @@ class TtsRoadMediaService : MediaLibraryService() {
     @Volatile
     private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
     private var boundQueueSession: dk.perspektiva.ttsroad.data.SessionState? = null
-    private val ownerProgressFlush = OwnerProgressFlush { serviceScope.launch { progressSync.flush() } }
+    private var ownerProgressRetry: Job? = null
+    private val ownerProgressFlush = OwnerProgressFlush { flushOwnedProgress() }
+
+    /**
+     * Flush the current account's backlog, retrying with backoff while its server's capabilities
+     * cannot be discovered. Replaces any retry still waiting for an earlier session or trigger.
+     */
+    private fun flushOwnedProgress() {
+        ownerProgressRetry?.cancel()
+        ownerProgressRetry = serviceScope.launch { progressSync.flushUntilCapabilitiesResolve() }
+    }
 
     // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
     // and car transport read the preference from here rather than the DataStore.
@@ -176,6 +186,11 @@ class TtsRoadMediaService : MediaLibraryService() {
         pendingProgress = ServiceLocator.pendingProgress(this)
         progressSync = ServiceLocator.progressSync(this)
         nowPlayingStore = NowPlayingStore(this)
+        // When the app's own discovery for the signed-in server succeeds (after a sign-in, or once
+        // the network is back), a backlog that waited on it can go out without waiting for playback.
+        serviceScope.launch {
+            repository.currentCapabilitiesResolved.collect { resolved -> if (resolved) flushOwnedProgress() }
+        }
         serviceScope.launch {
             tokenStore.session.collectLatest { state ->
                 playbackSessionGeneration++
