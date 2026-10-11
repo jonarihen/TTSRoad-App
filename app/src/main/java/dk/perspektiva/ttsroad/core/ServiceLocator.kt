@@ -260,6 +260,8 @@ object ServiceLocator {
                 forgetAudioHash = { chapterId -> staleDownloads(context).forget(chapterId) },
                 forgetAllAudioHashes = { staleDownloads(context).clear() },
                 initializeManager = initializeDownloadManager,
+                replacementHash = { chapterId -> staleDownloads(context).replacementHash(chapterId) },
+                replacementCompleted = { chapterId, hash -> staleDownloads(context).replacementCompleted(chapterId, hash) },
             ).also { offlineDownloads = it }
         }
 
