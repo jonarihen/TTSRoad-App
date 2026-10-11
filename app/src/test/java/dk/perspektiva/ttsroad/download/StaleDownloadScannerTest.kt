@@ -4,6 +4,8 @@ import androidx.test.core.app.ApplicationProvider
 import android.content.Context
 import dk.perspektiva.ttsroad.data.AudioHash
 import dk.perspektiva.ttsroad.data.AudioHashesResponse
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -78,10 +80,6 @@ class StaleDownloadScannerTest {
         assertEquals(mapOf(1 to "recorded"), record.current())
     }
 
-    /**
-     * The verdict for a fiction is replaced by each scan, not merged into. Without that a chapter
-     * that has been updated could never stop being stale, and the notice would nag forever.
-     */
     @Test
     fun `a chapter stops being stale once it is fetched again`() = runTest {
         val scanner = scanner()
@@ -90,10 +88,11 @@ class StaleDownloadScannerTest {
         scanner.scan(fictionId = 9, downloaded = setOf(1))
         assertEquals(setOf(1), scanner.staleChapters.value)
 
-        // What the row's action does: forget the old hash and queue the download again.
-        scanner.markUpdating(listOf(1))
-        assertTrue(scanner.staleChapters.value.isEmpty())
+        scanner.scan(fictionId = 9, downloaded = emptySet(), retained = setOf(1))
+        assertEquals(setOf(1), scanner.staleChapters.value)
+        assertEquals(mapOf(1 to "old"), record.current())
 
+        scanner.replacementCompleted(1, "new")
         scanner.scan(fictionId = 9, downloaded = setOf(1))
 
         assertTrue("a re-download must adopt, not re-report", scanner.staleChapters.value.isEmpty())
@@ -151,6 +150,98 @@ class StaleDownloadScannerTest {
         val reopened = AudioHashRecord(ApplicationProvider.getApplicationContext())
 
         assertEquals(mapOf(1 to "a", 2 to "b"), reopened.current())
+    }
+
+    @Test
+    fun `failed and cancelled replacements retain their old hash across other fiction scans`() = runTest {
+        record.merge(mapOf(1 to "old", 2 to "other"))
+        val scanner = scanner()
+        answer = response(AudioHash(chapterId = 1, audioSha256 = "new"))
+        scanner.scan(9, setOf(1, 2))
+        scanner.scan(9, setOf(2), retained = setOf(1, 2))
+        scanner.scan(9, setOf(2))
+        answer = response(AudioHash(chapterId = 2, audioSha256 = "other"))
+        scanner.scan(10, setOf(2))
+
+        assertEquals(setOf(1), scanner.staleChapters.value)
+        assertEquals(mapOf(1 to "old", 2 to "other"), record.current())
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a scan started before replacement completion cannot overwrite its verdict`() = runTest {
+        val pending = kotlinx.coroutines.CompletableDeferred<AudioHashesResponse?>()
+        val scanner = StaleDownloadScanner(record) { pending.await() }
+        record.merge(mapOf(1 to "old"))
+        val scan = launch { scanner.scan(9, setOf(1)) }
+        runCurrent()
+        scanner.replacementCompleted(1, "new")
+        pending.complete(response(AudioHash(chapterId = 1, audioSha256 = "old")))
+        scan.join()
+
+        assertTrue(scanner.staleChapters.value.isEmpty())
+        assertEquals(mapOf(1 to "new"), record.current())
+    }
+
+    @Test
+    fun `an older download snapshot cannot prune a successfully replaced hash`() = runTest {
+        val scanner = scanner()
+        record.merge(mapOf(1 to "old", 2 to "other"))
+        scanner.replacementCompleted(1, "new")
+        answer = response(AudioHash(chapterId = 2, audioSha256 = "other"))
+        scanner.scan(10, setOf(2))
+
+        assertEquals(mapOf(1 to "new", 2 to "other"), record.current())
+        scanner.forget(1)
+        assertEquals(mapOf(2 to "other"), record.current())
+    }
+
+    @Test
+    fun `an unconfirmed replacement stays stale even if the server temporarily reports no hash`() = runTest {
+        val scanner = scanner()
+        record.merge(mapOf(1 to "old"))
+        answer = response(AudioHash(chapterId = 1, audioSha256 = "new"))
+        scanner.scan(9, setOf(1))
+        answer = response(AudioHash(chapterId = 1, audioSha256 = null))
+        scanner.scan(9, setOf(1))
+
+        assertEquals(setOf(1), scanner.staleChapters.value)
+        assertEquals(mapOf(1 to "old"), record.current())
+    }
+
+    @Test
+    fun `verified server revert clears stale even when the persisted hash is unchanged`() = runTest {
+        val scanner = scanner()
+        record.merge(mapOf(1 to "a"))
+        answer = response(AudioHash(chapterId = 1, audioSha256 = "b"))
+        scanner.scan(9, setOf(1))
+        answer = response(AudioHash(chapterId = 1, audioSha256 = "a"))
+        scanner.scan(9, setOf(1))
+        assertEquals(setOf(1), scanner.staleChapters.value)
+        assertEquals("a", scanner.replacementHash(1))
+
+        scanner.replacementCompleted(1, "a")
+
+        assertTrue(scanner.staleChapters.value.isEmpty())
+        assertEquals(mapOf(1 to "a"), record.current())
+        record.merge(mapOf(2 to "other"))
+        answer = response(AudioHash(chapterId = 2, audioSha256 = "other"))
+        scanner.scan(10, setOf(2))
+        assertEquals(mapOf(1 to "a", 2 to "other"), record.current())
+    }
+
+    @Test
+    fun `completion matching the record cannot clear a newer expected server hash`() = runTest {
+        val scanner = scanner()
+        record.merge(mapOf(1 to "a"))
+        answer = response(AudioHash(chapterId = 1, audioSha256 = "b"))
+        scanner.scan(9, setOf(1))
+
+        scanner.replacementCompleted(1, "a")
+
+        assertEquals(setOf(1), scanner.staleChapters.value)
+        assertEquals("b", scanner.replacementHash(1))
+        assertEquals(mapOf(1 to "a"), record.current())
     }
 
     private fun response(vararg chapters: AudioHash) = AudioHashesResponse(

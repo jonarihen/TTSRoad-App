@@ -6,16 +6,21 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import dk.perspektiva.ttsroad.data.ChapterNotificationEntry
+import dk.perspektiva.ttsroad.data.ServerCapabilities
+import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.newlyReady
 import dk.perspektiva.ttsroad.data.readyNotificationText
 import dk.perspektiva.ttsroad.data.visibleNotifications
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 
 /**
  * How long between polls.
@@ -78,26 +83,67 @@ class NewChaptersState internal constructor() {
  * reports `notifications: true` while the login form is still on screen; polling there would fail
  * every minute against a request with no credential to send.
  */
+internal class ChapterNotificationLifetime {
+    private var session: SessionState? = null
+    private var flags: Pair<Boolean, Boolean>? = null
+
+    fun changed(current: SessionState?, capabilities: ServerCapabilities, resolved: Boolean): Boolean {
+        if (current == null) return false
+        val previous = session
+        val accountChanged = previous != null &&
+            (previous.serverUrl != current.serverUrl || previous.token != current.token)
+        session = current
+        if (accountChanged) flags = null
+        if (!current.isLoggedIn) return previous == null || accountChanged
+        if (!resolved) return accountChanged
+        val next = capabilities.notifications to capabilities.follows
+        val capabilitiesChanged = flags != null && flags != next
+        flags = next
+        return accountChanged || capabilitiesChanged
+    }
+}
+
 @Composable
 internal fun rememberNewChapters(
     repository: TtsRoadRepository,
-    isLoggedIn: Boolean,
-    available: Boolean,
+    session: SessionState?,
+    capabilities: ServerCapabilities,
+    currentSession: suspend () -> SessionState,
+    capabilitiesResolved: Boolean,
+    lifetime: ChapterNotificationLifetime,
 ): NewChaptersState {
     val context = LocalContext.current
-    val state = remember { NewChaptersState() }
+    val available = canUseChapterNotifications(capabilities, session, capabilitiesResolved)
+    val state = remember(repository, session?.serverUrl, session?.token, capabilities.notifications, capabilities.follows, capabilitiesResolved) {
+        NewChaptersState()
+    }
+    val latestSession by rememberUpdatedState(session)
+    val latestAvailable by rememberUpdatedState(available)
+    val latestCurrentSession by rememberUpdatedState(currentSession)
+
+    suspend fun ownsSession(): Boolean {
+        currentCoroutineContext().ensureActive()
+        val owner = session ?: return false
+        val live = latestCurrentSession()
+        return latestAvailable && live.isLoggedIn && live.serverUrl == owner.serverUrl &&
+            live.token == owner.token && latestSession?.serverUrl == owner.serverUrl &&
+            latestSession?.token == owner.token
+    }
     val notifier = remember(context) { NewChapterNotifier(context.applicationContext) }
 
     // Which notices were already ready last time we looked. Null until the first successful load,
     // which is what makes that load silent.
-    var readySeen by remember { mutableStateOf<Set<Int>?>(null) }
+    var readySeen by remember(state) { mutableStateOf<Set<Int>?>(null) }
 
     // Created up front rather than at the first post, so somebody can turn this off in system
     // settings *before* being interrupted rather than only in response to it.
-    LaunchedEffect(available) { if (available) notifier.ensureChannel() }
+    LaunchedEffect(session?.serverUrl, session?.token, capabilities.notifications, capabilities.follows, capabilitiesResolved) {
+        if (lifetime.changed(session, capabilities, capabilitiesResolved)) notifier.clear()
+        if (available) notifier.ensureChannel()
+    }
 
-    LaunchedEffect(isLoggedIn, available, state.refreshRequest) {
-        if (!isLoggedIn || !available) {
+    LaunchedEffect(state, state.refreshRequest) {
+        if (!available) {
             // Signing out forgets what was seen as well as what was shown: notices belong to an
             // account, and keeping the set would let the next account's ready chapters arrive
             // silently — or announce the previous account's.
@@ -110,13 +156,14 @@ internal fun rememberNewChapters(
             state.isLoading = false
             state.error = null
             readySeen = null
-            notifier.clear()
             return@LaunchedEffect
         }
         while (currentCoroutineContext().isActive) {
+            if (!ownsSession()) return@LaunchedEffect
             state.isLoading = true
             runCatching { repository.chapterNotifications() }
                 .onSuccess { response ->
+                    if (!ownsSession()) return@LaunchedEffect
                     if (response != null) {
                         val (fresh, seen) = newlyReady(response.notifications, readySeen)
                         readySeen = seen
@@ -130,8 +177,9 @@ internal fun rememberNewChapters(
                             state.followsAnything = runCatching { repository.library().fictions.isNotEmpty() }
                                 .getOrNull()
                         }
+                        if (!ownsSession()) return@LaunchedEffect
                         readyNotificationText(fresh)?.let { (title, body) ->
-                            notifier.notifyReady(title, body, fresh.singleOrNull())
+                            notifier.notifyReady(title, body, fresh.singleOrNull(), session)
                         }
                     } else {
                         state.isUnsupported = true
@@ -140,6 +188,8 @@ internal fun rememberNewChapters(
                     }
                 }
                 .onFailure {
+                    if (it is CancellationException) throw it
+                    if (!ownsSession()) return@LaunchedEffect
                     state.error = it.message ?: "Could not check for new chapters"
                     state.isUnsupported = false
                 }
