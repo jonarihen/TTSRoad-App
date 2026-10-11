@@ -75,7 +75,54 @@ internal class DownloadIdentityMigration {
     var identity: String? = null
         private set
 
+    /**
+     * Rekeys whose dispatch failed, by identity and request id.
+     *
+     * A rekey removes the old record before it queues the replacement, so a request whose add was
+     * refused may no longer be in the index at all — this map is then the only thing that remembers
+     * it is still owed a download, and it is kept across retries for exactly that reason. That same
+     * independence from the index is why a user's delete has to reach it through [forget] and
+     * [forgetAll]: otherwise the next retry would queue the chapter they just removed.
+     */
     private val undispatched = mutableMapOf<String, MutableMap<String, DownloadRequest>>()
+
+    /**
+     * Guards [undispatched] and the withdrawal marks, and is held across each single dispatch.
+     *
+     * Deliberately not the monitor [migrate] holds for its whole run: a user's delete waits for at
+     * most one dispatch to finish, never for an index read, so its own remove command is always sent
+     * after any add the migration queued for the same chapter.
+     */
+    private val pendingLock = Any()
+
+    /** Whether a [migrate] run is between its index read and its last dispatch. */
+    private var running = false
+
+    /** Ids the user removed while a run was in flight; its index snapshot may predate the removal. */
+    private val withdrawn = mutableSetOf<String>()
+    private var withdrewAll = false
+
+    /**
+     * The user deleted [requestId]: never rekey it again, whether it is retained from a failed
+     * dispatch or sits in the index snapshot of a run that is in flight right now.
+     *
+     * Call before sending the remove command, so any add a running dispatch has already queued is
+     * followed by that remove rather than overtaking it.
+     */
+    fun forget(requestId: String) {
+        synchronized(pendingLock) {
+            undispatched.values.forEach { it.remove(requestId) }
+            if (running) withdrawn += requestId
+        }
+    }
+
+    /** The user deleted every download. Same contract as [forget], for all of them. */
+    fun forgetAll() {
+        synchronized(pendingLock) {
+            undispatched.clear()
+            if (running) withdrewAll = true
+        }
+    }
 
     @Synchronized
     fun migrate(
@@ -87,6 +134,30 @@ internal class DownloadIdentityMigration {
         rekey: (DownloadRequest) -> Unit,
     ): Boolean {
         if (!shouldAdoptIdentity(identity, incoming)) return true
+        synchronized(pendingLock) {
+            running = true
+            withdrawn.clear()
+            withdrewAll = false
+        }
+        try {
+            return migrateRunning(incoming, index, cache, isCurrent, ownsLegacyRequest, rekey)
+        } finally {
+            synchronized(pendingLock) {
+                running = false
+                withdrawn.clear()
+                withdrewAll = false
+            }
+        }
+    }
+
+    private fun migrateRunning(
+        incoming: String,
+        index: DownloadIndex,
+        cache: Cache,
+        isCurrent: () -> Boolean,
+        ownsLegacyRequest: (DownloadRequest) -> Boolean,
+        rekey: (DownloadRequest) -> Unit,
+    ): Boolean {
         val requests = runCatching {
             index.getDownloads().use { cursor ->
                 buildList {
@@ -102,18 +173,26 @@ internal class DownloadIdentityMigration {
             !DownloadCacheKeys.isScoped(key) && requests.filter { it.customCacheKey == key }.all(ownsLegacyRequest)
         }
         if (!isCurrent()) return false
-        val pending = undispatched.getOrPut(incoming) { mutableMapOf() }
-        stale.forEach { pending[it.id] = it }
-        for (request in pending.values.toList()) {
-            if (!isCurrent()) return false
-            if (runCatching { rekey(request) }.isFailure) return false
-            pending.remove(request.id)
+        val ids = synchronized(pendingLock) {
+            val pending = undispatched.getOrPut(incoming) { mutableMapOf() }
+            if (!withdrewAll) stale.filter { it.id !in withdrawn }.forEach { pending[it.id] = it }
+            pending.keys.toList()
+        }
+        for (id in ids) {
+            synchronized(pendingLock) {
+                // Re-read under the lock: the user may have deleted it since the list was taken.
+                val pending = undispatched[incoming] ?: return@synchronized
+                val request = pending[id] ?: return@synchronized
+                if (!isCurrent()) return false
+                if (runCatching { rekey(request) }.isFailure) return false
+                pending.remove(id)
+            }
         }
         if (!isCurrent()) return false
         runCatching {
             orphanedCacheKeys(cache.keys, indexed).forEach(cache::removeResource)
         }
-        undispatched.remove(incoming)
+        synchronized(pendingLock) { undispatched.remove(incoming) }
         identity = incoming
         return true
     }

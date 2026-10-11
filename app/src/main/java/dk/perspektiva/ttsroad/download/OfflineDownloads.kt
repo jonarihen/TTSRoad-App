@@ -504,6 +504,9 @@ class OfflineDownloads(
     fun remove(chapterId: Int) {
         unpinReadAlong(chapterId)
         forgetAudioHash(chapterId)
+        // Before the remove is sent: a rekey retained from a failed migration dispatch would
+        // otherwise queue this chapter again on the next foreground retry.
+        identityMigration.forget(TtsRoadMediaIds.chapter(chapterId))
         DownloadService.sendRemoveDownload(
             context,
             TtsRoadDownloadService::class.java,
@@ -520,6 +523,7 @@ class OfflineDownloads(
      * there for anyone who only wants the disposable half back.
      */
     fun removeAll() {
+        identityMigration.forgetAll()
         DownloadService.sendRemoveAllDownloads(
             context,
             TtsRoadDownloadService::class.java,
