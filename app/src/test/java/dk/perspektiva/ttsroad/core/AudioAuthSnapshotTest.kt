@@ -691,7 +691,7 @@ class AudioAuthSnapshotTest {
         val expected = AudioAuthSnapshot(server.url("/").toString(), "Bearer fresh-token")
         val rejected = expected.copy(authorizationHeader = "Bearer stale-token")
         val active = SessionState(serverUrl = expected.serverUrl, token = "fresh-token")
-        for (session in listOf(active.copy(token = null), active.copy(token = "newer-token"), active.copy(serverUrl = "https://other.example/"), active)) {
+        for (session in listOf(active.copy(token = null), active.copy(token = "stale-token"), active.copy(serverUrl = "https://other.example/"), active)) {
             val player = RecoveryPlayer(recoveryItems())
             try {
                 val error = if (session == active) PlaybackException("New error", null, PlaybackException.ERROR_CODE_IO_UNSPECIFIED)
@@ -702,6 +702,67 @@ class AudioAuthSnapshotTest {
                 assertEquals(0, published)
                 assertEquals(0, player.prepares)
                 assertEquals(0, player.replacements)
+            } finally {
+                player.release()
+            }
+        }
+    }
+
+    @Test
+    fun `a second rotation during the backoff recovers with the newest same server credential only`() = runTest {
+        // null: another rotation on the same backend; recovery must use it rather than give up.
+        for (otherServer in listOf(null, "https://other.example/")) {
+            val store = loggedInStore()
+            val repository = TtsRoadRepository(store)
+            val session = store.current()
+            var snapshot = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+            val failure = delayedFailure({ snapshot }) {
+                assertEquals(LoginResult.Success, repository.login(session.serverUrl, "admin", "password", "Phone"))
+                val fresh = store.current()
+                snapshot = AudioAuthSnapshot(fresh.serverUrl, fresh.authorizationHeader)
+            }
+            server.takeRequest()
+            val player = RecoveryPlayer(recoveryItems())
+            try {
+                val error = requireNotNull(player.playerError)
+                var scheduled: (suspend () -> Unit)? = null
+                var published: AudioAuthSnapshot? = null
+                handleAudioRejection(repository, failure, store::current) { rejected, current ->
+                    assertEquals("Bearer fresh-token", current.authorizationHeader)
+                    scheduled = {
+                        recoverAudioPlaybackIfCurrent(player, error, rejected, current, store::current) { published = it }
+                    }
+                }
+                assertEquals(0, player.prepares)
+
+                // The password is rotated again while the recovery waits out its backoff.
+                store.saveLogin(
+                    otherServer ?: session.serverUrl,
+                    dk.perspektiva.ttsroad.data.LoginResponse(
+                        token = "newest-token",
+                        user = dk.perspektiva.ttsroad.data.MobileUser(id = 1, username = "admin"),
+                    ),
+                )
+                val newest = store.current().let { AudioAuthSnapshot(it.serverUrl, it.authorizationHeader) }
+                assertEquals("Bearer newest-token", newest.authorizationHeader)
+                requireNotNull(scheduled).invoke()
+
+                if (otherServer == null) {
+                    assertEquals(newest, published)
+                    assertEquals(1, player.prepares)
+                    assertEquals(0, player.replacements)
+                    assertEquals(0, player.stops)
+                    assertNull(player.playerError)
+                    assertEquals(12_345L, player.currentPosition)
+                    retryRequest(player.currentMediaItem!!.localConfiguration!!.uri.toString(), newest, server)
+                } else {
+                    assertNull(published)
+                    assertEquals(0, player.prepares)
+                    assertEquals(0, player.replacements)
+                    assertTrue(player.playerError === error)
+                }
+                assertEquals(0, store.clearTokenCalls)
+                assertNull(repository.sessionEnd.value)
             } finally {
                 player.release()
             }

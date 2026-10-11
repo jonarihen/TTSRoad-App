@@ -1791,13 +1791,15 @@ internal suspend fun recoverAudioPlaybackIfCurrent(
     publishAuth: (AudioAuthSnapshot) -> Unit,
 ) {
     val session = currentSession()
-    if (player.playerError !== error || !session.isLoggedIn ||
-        AudioAuthSnapshot(session.serverUrl, session.authorizationHeader) != expected
-    ) {
-        return
-    }
-    publishAuth(expected)
-    recoverAudioPlayback(player, rejected, expected)
+    if (player.playerError !== error || !session.isLoggedIn) return
+    val latest = AudioAuthSnapshot(session.serverUrl, session.authorizationHeader)
+    // Another rotation on the same backend during the backoff leaves the queue and this error
+    // owned by that backend, and the session collector does not re-prepare on same-server changes.
+    // Recover with the newest credential rather than leaving the player failed. A change of
+    // server, or a return to the credential that was just rejected, still abandons the attempt.
+    if (latest != expected && (!sameAudioServer(expected, latest) || latest == rejected)) return
+    publishAuth(latest)
+    recoverAudioPlayback(player, rejected, latest)
 }
 
 @OptIn(UnstableApi::class)
