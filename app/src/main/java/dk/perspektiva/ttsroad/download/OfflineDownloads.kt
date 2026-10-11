@@ -124,7 +124,9 @@ class OfflineDownloads(
     @Volatile
     private var activeCapabilities = ServerCapabilities.Baseline
 
-    private val identityMigration = DownloadIdentityMigration()
+    private val identityMigration = DownloadIdentityMigration(
+        RetainedRekeyFile(File(context.filesDir, RetainedRekeysFileName)),
+    )
     private val identityMigrationLock = Any()
 
     @Volatile
@@ -435,7 +437,10 @@ class OfflineDownloads(
                 legacyDownloadKey(spec.url, serverUrl.orEmpty(), null)?.let(::add)
             }
         } else emptySet()
-        send(spec.toDownloadRequest(hash, invalidationKeys))
+        val request = spec.toDownloadRequest(hash, invalidationKeys)
+        // Asked for again, so an earlier deletion must not keep the migration from moving it.
+        identityMigration.restore(request.id)
+        send(request)
         pinReadAlongFor(chapter)
     }
 
@@ -812,6 +817,9 @@ class OfflineDownloads(
          */
         const val StreamCacheDirName = "media_stream_cache"
         const val MaxParallelDownloads = 2
+
+        /** Rekeys the identity migration has yet to dispatch; see [RetainedRekeyStore]. */
+        const val RetainedRekeysFileName = "download_migration_rekeys.json"
     }
 }
 

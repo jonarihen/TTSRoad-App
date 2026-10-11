@@ -563,6 +563,156 @@ class MediaCachesTest {
         assertTrue("rekeyed $rekeyed", rekeyed.isEmpty())
     }
 
+    @Test
+    fun `a deletion before any migration starts keeps its still-standing row from being rekeyed`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        // OfflineDownloads.remove() with the migration only scheduled: the service has not yet
+        // processed the remove, so the index row is still there when the migration reads it.
+        migration.forget("chapter:1")
+        val rekeyed = mutableListOf<String>()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache) { rekeyed += it.id })
+
+        assertEquals(listOf("chapter:2"), rekeyed)
+    }
+
+    @Test
+    fun `removing everything before any migration starts rekeys none of the still-standing rows`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        migration.forgetAll()
+        val rekeyed = mutableListOf<String>()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache) { rekeyed += it.id })
+
+        assertTrue("rekeyed $rekeyed", rekeyed.isEmpty())
+    }
+
+    @Test
+    fun `a chapter downloaded again after its deletion is migrated like any other`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        migration.forget("chapter:1")
+        migration.forgetAll()
+        migration.restore("chapter:1")
+        migration.restore("chapter:2")
+        val rekeyed = mutableListOf<String>()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache) { rekeyed += it.id })
+
+        assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.toSet())
+    }
+
+    @Test
+    fun `a deletion mark lapses once an index read shows the remove has landed`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        migration.forget("chapter:1")
+        downloadIndex.removeDownload("chapter:1")
+        var refuse = true
+        val rekeyed = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            if (refuse) throw IllegalStateException("service start refused")
+            rekeyed += request.id
+        }
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        // A legacy row for the same id appears afterwards; the old deletion says nothing about it.
+        val request = DownloadRequest.Builder("chapter:1", Uri.parse("https://ttsroad.example$DefaultKey"))
+            .setCustomCacheKey(DefaultKey).build()
+        downloadIndex.putDownload(Download(request, Download.STATE_COMPLETED, 0, 0, body.size.toLong(), 0, 0))
+        refuse = false
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.toSet())
+    }
+
+    @Test
+    fun `a removed record whose add was refused survives the process being reaped`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val removeFirst = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            // Durable before the dispatch that can strand it, not merely after the run.
+            assertTrue(RetainedRekeyFile(file).load()["ttsroad.example"]!!.containsKey(request.id))
+            removeFirst(request)
+        }
+
+        assertFalse(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        val stranded = attempted.single()
+        assertEquals(null, downloadIndex.getDownload(stranded))
+        refuseAdd = false
+
+        // A new process: nothing in memory, and the index no longer names the chapter.
+        val restarted = DownloadIdentityMigration(RetainedRekeyFile(file))
+        assertTrue(restarted.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertEquals(setOf("chapter:1", "chapter:2"), replacementIds.toSet())
+        assertEquals(Download.STATE_QUEUED, downloadIndex.getDownload(stranded)!!.state)
+        assertFalse("nothing is left retained", file.exists())
+    }
+
+    @Test
+    fun `a deletion after the process was reaped drops the persisted rekey too`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+
+        assertFalse(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        val stranded = attempted.single()
+        DownloadIdentityMigration(RetainedRekeyFile(file)).forget(stranded)
+        refuseAdd = false
+        attempted.clear()
+
+        assertTrue(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertFalse("$stranded was resurrected", stranded in attempted)
+        assertEquals(null, downloadIndex.getDownload(stranded))
+    }
+
+    @Test
+    fun `removing everything after the process was reaped clears the persisted rekeys`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        val attempted = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, mutableListOf()) { true }
+
+        assertFalse(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertTrue(file.exists())
+        DownloadIdentityMigration(RetainedRekeyFile(file)).forgetAll()
+
+        assertFalse(file.exists())
+        assertTrue(RetainedRekeyFile(file).load().isEmpty())
+    }
+
+    @Test
+    fun `a retained rekey round-trips every field a download sets`() {
+        val request = DownloadRequest.Builder("chapter:7", Uri.parse("https://ttsroad.example/audio/7.mp3"))
+            .setCustomCacheKey("/audio/7.mp3")
+            .setMimeType("audio/mpeg")
+            .setData(byteArrayOf(0, 1, 127, -128, -1))
+            .build()
+        val bare = DownloadRequest.Builder("chapter:8", Uri.parse("https://ttsroad.example/audio/8.mp3")).build()
+        val retained = mapOf("ttsroad.example" to mapOf(request.id to request, bare.id to bare))
+
+        assertEquals(retained, decodeRetainedRekeys(encodeRetainedRekeys(retained)))
+    }
+
+    @Test
+    fun `an unreadable retained-rekey file reads as nothing retained`() {
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        file.writeText("{not json")
+
+        assertTrue(RetainedRekeyFile(file).load().isEmpty())
+    }
+
     /**
      * A rekey shaped like [OfflineDownloads]'s: the old record goes first, and the replacement add
      * is refused while [refuseAdd] — leaving a request only the migration still remembers.
