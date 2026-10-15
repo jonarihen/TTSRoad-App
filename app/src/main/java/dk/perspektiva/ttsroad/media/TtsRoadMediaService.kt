@@ -1278,7 +1278,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
         val session = librarySessionGeneration
-        val library = library() ?: return null
+        val library = afterPendingProgress(
+            flush = { progressSync.flush() },
+            read = { library() },
+        ) ?: return null
         // First is the most recently heard: the server sorts continue_listening by last listening
         // activity, newest first (build.md, "continue_listening[]"). The items carry no documented
         // timestamp to re-sort on, so the server's order is the contract (#330).
