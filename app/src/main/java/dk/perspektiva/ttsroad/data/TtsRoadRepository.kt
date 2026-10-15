@@ -323,6 +323,10 @@ class TtsRoadRepository(
             _sessionEnd.value = null
             _currentCapabilitiesResolved.value = false
             LoginResult.Success
+        } catch (e: CancellationException) {
+            // Cancellation is not a failed login; reporting it as one would break structured
+            // concurrency for any caller whose scope outlives the login screen.
+            throw e
         } catch (e: HttpException) {
             val body = e.response()?.errorBody()?.string()
             if (e.code() == 401 && body?.contains("totp_required") == true) {
