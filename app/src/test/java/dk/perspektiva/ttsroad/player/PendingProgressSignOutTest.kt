@@ -52,9 +52,11 @@ class PendingProgressSignOutTest {
     private fun pendingStore(clock: () -> Long = System::currentTimeMillis) =
         PendingProgressStore(RuntimeEnvironment.getApplication(), clock)
 
+    private val owner get() = SessionState(serverUrl = server.url("/").toString(), token = "stale-token", username = "admin")
+
     @Test
     fun `cold launch keeps persisted progress until the session restores and syncs`() = runTest {
-        pendingStore { 1_700_000_000_000L }.record(1, 7, 30.0, false)
+        pendingStore { 1_700_000_000_000L }.record(1, 7, 30.0, false, owner = owner)
         val sessions = MutableSharedFlow<SessionState>(replay = 1)
         var resolved: SessionState? = null
         var signedOut = 0
@@ -93,7 +95,7 @@ class PendingProgressSignOutTest {
 
     @Test
     fun `first real signed out session clears progress without a previous account`() {
-        pendingStore().record(1, 7, 30.0, false)
+        pendingStore().record(1, 7, 30.0, false, owner = owner)
         val sessions = MutableSharedFlow<SessionState>(replay = 1)
         var signedOut = 0
         compose.setContent {
@@ -113,7 +115,7 @@ class PendingProgressSignOutTest {
 
     @Test
     fun `restored session ending stops playback and clears progress`() {
-        pendingStore().record(1, 7, 30.0, false)
+        pendingStore().record(1, 7, 30.0, false, owner = owner)
         val sessions = MutableSharedFlow<SessionState>(replay = 1)
         var signedIn = 0
         var signedOut = 0
@@ -137,7 +139,7 @@ class PendingProgressSignOutTest {
     @Test
     fun `logout clears the pending queue and its file`() = runTest {
         val store = pendingStore()
-        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false)
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
         val repository = TtsRoadRepository(loggedInStore(), onSessionCleared = store::clear)
         server.enqueue(MockResponse().setBody("""{"status":"ok","revoked":true}"""))
 
@@ -150,7 +152,7 @@ class PendingProgressSignOutTest {
     @Test
     fun `endSession clears the pending queue and its file`() = runTest {
         val store = pendingStore()
-        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false)
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
         val repository = TtsRoadRepository(loggedInStore(), onSessionCleared = store::clear)
 
         repository.endSession(parseSessionEnd(null))
@@ -162,7 +164,7 @@ class PendingProgressSignOutTest {
     @Test
     fun `nothing flushes under the next account after sign-out`() = runTest {
         val store = pendingStore()
-        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false)
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
         val sessionStore = loggedInStore()
         val repository = TtsRoadRepository(sessionStore, onSessionCleared = store::clear)
         server.enqueue(MockResponse().setBody("""{"status":"ok","revoked":true}"""))

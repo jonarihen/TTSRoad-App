@@ -36,10 +36,12 @@ class PendingProgressStoreTest {
     private fun store(clock: () -> Long = System::currentTimeMillis) =
         PendingProgressStore(RuntimeEnvironment.getApplication(), clock)
 
+    private val owner = dk.perspektiva.ttsroad.data.SessionState(serverUrl = "https://home.example/", token = "t", username = "reader")
+
     @Test
     fun `a recorded position is kept`() {
         val store = store { 1_700_000_000_000L }
-        store.record(fictionId = 1, chapterId = 7, positionSeconds = 12.5, isPlayed = false)
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 12.5, isPlayed = false, owner = owner)
 
         val pending = store.pending()
         assertEquals(1, pending.size)
@@ -53,11 +55,11 @@ class PendingProgressStoreTest {
         // all but the last of them superseded.
         var now = 1_000L
         val store = store { now }
-        store.record(1, 7, 10.0, false)
+        store.record(1, 7, 10.0, false, owner = owner)
         now += 15_000
-        store.record(1, 7, 25.0, false)
+        store.record(1, 7, 25.0, false, owner = owner)
         now += 15_000
-        store.record(1, 7, 40.0, false)
+        store.record(1, 7, 40.0, false, owner = owner)
 
         val pending = store.pending()
         assertEquals(1, pending.size)
@@ -67,9 +69,9 @@ class PendingProgressStoreTest {
     @Test
     fun `different chapters are kept separately`() {
         val store = store()
-        store.record(1, 7, 10.0, false)
-        store.record(1, 8, 20.0, false)
-        store.record(2, 9, 30.0, false)
+        store.record(1, 7, 10.0, false, owner = owner)
+        store.record(1, 8, 20.0, false, owner = owner)
+        store.record(2, 9, 30.0, false, owner = owner)
 
         assertEquals(3, store.pending().size)
     }
@@ -78,11 +80,11 @@ class PendingProgressStoreTest {
     fun `a replaced entry moves to the back, so order is by recency`() {
         var now = 1_000L
         val store = store { now }
-        store.record(1, 7, 10.0, false)
+        store.record(1, 7, 10.0, false, owner = owner)
         now += 1_000
-        store.record(1, 8, 20.0, false)
+        store.record(1, 8, 20.0, false, owner = owner)
         now += 1_000
-        store.record(1, 7, 30.0, false)
+        store.record(1, 7, 30.0, false, owner = owner)
 
         assertEquals(listOf(8, 7), store.pending().map { it.chapterId })
     }
@@ -92,7 +94,7 @@ class PendingProgressStoreTest {
         // The whole ordering mechanism rests on this: a phone that listened offline for two hours
         // must be ordered by when the listening happened, not by when it reconnected.
         val store = store { 1_700_000_000_000L }
-        val entry = store.record(1, 7, 10.0, false)
+        val entry = store.record(1, 7, 10.0, false, owner = owner)
 
         assertEquals(1_700_000_000_000L, entry.recordedAtMillis)
         assertEquals(iso8601Utc(1_700_000_000_000L), entry.clientUpdatedAt)
@@ -137,7 +139,7 @@ class PendingProgressStoreTest {
         // phone truncating to seconds could stamp a genuinely newer position as older than a
         // browser write from earlier in the same second and lose to it.
         val store = store { 1_700_000_000_900L }
-        val entry = store.record(1, 7, 10.0, false)
+        val entry = store.record(1, 7, 10.0, false, owner = owner)
 
         assertEquals("2023-11-14T22:13:20.900Z", entry.clientUpdatedAt)
     }
@@ -146,7 +148,7 @@ class PendingProgressStoreTest {
     fun `the queue is capped, dropping the oldest first`() {
         val store = store()
         for (chapter in 1..(MaxPendingProgress + 10)) {
-            store.record(1, chapter, 1.0, false)
+            store.record(1, chapter, 1.0, false, owner = owner)
         }
 
         val pending = store.pending()
@@ -165,8 +167,8 @@ class PendingProgressStoreTest {
     @Test
     fun `resolving removes only what was acknowledged`() {
         val store = store()
-        store.record(1, 7, 10.0, false)
-        val eight = store.record(1, 8, 20.0, false)
+        store.record(1, 7, 10.0, false, owner = owner)
+        val eight = store.record(1, 8, 20.0, false, owner = owner)
 
         store.resolve(listOf(eight))
 
@@ -180,9 +182,9 @@ class PendingProgressStoreTest {
         // chapter id alone would throw away the newer position.
         var now = 1_000L
         val store = store { now }
-        val inFlight = store.record(1, 7, 10.0, false)
+        val inFlight = store.record(1, 7, 10.0, false, owner = owner)
         now += 5_000
-        store.record(1, 7, 99.0, false)
+        store.record(1, 7, 99.0, false, owner = owner)
 
         store.resolve(listOf(inFlight))
 
@@ -194,8 +196,8 @@ class PendingProgressStoreTest {
     @Test
     fun `a replacement in the same millisecond survives acknowledgement and restart`() {
         val store = store { 1_700_000_000_000L }
-        val inFlight = store.record(1, 7, 10.0, false)
-        val latest = store.record(1, 7, 99.0, false)
+        val inFlight = store.record(1, 7, 10.0, false, owner = owner)
+        val latest = store.record(1, 7, 99.0, false, owner = owner)
 
         assertEquals(inFlight.recordedAtMillis + 1, latest.recordedAtMillis)
         assertTrue(Instant.parse(inFlight.clientUpdatedAt) < Instant.parse(latest.clientUpdatedAt))
@@ -208,9 +210,9 @@ class PendingProgressStoreTest {
     @Test
     fun `a restarted store advances past a pending timestamp even if the clock moves back`() {
         val store = store { 1_700_000_000_001L }
-        val earlier = store.record(1, 7, 10.0, false)
+        val earlier = store.record(1, 7, 10.0, false, owner = owner)
         val restarted = store { 1_700_000_000_000L }
-        val later = restarted.record(1, 7, 20.0, true)
+        val later = restarted.record(1, 7, 20.0, true, owner = owner)
 
         assertEquals(earlier.recordedAtMillis + 1, later.recordedAtMillis)
         assertTrue(Instant.parse(earlier.clientUpdatedAt) < Instant.parse(later.clientUpdatedAt))
@@ -222,7 +224,7 @@ class PendingProgressStoreTest {
     fun `the backlog survives the process being killed`() {
         // This queue exists for the case where the phone is offline and stays offline, which is
         // also when the process is most likely to be killed before it ever reconnects.
-        store().record(1, 7, 42.0, false)
+        store().record(1, 7, 42.0, false, owner = owner)
 
         val reopened = store()
         assertEquals(1, reopened.pending().size)
@@ -236,14 +238,14 @@ class PendingProgressStoreTest {
         val store = store()
         assertTrue(store.isEmpty())
         // And it recovers: a fresh record still works.
-        store.record(1, 7, 5.0, false)
+        store.record(1, 7, 5.0, false, owner = owner)
         assertEquals(1, store.pending().size)
     }
 
     @Test
     fun `a negative position cannot be queued`() {
         val store = store()
-        val entry = store.record(1, 7, -5.0, false)
+        val entry = store.record(1, 7, -5.0, false, owner = owner)
 
         assertEquals(0.0, entry.positionSeconds, 0.001)
     }
@@ -251,7 +253,7 @@ class PendingProgressStoreTest {
     @Test
     fun `clear empties the queue and the file`() {
         val store = store()
-        store.record(1, 7, 10.0, false)
+        store.record(1, 7, 10.0, false, owner = owner)
         store.clear()
 
         assertTrue(store.isEmpty())

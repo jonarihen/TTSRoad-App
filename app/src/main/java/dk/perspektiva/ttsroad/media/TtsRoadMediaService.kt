@@ -38,6 +38,8 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dk.perspektiva.ttsroad.MainActivity
 import dk.perspektiva.ttsroad.notificationSessionKey
+import dk.perspektiva.ttsroad.core.AudioAuthSnapshot
+import dk.perspektiva.ttsroad.core.audioAuthSnapshot
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.BookmarkKindAuto
@@ -50,18 +52,21 @@ import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.QueueStatusPlaying
+import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TokenStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.effectiveSpeed
 import dk.perspektiva.ttsroad.data.libraryMoved
 import dk.perspektiva.ttsroad.data.mergeLibraryDelta
+import dk.perspektiva.ttsroad.data.normalizeBaseUrl
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.InProcessPlayer
 import dk.perspektiva.ttsroad.player.NetworkReturnWatcher
 import dk.perspektiva.ttsroad.player.shouldRecoverOnNetworkReturn
 import dk.perspektiva.ttsroad.player.PendingProgressStore
+import dk.perspektiva.ttsroad.player.OwnerProgressFlush
 import dk.perspektiva.ttsroad.player.adSkipTarget
 import dk.perspektiva.ttsroad.player.PlaybackFailure
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
@@ -98,6 +103,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 // Media3 marks much of its session and data-source surface @UnstableApi. The whole class works
 // against it, so opt in once here rather than annotating each member and still missing the
@@ -162,9 +168,28 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var lastBreadcrumbAt: Long? = null
     private var lastBreadcrumbPruneAt: Long? = null
 
-    @Volatile
-    private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
+    private val sessionAudioAuth = dk.perspektiva.ttsroad.core.SessionAudioAuth()
+
+    // Every assignment comes from a real session (the session collector, a bound queue, recovery),
+    // so each one also releases the controllers waiting in [currentAudioAuth].
+    private var audioAuth: dk.perspektiva.ttsroad.core.AudioAuthSnapshot
+        get() = sessionAudioAuth.current
+        set(value) = sessionAudioAuth.publish(value)
+
+    /** [audioAuth] once the persisted session has been read; see [dk.perspektiva.ttsroad.core.SessionAudioAuth]. */
+    private suspend fun currentAudioAuth() = sessionAudioAuth.awaitCurrent()
     private var boundQueueSession: dk.perspektiva.ttsroad.data.SessionState? = null
+    private var ownerProgressRetry: Job? = null
+    private val ownerProgressFlush = OwnerProgressFlush { flushOwnedProgress() }
+
+    /**
+     * Flush the current account's backlog, retrying with backoff while its server's capabilities
+     * cannot be discovered. Replaces any retry still waiting for an earlier session or trigger.
+     */
+    private fun flushOwnedProgress() {
+        ownerProgressRetry?.cancel()
+        ownerProgressRetry = serviceScope.launch { progressSync.flushUntilCapabilitiesResolve() }
+    }
 
     // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
     // and car transport read the preference from here rather than the DataStore.
@@ -183,19 +208,30 @@ class TtsRoadMediaService : MediaLibraryService() {
         pendingProgress = ServiceLocator.pendingProgress(this)
         progressSync = ServiceLocator.progressSync(this)
         nowPlayingStore = NowPlayingStore(this)
-        // Anything recorded while the last session was offline is still waiting. Flush it before
-        // playback adds to it, so a reconnect settles the backlog rather than deepening it.
-        serviceScope.launch { progressSync.flush() }
+        // When the app's own discovery for the signed-in server succeeds (after a sign-in, or once
+        // the network is back), a backlog that waited on it can go out without waiting for playback.
+        serviceScope.launch {
+            repository.currentCapabilitiesResolved.collect { resolved -> if (resolved) flushOwnedProgress() }
+        }
         serviceScope.launch {
             tokenStore.session.collectLatest { state ->
                 playbackSessionGeneration++
                 playbackSessionActive = state.isLoggedIn
+                // Anything recorded while this account was offline, or while another account was
+                // signed in over it, is still waiting and only this account may send it. This also
+                // covers service start, so a reconnect settles the backlog rather than deepening it.
+                ownerProgressFlush.onSession(state)
                 val queueOwner = boundQueueSession
                 if (queueOwner != null && (queueOwner.serverUrl != state.serverUrl || queueOwner.token != state.token || !state.isLoggedIn)) {
                     boundQueueSession = null
                     if (::player.isInitialized) stopSignedOutPlayback(player)
                 }
-                audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(state.serverUrl, state.authorizationHeader)
+                val previousAuth = audioAuth
+                audioAuth = state.audioAuthSnapshot()
+                // A different account on another server or on the same one: the queue, and every
+                // chapter id in it, belongs to the previous account and must not keep playing (or
+                // saving progress) on the new account's token.
+                if (::player.isInitialized) discardCrossServerPlayback(player, previousAuth, audioAuth)
                 // Account state and the snapshot are separate files. Remove the latter explicitly
                 // on sign-out so a later process can never show the previous account's book, even
                 // for the instant before its DataStore read finishes.
@@ -330,14 +366,18 @@ class TtsRoadMediaService : MediaLibraryService() {
             scope = serviceScope,
             sessionKey = { playbackSessionGeneration.takeIf { playbackSessionActive } },
             load = { fictionId ->
+                val account = audioAuth.account
                 val response = repository.chapters(fictionId = fictionId, playableOnly = true)
                 val url = serverUrl()
                 response.chapters.mapNotNull { TtsRoadMediaItems.chapter(it, response.fiction, url) }
+                    .map { withAudioAccount(it, account) }
             },
             advance = {
+                val account = audioAuth.account
                 val response = repository.advanceQueue()
                 if (response?.status == QueueStatusPlaying) {
                     response.item?.let { TtsRoadMediaItems.queueItem(it, serverUrl()) }
+                        ?.let { withAudioAccount(it, account) }
                 } else null
             },
             allowContinuation = {
@@ -534,8 +574,22 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // the JSON API, so go through the repository rather than clearing the token here:
                 // that is what carries the reason to the login screen instead of dropping the user
                 // there with no explanation.
-                val body = httpFailure?.responseBody?.toString(Charsets.UTF_8)
-                serviceScope.launch { repository.endSession(parseSessionEnd(body)) }
+                serviceScope.launch {
+                    handleAudioRejection(repository, httpFailure, tokenStore::current) { rejected, current ->
+                        if (player.playerError !== error) return@handleAudioRejection
+                        if (!sameAudioAccount(rejected, current)) {
+                            recoverAudioPlaybackIfCurrent(player, error, rejected, current, tokenStore::current) {
+                                audioAuth = it
+                            }
+                        } else {
+                            scheduleRetry {
+                                recoverAudioPlaybackIfCurrent(player, error, rejected, current, tokenStore::current) {
+                                    audioAuth = it
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             is PlaybackFailure.Transient -> {
@@ -556,13 +610,13 @@ class TtsRoadMediaService : MediaLibraryService() {
      * anything. Deliberately does not call play(): prepare() resumes on its own when playWhenReady
      * was set, so a stream that died while paused stays paused.
      */
-    private fun scheduleRetry() {
+    private fun scheduleRetry(recover: suspend () -> Unit = { player.prepare() }) {
         val delayMs = retryDelayMs(retryAttempt + 1) ?: return
         retryAttempt++
         retryJob?.cancel()
         retryJob = serviceScope.launch {
             delay(delayMs)
-            player.prepare()
+            recover()
         }
     }
 
@@ -937,8 +991,10 @@ class TtsRoadMediaService : MediaLibraryService() {
         flushHistory: Boolean = queueEnded,
     ) {
         val itemSession = mediaItem.mediaMetadata.extras?.getString("queue_session_key")
-        suspend fun ownsProgress(): Boolean = itemSession == null ||
-            notificationSessionKey(tokenStore.current()) == itemSession
+        fun ownsProgress(current: SessionState): Boolean =
+            audioItemBelongsToSession(mediaItem, current) &&
+                (itemSession == null || notificationSessionKey(current) == itemSession)
+        suspend fun ownsProgress(): Boolean = ownsProgress(tokenStore.current())
         if (!ownsProgress()) return
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 }
@@ -982,12 +1038,16 @@ class TtsRoadMediaService : MediaLibraryService() {
         // being offline, and the stamp is what lets the server decide who is actually newer.
         if (!ownsProgress()) return
         withContext(Dispatchers.IO) {
-            if (!ownsProgress()) return@withContext
+            // The owner is the session the check passed against, so the entry can only ever be
+            // sent as that account (see PendingProgress.ownedBy).
+            val owner = tokenStore.current()
+            if (!ownsProgress(owner)) return@withContext
             pendingProgress.record(
                 fictionId = fictionId,
                 chapterId = chapterId,
                 positionSeconds = position / 1000.0,
                 isPlayed = isPlayed,
+                owner = owner,
             )
         }
         if (!ownsProgress()) return
@@ -1192,6 +1252,9 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     /** Fictions and chapters matching a car search, as browse items. */
     private suspend fun searchItems(query: String): SearchResult? {
+        // Taken first: if the account changes while this runs, the stamp names the old one and the
+        // items fail closed (see [audioItemFromSession]) instead of passing as the new one's.
+        val origin = currentAudioAuth()
         val session = librarySessionGeneration
         val library = library() ?: return null
         val generation = searchCacheGeneration
@@ -1209,7 +1272,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
                 TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
             }
-        return SearchResult(items, generation)
+        return SearchResult(items.map { withAudioOrigin(it, origin) }, generation)
     }
 
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
@@ -1274,7 +1337,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 return service.serviceScope.future {
                     SessionBoundQueue.install(args.getString("ticket"), session.player, service.tokenStore) { owner ->
                         service.boundQueueSession = owner
-                        service.audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot(owner.serverUrl, owner.authorizationHeader)
+                        service.audioAuth = owner.audioAuthSnapshot()
                     }
                 }
             }
@@ -1325,7 +1388,13 @@ class TtsRoadMediaService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> =
-            Futures.immediateFuture(mediaItems.map(::restoreItem).toMutableList())
+            service.serviceScope.future {
+                // Awaited: on a cold start the item can arrive before the stored session is read.
+                val origin = service.currentAudioAuth()
+                mediaItems.filter { audioItemFromSession(it, origin) }
+                    .map { withAudioAccount(restoreItem(it), origin.account) }
+                    .toMutableList()
+            }
 
         // Invoked when a controller sets what to play. When a single chapter is selected — e.g. from
         // the Android Auto browse tree — expand it into its whole fiction so next/previous and
@@ -1339,6 +1408,16 @@ class TtsRoadMediaService : MediaLibraryService() {
             startPositionMs: Long,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
             service.serviceScope.future {
+                // Taken before anything is fetched: the queue is the account's that asked for it.
+                // Awaited, because Android Auto or a media button can get here on a fresh process
+                // before the stored session is read, and the blank default would refuse every item.
+                val origin = service.currentAudioAuth()
+                val account = origin.account
+                // A browse item the car kept from before an account switch names the previous
+                // account (or server). Its ids mean nothing — or something else — to this one.
+                if (mediaItems.any { !audioItemFromSession(it, origin) }) {
+                    throw UnsupportedOperationException("Item belongs to another account")
+                }
                 val single = mediaItems.singleOrNull()
 
                 // "Hey Google, play Ashes of Aether on TTSRoad" arrives as a single item carrying
@@ -1347,7 +1426,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // driving.
                 val spoken = single?.requestMetadata?.searchQuery
                 if (!spoken.isNullOrBlank()) {
-                    service.queueForSpokenQuery(spoken)?.let { return@future it }
+                    service.queueForSpokenQuery(spoken)?.let { return@future it.forAudioAccount(account) }
                 }
 
                 val extras = single?.mediaMetadata?.extras
@@ -1356,7 +1435,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 if (fictionId != null && chapterId != null) {
                     val sessionAtRequest = service.librarySessionGeneration
                     service.buildFictionQueue(fictionId, chapterId, sessionAtRequest)?.let {
-                        return@future it.withRequestedStartPosition(startPositionMs)
+                        return@future it.withRequestedStartPosition(startPositionMs).forAudioAccount(account)
                     }
                     if (!service.sessionStillCurrent(sessionAtRequest)) {
                         throw UnsupportedOperationException("Signed out or switched account")
@@ -1366,7 +1445,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     mediaItems.map(::restoreItem),
                     startIndex,
                     startPositionMs,
-                )
+                ).forAudioAccount(account)
             }
 
         // Pressing play in the car with nothing loaded resumes the most recent "continue listening"
@@ -1377,7 +1456,9 @@ class TtsRoadMediaService : MediaLibraryService() {
             isForPlayback: Boolean,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
             service.serviceScope.future {
-                service.resumeQueue() ?: throw UnsupportedOperationException("Nothing to resume")
+                val account = service.currentAudioAuth().account
+                service.resumeQueue()?.forAudioAccount(account)
+                    ?: throw UnsupportedOperationException("Nothing to resume")
             }
 
         // Media3 splits searching in two: onSearch does the work and reports how many results
@@ -1454,6 +1535,11 @@ class TtsRoadMediaService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> =
             service.serviceScope.future {
+                // Every browse item carries the server and account it was built for, so one the
+                // car keeps showing after an account switch is refused rather than adopted by the
+                // next account (see onSetMediaItems). Taken before the fetch, so a switch midway
+                // fails closed.
+                val origin = service.currentAudioAuth()
                 val items = when {
                     parentId == TtsRoadMediaIds.Root -> rootChildren()
                     parentId == TtsRoadMediaIds.Continue -> continueItems()
@@ -1462,7 +1548,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     parentId == TtsRoadMediaIds.Queue -> queueItems()
                     parentId.startsWith(TtsRoadMediaIds.FictionPrefix) -> fictionChildren(parentId)
                     else -> emptyList()
-                }
+                }.map { withAudioOrigin(it, origin) }
                 LibraryResult.ofItemList(page(items, page, pageSize), styleFor(parentId, params))
             }
 
@@ -1572,6 +1658,12 @@ class TtsRoadMediaService : MediaLibraryService() {
         const val SLEEP_TIMER_TICK_MS = 500L
     }
 }
+
+@OptIn(UnstableApi::class)
+internal fun MediaSession.MediaItemsWithStartPosition.forAudioAccount(
+    account: String?,
+): MediaSession.MediaItemsWithStartPosition =
+    MediaSession.MediaItemsWithStartPosition(mediaItems.map { withAudioAccount(it, account) }, startIndex, startPositionMs)
 
 @OptIn(UnstableApi::class)
 internal fun MediaSession.MediaItemsWithStartPosition.withRequestedStartPosition(
@@ -1781,5 +1873,174 @@ internal fun stopSignedOutPlayback(player: Player) {
     player.pause()
     player.stop()
     player.clearMediaItems()
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun endAudioSession(
+    repository: TtsRoadRepository,
+    failure: HttpDataSource.InvalidResponseCodeException?,
+): Boolean {
+    if (failure == null || failure.responseCode !in listOf(401, 403)) return false
+    val request = failure.dataSpec
+    val snapshot = request.customData as? AudioAuthSnapshot ?: return false
+    val authorizationHeader = snapshot.authorizationHeader ?: return false
+    if (!ServerUrls.isSameOrigin(request.uri.toString(), snapshot.serverUrl) ||
+        request.httpRequestHeaders["Authorization"] != authorizationHeader
+    ) {
+        return false
+    }
+    return repository.endSessionIfCurrent(
+        snapshot.serverUrl,
+        authorizationHeader,
+        parseSessionEnd(failure.responseBody.toString(Charsets.UTF_8)),
+    )
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun handleAudioRejection(
+    repository: TtsRoadRepository,
+    failure: HttpDataSource.InvalidResponseCodeException?,
+    currentSession: suspend () -> SessionState,
+    scheduleRecovery: suspend (AudioAuthSnapshot, AudioAuthSnapshot) -> Unit,
+) {
+    if (endAudioSession(repository, failure)) return
+    if (failure == null || failure.responseCode !in listOf(401, 403)) return
+    val rejected = failure.dataSpec.customData as? AudioAuthSnapshot ?: return
+    if (rejected.authorizationHeader == null ||
+        !ServerUrls.isSameOrigin(failure.dataSpec.uri.toString(), rejected.serverUrl) ||
+        failure.dataSpec.httpRequestHeaders["Authorization"] != rejected.authorizationHeader
+    ) {
+        return
+    }
+    val session = currentSession()
+    if (!session.isLoggedIn) return
+    val current = session.audioAuthSnapshot()
+    if (current != rejected) scheduleRecovery(rejected, current)
+}
+
+@OptIn(UnstableApi::class)
+internal suspend fun recoverAudioPlaybackIfCurrent(
+    player: Player,
+    error: PlaybackException,
+    rejected: AudioAuthSnapshot,
+    expected: AudioAuthSnapshot,
+    currentSession: suspend () -> SessionState,
+    publishAuth: (AudioAuthSnapshot) -> Unit,
+) {
+    val session = currentSession()
+    if (player.playerError !== error || !session.isLoggedIn) return
+    val latest = session.audioAuthSnapshot()
+    // Another rotation of the same account during the backoff leaves the queue and this error
+    // owned by that account, and the session collector does not re-prepare on a rotation. Recover
+    // with the newest credential rather than leaving the player failed. A change of server or of
+    // account, or a return to the credential that was just rejected, still abandons the attempt.
+    if (latest != expected && (!sameAudioAccount(expected, latest) || latest == rejected)) return
+    publishAuth(latest)
+    recoverAudioPlayback(player, rejected, latest)
+}
+
+@OptIn(UnstableApi::class)
+internal fun recoverAudioPlayback(player: Player, rejected: AudioAuthSnapshot, current: AudioAuthSnapshot) {
+    if (current.authorizationHeader == null || player.mediaItemCount == 0) return
+    if (!sameAudioAccount(rejected, current)) {
+        discardCrossServerPlayback(player, rejected, current)
+        return
+    }
+    if (audioItemBelongsToAuth(player.currentMediaItem, current)) player.prepare()
+}
+
+@OptIn(UnstableApi::class)
+internal fun discardCrossServerPlayback(player: Player, previous: AudioAuthSnapshot, current: AudioAuthSnapshot) {
+    // "Cross server" includes a different account on the same server: the queue's chapter ids and
+    // positions are the previous account's either way.
+    if (current.authorizationHeader != null && !sameAudioAccount(previous, current) &&
+        audioItemBelongsToAuth(player.currentMediaItem, previous)
+    ) {
+        stopSignedOutPlayback(player)
+    }
+}
+
+internal fun sameAudioServer(first: AudioAuthSnapshot, second: AudioAuthSnapshot): Boolean {
+    val firstUrl = runCatching { normalizeBaseUrl(first.serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
+    val secondUrl = runCatching { normalizeBaseUrl(second.serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
+    return firstUrl == secondUrl
+}
+
+/** Same backend and the same account on it — a token rotation, not a different user. */
+internal fun sameAudioAccount(first: AudioAuthSnapshot, second: AudioAuthSnapshot): Boolean =
+    sameAudioServer(first, second) && first.account == second.account
+
+@OptIn(UnstableApi::class)
+internal fun audioItemBelongsToSession(item: MediaItem?, session: SessionState): Boolean =
+    session.isLoggedIn && audioItemBelongsToAuth(item, session.audioAuthSnapshot())
+
+/**
+ * Whether [item] is audio of [auth]'s server and, when the item records which account queued it,
+ * of that account. Items without the record (built before it existed) are judged by server alone;
+ * an account switch clears the queue they sit in.
+ */
+@OptIn(UnstableApi::class)
+private fun audioItemBelongsToAuth(item: MediaItem?, auth: AudioAuthSnapshot): Boolean {
+    val account = item?.mediaMetadata?.extras?.getString(AudioAccountExtra)
+    if (account != null && account != auth.account) return false
+    return audioItemBelongsToServer(item, auth.serverUrl)
+}
+
+/**
+ * Record on [item] the server and account it was built for, unless it already records them. Used
+ * for browse results, which a car can hold on to and hand back long after they were built.
+ */
+@OptIn(UnstableApi::class)
+internal fun withAudioOrigin(item: MediaItem, origin: AudioAuthSnapshot): MediaItem {
+    val extras = item.mediaMetadata.extras
+    val needsServer = origin.serverUrl.isNotBlank() && extras?.getString(AudioServerUrlExtra) == null
+    if (!needsServer) return withAudioAccount(item, origin.account)
+    val stamped = if (extras != null) Bundle(extras) else Bundle()
+    stamped.putString(AudioServerUrlExtra, origin.serverUrl)
+    val withServer = item.buildUpon()
+        .setMediaMetadata(item.mediaMetadata.buildUpon().setExtras(stamped).build())
+        .build()
+    return withAudioAccount(withServer, origin.account)
+}
+
+/**
+ * False when [item] records a server or an account other than [current]'s. An item that records
+ * neither (one built by the in-app UI for the signed-in session) passes.
+ */
+@OptIn(UnstableApi::class)
+internal fun audioItemFromSession(item: MediaItem, current: AudioAuthSnapshot): Boolean {
+    val extras = item.mediaMetadata.extras ?: return true
+    val account = extras.getString(AudioAccountExtra)
+    if (account != null && account != current.account) return false
+    val server = extras.getString(AudioServerUrlExtra)
+    return server == null || sameAudioServer(AudioAuthSnapshot(server), current)
+}
+
+/**
+ * Record on [item] the account it is queued for, unless it already records one. Kept rather than
+ * overwritten so an item a controller hands back after an account switch stays the old account's.
+ */
+@OptIn(UnstableApi::class)
+internal fun withAudioAccount(item: MediaItem, account: String?): MediaItem {
+    if (account == null) return item
+    val extras = item.mediaMetadata.extras
+    if (extras?.getString(AudioAccountExtra) != null) return item
+    val stamped = if (extras != null) Bundle(extras) else Bundle()
+    stamped.putString(AudioAccountExtra, account)
+    return item.buildUpon()
+        .setMediaMetadata(item.mediaMetadata.buildUpon().setExtras(stamped).build())
+        .build()
+}
+
+@OptIn(UnstableApi::class)
+private fun audioItemBelongsToServer(item: MediaItem?, serverUrl: String): Boolean {
+    val uri = item?.localConfiguration?.uri ?: item?.requestMetadata?.mediaUri ?: return false
+    val request = uri.toString().toHttpUrlOrNull() ?: return false
+    val server = runCatching { normalizeBaseUrl(serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
+    val owner = item?.mediaMetadata?.extras?.getString(AudioServerUrlExtra)
+    if (owner != null && !sameAudioServer(AudioAuthSnapshot(owner), AudioAuthSnapshot(serverUrl))) return false
+    return ServerUrls.isSameOrigin(request.toString(), server.toString()) &&
+        (owner != null || request.encodedPath.startsWith("/audio/") ||
+            request.encodedPath.startsWith(server.encodedPath + "audio/"))
 }
 

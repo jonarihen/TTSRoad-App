@@ -1,10 +1,12 @@
 package dk.perspektiva.ttsroad.player
 
 import android.content.Context
+import dk.perspektiva.ttsroad.data.SessionState
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
@@ -27,7 +29,45 @@ data class PendingProgress(
     /** Epoch millis of the same moment, kept so entries can be ordered without reparsing. */
     val recordedAtMillis: Long,
     val recordId: String = UUID.randomUUID().toString(),
+    /**
+     * The server and account the position was listened under. Chapter ids are only meaningful to
+     * that account, so an entry is sent only while the same account is signed in (see [ownedBy]).
+     * Nullable so files written before owners existed still parse; such an entry has no provable
+     * owner and is never sent. Stored as the session spelled it and compared canonically (see
+     * [sameProgressServer]), so entries already on disk keep matching.
+     */
+    val ownerServerUrl: String? = null,
+    val ownerAccount: String? = null,
 )
+
+/**
+ * Whether [this] entry may be sent with [session]'s credentials: same server, same account.
+ *
+ * An entry without an owner fails. It predates owners, and the one thing that must not happen is
+ * a position from one account landing in another — a one-off loss of an offline backlog that was
+ * already waiting across the upgrade is the lesser harm.
+ */
+fun PendingProgress.ownedBy(session: SessionState): Boolean {
+    val owner = ownerServerUrl ?: return false
+    if (!session.isLoggedIn) return false
+    return sameProgressServer(owner, session.serverUrl) && ownerAccount == session.username
+}
+
+/**
+ * One backend, however it was spelled: host case and an explicit default port do not make a
+ * different server, while a different path prefix on the same origin does. The same comparison the
+ * audio ownership check makes, via okhttp's canonical [okhttp3.HttpUrl].
+ */
+internal fun sameProgressServer(first: String?, second: String?): Boolean {
+    if (first == null || second == null) return false
+    val a = canonicalServer(first) ?: return false
+    val b = canonicalServer(second) ?: return false
+    return a == b
+}
+
+// normalizeBaseUrl's trailing-slash rule, but parsed by okhttp so that scheme and host case and a
+// default port are canonicalised too.
+private fun canonicalServer(url: String) = "${url.trim().trimEnd('/')}/".toHttpUrlOrNull()
 
 /**
  * The server's format for `client_updated_at`: ISO-8601 UTC with an explicit `Z` and **at most
@@ -100,6 +140,7 @@ class PendingProgressStore(
         chapterId: Int,
         positionSeconds: Double,
         isPlayed: Boolean,
+        owner: SessionState,
     ): PendingProgress {
         return synchronized(lock) {
             val now = clock().coerceAtLeast(lastRecordedMillis + 1)
@@ -111,8 +152,15 @@ class PendingProgressStore(
                 isPlayed = isPlayed,
                 clientUpdatedAt = iso8601Utc(now),
                 recordedAtMillis = now,
+                ownerServerUrl = owner.serverUrl,
+                ownerAccount = owner.username,
             )
-            entries.removeAll { it.chapterId == chapterId }
+            // Coalesced per chapter *and owner*: another account's position for the same chapter
+            // id is a different listener's, and waits for that account to come back.
+            entries.removeAll {
+                it.chapterId == chapterId && sameProgressServer(it.ownerServerUrl, entry.ownerServerUrl) &&
+                    it.ownerAccount == entry.ownerAccount
+            }
             entries.add(entry)
             // Oldest first out. A position from last week matters less than one from this morning,
             // and the cap is only ever reached by a device that has been offline for a very long
@@ -127,6 +175,10 @@ class PendingProgressStore(
 
     /** Everything waiting, oldest first. */
     fun pending(): List<PendingProgress> = synchronized(lock) { entries.toList() }
+
+    /** What may be sent as [session], oldest first. */
+    fun pendingFor(session: SessionState): List<PendingProgress> =
+        synchronized(lock) { entries.filter { it.ownedBy(session) } }
 
     fun isEmpty(): Boolean = synchronized(lock) { entries.isEmpty() }
 

@@ -2,8 +2,10 @@ package dk.perspektiva.ttsroad.player
 
 import dk.perspektiva.ttsroad.data.PlaybackSyncItem
 import dk.perspektiva.ttsroad.data.PlaybackSyncState
+import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -31,7 +33,12 @@ data class ProgressFlushResult(
     val overriddenByServer: List<PlaybackSyncState> = emptyList(),
     /** True when everything queued has now been dealt with one way or the other. */
     val drained: Boolean = false,
+    /** Nothing was tried because the owner's server capabilities are not known yet. */
+    val capabilitiesUnresolved: Boolean = false,
 )
+
+/** How long [ProgressSync.flushUntilCapabilitiesResolve] waits between attempts: about four minutes in all. */
+val CapabilityRetryDelaysMs: List<Long> = listOf(5_000L, 15_000L, 45_000L, 180_000L)
 
 /**
  * Drains [PendingProgressStore] to the server.
@@ -72,26 +79,61 @@ class ProgressSync(
      * and the correct behaviour is to leave the entry queued for next time.
      */
     suspend fun flush(): ProgressFlushResult = flushing.withLock {
-        val queued = store.pending()
+        // Only the signed-in account's own entries. Another account's wait for it to come back;
+        // posting them here would write that listener's chapter positions into this account.
+        val session = repository.currentSession()
+        val queued = store.pendingFor(session)
         if (queued.isEmpty()) return@withLock ProgressFlushResult(drained = true)
 
-        return@withLock if (repository.currentCapabilities.value.batchProgress) {
-            flushBatched(queued)
+        // The endpoint is chosen by what *this session's* server supports, resolved for it — not by
+        // the published flags, which right after a sign-in or an account switch can still be the
+        // placeholder or the previous server's. Unknown means wait: the legacy endpoint would drop
+        // the stamps and let an offline position overwrite a newer one from the browser.
+        val capabilities = repository.resolvedCapabilitiesFor(session.serverUrl)
+            ?: return@withLock ProgressFlushResult(drained = false, capabilitiesUnresolved = true)
+
+        return@withLock if (capabilities.batchProgress) {
+            flushBatched(queued, session, repository.playbackSyncBatchLimit(capabilities))
         } else {
-            flushOneAtATime(queued)
+            flushOneAtATime(queued, session)
         }
     }
 
-    private suspend fun flushBatched(queued: List<PendingProgress>): ProgressFlushResult {
-        val limit = repository.playbackSyncBatchLimit()
+    /**
+     * [flush], retried after [delays] for as long as the only obstacle is capability discovery.
+     *
+     * The owner-return flush runs once, at the moment an account becomes current — often while the
+     * network is still settling — and nothing else would retry it with nothing playing. Each
+     * attempt is an ordinary [flush], so it stays serialised with every other flush; the wait
+     * between attempts holds no lock. Gives up after the last delay, and stops as soon as an
+     * attempt gets past discovery, whatever it then sent.
+     */
+    suspend fun flushUntilCapabilitiesResolve(
+        delays: List<Long> = CapabilityRetryDelaysMs,
+        sleep: suspend (Long) -> Unit = { delay(it) },
+    ): ProgressFlushResult {
+        var result = flush()
+        for (wait in delays) {
+            if (!result.capabilitiesUnresolved) break
+            sleep(wait)
+            result = flush()
+        }
+        return result
+    }
+
+    private suspend fun flushBatched(queued: List<PendingProgress>, session: SessionState, limit: Int): ProgressFlushResult {
         var accepted = 0
         var sent = 0
         val overridden = mutableListOf<PlaybackSyncState>()
 
         for (batch in queued.chunked(limit)) {
+            if (repository.currentSession() != session) break // Switched account mid-flush.
             val byChapter = batch.associateBy { it.chapterId }
+            // Bound to the session the entries were selected for: if another account signs in
+            // between the check above and the request, it still goes out as [session] — never with
+            // the newcomer's credentials.
             val response = runCatching {
-                repository.syncProgress(batch.map { it.asSyncItem() })
+                repository.syncProgress(batch.map { it.asSyncItem() }, asSession = session)
             }.getOrNull() ?: break // Offline again, or the call failed: keep the rest queued.
 
             sent += batch.size
@@ -123,7 +165,7 @@ class ProgressSync(
             sent = sent,
             accepted = accepted,
             overriddenByServer = overridden,
-            drained = store.isEmpty(),
+            drained = store.pendingFor(session).isEmpty(),
         )
     }
 
@@ -133,15 +175,17 @@ class ProgressSync(
      * One call per chapter and no ordering, exactly as before this queue existed. The gain here is
      * only that a position recorded while offline is retried instead of discarded.
      */
-    private suspend fun flushOneAtATime(queued: List<PendingProgress>): ProgressFlushResult {
+    private suspend fun flushOneAtATime(queued: List<PendingProgress>, session: SessionState): ProgressFlushResult {
         var accepted = 0
         for (entry in queued) {
+            if (repository.currentSession() != session) break // Switched account mid-flush.
             val ok = runCatching {
                 repository.saveProgress(
                     fictionId = entry.fictionId,
                     chapterId = entry.chapterId,
                     positionSeconds = entry.positionSeconds,
                     isPlayed = entry.isPlayed,
+                    asSession = session,
                 )
             }.isSuccess
             if (!ok) break // Still offline; keep this and everything after it.
@@ -151,7 +195,7 @@ class ProgressSync(
         return ProgressFlushResult(
             sent = accepted,
             accepted = accepted,
-            drained = store.isEmpty(),
+            drained = store.pendingFor(session).isEmpty(),
         )
     }
 }
@@ -162,3 +206,26 @@ fun PendingProgress.asSyncItem(): PlaybackSyncItem = PlaybackSyncItem(
     isPlayed = isPlayed,
     clientUpdatedAt = clientUpdatedAt,
 )
+
+/**
+ * Asks for a flush whenever a signed-in account becomes current: at start, after a sign-in, and
+ * when an account comes back after another was signed in over it. [ProgressSync] only ever sends
+ * the current account's own entries, so without this a returning account's backlog would sit
+ * until its next playback tick. Flushes are serialised inside [ProgressSync], so one triggered here
+ * cannot overlap the tick, pause or chapter-end flushes.
+ *
+ * A new token for the same account counts too. A password change can rotate it while a flush is
+ * running on the old one, which then fails or stops at the session check — and with nothing playing
+ * and capabilities already resolved, nothing else would ask again. Which entries go out is still
+ * decided by server and account in [PendingProgressStore.pendingFor], not by the token.
+ */
+class OwnerProgressFlush(private val flush: () -> Unit) {
+    private var current: Triple<String, String?, String?>? = null
+
+    fun onSession(session: SessionState) {
+        val identity = if (session.isLoggedIn) Triple(session.serverUrl, session.username, session.token) else null
+        if (identity == current) return
+        current = identity
+        if (identity != null) flush()
+    }
+}

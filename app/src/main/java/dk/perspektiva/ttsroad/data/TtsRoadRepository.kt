@@ -11,6 +11,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -289,6 +291,7 @@ class TtsRoadRepository(
     val currentCapabilitiesResolved: StateFlow<Boolean> = _currentCapabilitiesResolved.asStateFlow()
 
     private val _sessionEnd = MutableStateFlow<SessionEnd?>(null)
+    private val sessionMutation = Mutex()
 
     /**
      * Why the stored token was dropped, or null while the session is still usable.
@@ -318,10 +321,12 @@ class TtsRoadRepository(
                     totpCode = totpCode?.trim()?.ifBlank { null },
                 ),
             )
-            tokenStore.saveLogin(normalized, response)
-            invalidateListeningStats()
-            _sessionEnd.value = null
-            _currentCapabilitiesResolved.value = false
+            sessionMutation.withLock {
+                tokenStore.saveLogin(normalized, response)
+                invalidateListeningStats()
+                _sessionEnd.value = null
+                _currentCapabilitiesResolved.value = false
+            }
             LoginResult.Success
         } catch (e: CancellationException) {
             // Cancellation is not a failed login; reporting it as one would break structured
@@ -348,6 +353,30 @@ class TtsRoadRepository(
      * [dk.perspektiva.ttsroad.media.TtsRoadMediaService].
      */
     suspend fun endSession(end: SessionEnd) = withContext(Dispatchers.IO) {
+        sessionMutation.withLock { clearEndedSession(end) }
+    }
+
+    suspend fun endSessionIfCurrent(
+        serverUrl: String,
+        authorizationHeader: String,
+        end: SessionEnd,
+    ): Boolean = withContext(Dispatchers.IO) {
+        sessionMutation.withLock {
+            val current = tokenStore.current()
+            if (!current.isLoggedIn || normalizeBaseUrl(current.serverUrl) != normalizeBaseUrl(serverUrl) ||
+                current.authorizationHeader != authorizationHeader
+            ) {
+                return@withLock false
+            }
+            clearEndedSession(end)
+            true
+        }
+    }
+
+    /** The session API calls are currently made as. */
+    suspend fun currentSession(): SessionState = tokenStore.current()
+
+    private suspend fun clearEndedSession(end: SessionEnd) {
         tokenStore.clearToken()
         invalidateListeningStats()
         invalidateReader()
@@ -363,18 +392,20 @@ class TtsRoadRepository(
                 api(session.serverUrl, session).logout()
             }
         }
-        tokenStore.clearToken()
-        invalidateListeningStats()
-        // Discovery is per server, and the next sign-in may be a different one. Leaving the old
-        // flags in place would show read-along or device management on a server without them.
-        forgetCapabilities(session.serverUrl)
-        _currentCapabilities.value = ServerCapabilities.Baseline
-        _currentCapabilitiesResolved.value = false
-        // Chapter text is account-visible content, and chapter ids are only unique per server, so a
-        // cached read-along must never outlive the session that fetched it.
-        invalidateReader()
-        synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
-        onSessionCleared()
+        sessionMutation.withLock {
+            tokenStore.clearToken()
+            invalidateListeningStats()
+            // Discovery is per server, and the next sign-in may be a different one. Leaving the old
+            // flags in place would show read-along or device management on a server without them.
+            forgetCapabilities(session.serverUrl)
+            _currentCapabilities.value = ServerCapabilities.Baseline
+            _currentCapabilitiesResolved.value = false
+            // Chapter text is account-visible content, and chapter ids are only unique per server, so a
+            // cached read-along must never outlive the session that fetched it.
+            invalidateReader()
+            synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
+            onSessionCleared()
+        }
     }
 
     /**
@@ -433,20 +464,43 @@ class TtsRoadRepository(
             _currentCapabilitiesResolved.value = false
             return ServerCapabilities.Baseline
         }
-        val discovered = capabilities(session.serverUrl, forceRefresh)
+        val fetched = capabilities(session.serverUrl, forceRefresh)
         val current = tokenStore.current()
-        if (current.serverUrl != session.serverUrl || current.token != session.token) return discovered
-        return discovered.also {
+        if (current.serverUrl != session.serverUrl || current.token != session.token) return fetched
+        // A cache entry exists only after a successful response or a definitive old-server 404.
+        // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
+        // treating that provisional value as proof of a shared catalogue could destroy a saved
+        // filter whose source exists only outside the followed shelf.
+        val resolved = cachedCapabilities(session.serverUrl)
+        return (resolved ?: fetched).also {
             _currentCapabilities.value = it.copy(discoveryBaseUrl = session.serverUrl)
-            val normalized = runCatching { normalizeBaseUrl(session.serverUrl) }.getOrNull()
-            // A cache entry exists only after a successful response or a definitive old-server 404.
-            // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
-            // treating that provisional value as proof of a shared catalogue could destroy a saved
-            // filter whose source exists only outside the followed shelf.
-            _currentCapabilitiesResolved.value = normalized != null && synchronized(capabilityCache) {
-                capabilityCache.containsKey(normalized)
-            }
+            _currentCapabilitiesResolved.value = resolved != null
         }
+    }
+
+    /**
+     * The cached answer for [baseUrl], whatever this call's own request returned. Two discoveries
+     * of one server can overlap — the UI's refresh and an owner-progress flush, say — and when one
+     * succeeds while the other fails transiently, the failure's provisional Baseline must not be
+     * reported as resolved: on a `batch_progress` server it would send stamped progress down the
+     * unordered legacy endpoint.
+     */
+    private fun cachedCapabilities(baseUrl: String): ServerCapabilities? {
+        val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull() ?: return null
+        return synchronized(capabilityCache) { capabilityCache[normalized]?.value }
+    }
+
+    /**
+     * What [baseUrl] supports, but only once that is actually known: a successful discovery or a
+     * definitive old-server 404, fresh or cached. Null while it is unresolved (a transient failure
+     * with no earlier answer), which callers must treat as "do not decide yet" rather than as the
+     * baseline — unlike [currentCapabilities], this never answers with another server's flags or
+     * with the placeholder published before discovery for a new session has finished.
+     */
+    suspend fun resolvedCapabilitiesFor(baseUrl: String): ServerCapabilities? {
+        val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull() ?: return null
+        capabilities(normalized)
+        return cachedCapabilities(normalized)
     }
 
     /** Drop discovered capabilities for [baseUrl], so the next call re-asks. Used on sign-out. */
@@ -760,16 +814,22 @@ class TtsRoadRepository(
         return runCatching { withAuthorizedApi { it.audioHashes(fictionId) } }.getOrNull()
     }
 
+    /**
+     * Save one position. With [asSession], the request carries that session's credentials (bound
+     * by its [RequestAuth] tag) whatever is signed in by the time it is sent — a queued position
+     * belongs to the account that listened, not to whoever is current when the network returns.
+     */
     suspend fun saveProgress(
         fictionId: Int,
         chapterId: Int,
         positionSeconds: Double,
         isPlayed: Boolean,
+        asSession: SessionState? = null,
     ): PlaybackProgressResponse? = withContext(Dispatchers.IO) {
         // Progress saves fire in the background; a missing token is not worth an exception.
-        if (!tokenStore.current().isLoggedIn) return@withContext null
-        authorized {
-            it.saveProgress(
+        if (!(asSession ?: tokenStore.current()).isLoggedIn) return@withContext null
+        authorizedWithSession(asSession) { api, _ ->
+            api.saveProgress(
                 PlaybackProgressRequest(
                     fictionId = fictionId,
                     chapterId = chapterId,
@@ -1173,23 +1233,25 @@ class TtsRoadRepository(
                     ),
                 )
             }
-            tokenStore.saveLogin(
-                currentSession.serverUrl,
-                LoginResponse(
-                    token = response.token,
-                    tokenType = response.tokenType,
-                    deviceId = response.deviceId,
-                    expiresAt = response.expiresAt,
-                    user = response.user,
-                    // The password response intentionally carries credentials, not server
-                    // discovery metadata. Preserve the name already shown in Settings instead of
-                    // letting saveLogin replace a branded server name with its default.
-                    server = ServerInfo(
-                        name = currentSession.serverName,
-                        baseUrl = currentSession.serverUrl,
+            sessionMutation.withLock {
+                tokenStore.saveLogin(
+                    currentSession.serverUrl,
+                    LoginResponse(
+                        token = response.token,
+                        tokenType = response.tokenType,
+                        deviceId = response.deviceId,
+                        expiresAt = response.expiresAt,
+                        user = response.user,
+                        // The password response intentionally carries credentials, not server
+                        // discovery metadata. Preserve the name already shown in Settings instead of
+                        // letting saveLogin replace a branded server name with its default.
+                        server = ServerInfo(
+                            name = currentSession.serverName,
+                            baseUrl = currentSession.serverUrl,
+                        ),
                     ),
-                ),
-            )
+                )
+            }
             AccountActionResult.Done(Unit)
         } catch (e: HttpException) {
             // A 400 is the server telling the user something: a wrong current password, or a new
@@ -1741,15 +1803,22 @@ class TtsRoadRepository(
      * Batched, timestamped progress. Answers null when the server has no `batch_progress` support,
      * which is the caller's signal to fall back to the single-item endpoint.
      */
-    suspend fun syncProgress(items: List<PlaybackSyncItem>): PlaybackSyncResponse? {
+    suspend fun syncProgress(items: List<PlaybackSyncItem>, asSession: SessionState? = null): PlaybackSyncResponse? {
         if (items.isEmpty()) return null
-        if (!_currentCapabilities.value.batchProgress) return null
-        return withAuthorizedApi { it.syncProgress(PlaybackSyncRequest(items = items)) }
+        // Bound to a session, the endpoint is chosen by that session's own server's resolved
+        // capabilities — the published ones may still be another server's, or the placeholder.
+        val capabilities = if (asSession != null) resolvedCapabilitiesFor(asSession.serverUrl) else _currentCapabilities.value
+        if (capabilities?.batchProgress != true) return null
+        // [asSession] binds the request to the credentials the items were selected for; see
+        // [saveProgress].
+        return withContext(Dispatchers.IO) {
+            authorizedWithSession(asSession) { api, _ -> api.syncProgress(PlaybackSyncRequest(items = items)) }
+        }
     }
 
     /** How many items one `/playback/sync` call may carry against the current server. */
-    fun playbackSyncBatchLimit(): Int =
-        _currentCapabilities.value.maxPlaybackSyncItems?.takeIf { it > 0 }
+    fun playbackSyncBatchLimit(capabilities: ServerCapabilities = _currentCapabilities.value): Int =
+        capabilities.maxPlaybackSyncItems?.takeIf { it > 0 }
             ?: DefaultPlaybackSyncBatchLimit
 
     /** Every mobile session on this account, or null on a server that has no devices endpoint. */
@@ -1805,8 +1874,19 @@ class TtsRoadRepository(
 
     private suspend fun <T> authorizedWithSession(
         block: suspend (TtsRoadApi, SessionState) -> T,
+    ): T = authorizedWithSession(null, block)
+
+    /**
+     * As [authorized], but made as [asSession] when given: the API is built with that session's
+     * [RequestAuth] tag, so the network interceptor attaches exactly its credentials (and only on
+     * its own origin) even if another account signs in while the call is in flight. A 401 ends
+     * the session only if that credential is still the current one.
+     */
+    private suspend fun <T> authorizedWithSession(
+        asSession: SessionState?,
+        block: suspend (TtsRoadApi, SessionState) -> T,
     ): T {
-        val session = tokenStore.current()
+        val session = asSession ?: tokenStore.current()
         require(session.isLoggedIn) { "Not logged in" }
         return try {
             block(api(session.serverUrl, session), session)
@@ -1816,16 +1896,11 @@ class TtsRoadRepository(
                 // just before the rotation can come back 401 just after the fresh token was saved;
                 // it must not erase that newer session. Only the token that actually failed is
                 // allowed to end the session.
-                val current = tokenStore.current()
-                if (current.token == session.token &&
-                    normalizeBaseUrl(current.serverUrl) == normalizeBaseUrl(session.serverUrl)
-                ) {
-                    tokenStore.clearToken()
-                    invalidateListeningStats()
-                    invalidateReader()
-                    onSessionCleared()
-                    _sessionEnd.value = parseSessionEnd(e.response()?.errorBody()?.string())
-                }
+                endSessionIfCurrent(
+                    session.serverUrl,
+                    requireNotNull(session.authorizationHeader),
+                    parseSessionEnd(e.response()?.errorBody()?.string()),
+                )
             }
             throw e
         }
