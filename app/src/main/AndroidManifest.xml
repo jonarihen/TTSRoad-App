@@ -76,6 +76,19 @@
             </intent-filter>
         </service>
 
+        <!-- Media3's media-button receiver (#329). Without it a Play press from a Bluetooth head
+             unit or headset, or the system's media-resumption card, has nothing to land on once
+             the service process is gone. It starts TtsRoadMediaService, whose
+             onPlaybackResumption rebuilds the newest continue-listening queue. Exported because
+             the system, another process, delivers the button. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
         <!-- Not exported: downloads are only ever started by this app's own UI. No RESTART
              intent-filter because there is no Scheduler — see TtsRoadDownloadService. -->
         <service
