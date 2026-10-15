@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.data
 
+import dk.perspektiva.ttsroad.core.toUserFacingError
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,8 +24,16 @@ data class Cached<T>(
     val value: T? = null,
     val error: String? = null,
     val isRefreshing: Boolean = false,
+    /** The raw failure behind [error], shown behind a "Details" link (#360). */
+    val errorDetails: String? = null,
 ) {
     val hasContent: Boolean get() = value != null
+
+    /** Keep what is loaded, and say in plain words why refreshing it failed. */
+    fun failedWith(failure: Throwable, fallback: String): Cached<T> {
+        val described = failure.toUserFacingError(fallback)
+        return copy(isRefreshing = false, error = described.message, errorDetails = described.details)
+    }
 
     /** Nothing loaded and nothing failed yet — the only state that justifies a full-screen spinner. */
     val isInitialLoad: Boolean get() = value == null && error == null
@@ -98,16 +107,13 @@ class LibraryCache(private val repository: TtsRoadRepository) {
     fun refreshLibrary() {
         libraryJob?.cancel()
         libraryJob = scope.launch {
-            _library.value = _library.value.copy(isRefreshing = true, error = null)
+            _library.value = _library.value.copy(isRefreshing = true, error = null, errorDetails = null)
             _library.value = runCatching { refreshedLibrary() }.fold(
                 onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
                     // Keep the stale content: a failed refresh should not throw away a library the
                     // user can still read and play from.
-                    _library.value.copy(
-                        isRefreshing = false,
-                        error = failure.message ?: "Could not load library",
-                    )
+                    _library.value.failedWith(failure, "Could not load library")
                 },
             )
         }
@@ -175,14 +181,11 @@ class LibraryCache(private val repository: TtsRoadRepository) {
     fun refreshBrowseAll() {
         browseAllJob?.cancel()
         browseAllJob = scope.launch {
-            _browseAll.value = _browseAll.value.copy(isRefreshing = true, error = null)
+            _browseAll.value = _browseAll.value.copy(isRefreshing = true, error = null, errorDetails = null)
             _browseAll.value = runCatching { refreshedBrowseAll() }.fold(
                 onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
-                    _browseAll.value.copy(
-                        isRefreshing = false,
-                        error = failure.message ?: "Could not load fictions",
-                    )
+                    _browseAll.value.failedWith(failure, "Could not load fictions")
                 },
             )
         }
@@ -300,7 +303,7 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         chapterJobs[fictionId]?.cancel()
         val state = chapterState(fictionId)
         chapterJobs[fictionId] = scope.launch {
-            state.value = state.value.copy(isRefreshing = true, error = null)
+            state.value = state.value.copy(isRefreshing = true, error = null, errorDetails = null)
             state.value = runCatching {
                 chapterMutex(fictionId).withLock {
                     val current = state.value.value
@@ -324,10 +327,7 @@ class LibraryCache(private val repository: TtsRoadRepository) {
             }.fold(
                 onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
-                    state.value.copy(
-                        isRefreshing = false,
-                        error = failure.message ?: "Could not load chapters",
-                    )
+                    state.value.failedWith(failure, "Could not load chapters")
                 },
             )
         }

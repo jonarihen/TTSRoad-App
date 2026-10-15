@@ -116,4 +116,15 @@ class CachedChapterPatchTest {
         assertEquals(chapters, updated)
         assertSame(chapters[0], updated[0])
     }
+
+    @Test
+    fun `a failed refresh keeps the content and words the failure plainly`() {
+        val state = Cached(value = "library", isRefreshing = true)
+            .failedWith(java.net.UnknownHostException("Unable to resolve host \"https\""), "Could not load library")
+
+        assertEquals("library", state.value)
+        assertFalse(state.isRefreshing)
+        assertTrue(state.error!!.startsWith("Can't find the server"))
+        assertTrue(state.errorDetails!!.contains("Unable to resolve host"))
+    }
 }

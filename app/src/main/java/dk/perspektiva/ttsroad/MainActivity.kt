@@ -169,6 +169,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.core.userMessage
 import dk.perspektiva.ttsroad.data.AudiobookExportRow
 import dk.perspektiva.ttsroad.data.AudiobookExportsResponse
 import dk.perspektiva.ttsroad.data.ChapterFilter
@@ -338,6 +339,7 @@ import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisChoiceRow
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
+import dk.perspektiva.ttsroad.ui.ErrorDetails
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
@@ -688,6 +690,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var errorDetails by remember { mutableStateOf<String?>(null) }
     val sessionEnd by repository.sessionEnd.collectAsStateWithLifecycle()
     // A failed attempt has more to say than "your old token went stale", so it wins. Otherwise the
     // server's own wording explains which of expiry, revocation or a reset put the user here.
@@ -771,6 +774,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         notice?.let {
             Spacer(modifier = Modifier.height(12.dp))
             Text(text = it, color = MaterialTheme.colorScheme.error)
+            if (error != null) ErrorDetails(details = errorDetails)
         }
         Spacer(modifier = Modifier.height(20.dp))
         Button(
@@ -778,6 +782,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
                 scope.launch {
                     isBusy = true
                     error = null
+                    errorDetails = null
                     val result = repository.login(
                         baseUrl = serverUrl,
                         username = username,
@@ -796,7 +801,10 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
                             twoFactorRequired = true
                         }
 
-                        is LoginResult.Failure -> error = result.message
+                        is LoginResult.Failure -> {
+                            error = result.message
+                            errorDetails = result.details
+                        }
                     }
                     isBusy = false
                 }
@@ -1247,6 +1255,7 @@ internal fun LibraryScreen(
         library == null -> ErrorPane(
             padding = padding,
             message = state.error ?: "Could not load library",
+            details = state.errorDetails,
             onRetry = cache::refreshLibrary,
         )
 
@@ -1274,6 +1283,7 @@ internal fun LibraryScreen(
                 padding = padding,
                 isRefreshing = state.isRefreshing,
                 error = state.error,
+                errorDetails = state.errorDetails,
                 onRefresh = cache::refreshLibrary,
             ) {
                 LazyColumn(
@@ -1403,6 +1413,7 @@ private fun RefreshablePane(
     isRefreshing: Boolean,
     error: String?,
     onRefresh: () -> Unit,
+    errorDetails: String? = null,
     content: @Composable () -> Unit,
 ) {
     PullToRefreshBox(
@@ -1423,6 +1434,7 @@ private fun RefreshablePane(
                     color = AarisColor.Danger,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
+                ErrorDetails(details = errorDetails, modifier = Modifier.padding(horizontal = 4.dp))
             }
             content()
         }
@@ -1543,7 +1555,7 @@ private fun FictionScreen(
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Exception) {
-                error = exception.message ?: "Could not export EPUB"
+                error = exception.userMessage("Could not export EPUB")
             } finally {
                 isMaintaining = false
             }
@@ -1620,7 +1632,7 @@ private fun FictionScreen(
                 .onFailure {
                     // Surfaced rather than swallowed: unlike the background freshness check, the
                     // user pressed a button for this and silence would read as success.
-                    error = it.message ?: "That did not work"
+                    error = it.userMessage("That did not work")
                 }
             isMaintaining = false
             // The server works in the background, so the reload shows the *accepted* state — a
@@ -1645,7 +1657,7 @@ private fun FictionScreen(
                     // believes over them on its next progress tick (#325).
                     ServiceLocator.playedMarks.remember(ids, played)
                 }
-                .onFailure { error = it.message ?: "Could not update chapter" }
+                .onFailure { error = it.userMessage("Could not update chapter") }
         }
     }
 
@@ -1655,6 +1667,7 @@ private fun FictionScreen(
         chapters == null -> ErrorPane(
             padding = padding,
             message = chapterState.error ?: "Could not load chapters",
+            details = chapterState.errorDetails,
             onRetry = { cache.refreshChapters(fiction.id) },
         )
 
@@ -1703,6 +1716,7 @@ private fun FictionScreen(
                 padding = padding,
                 isRefreshing = chapterState.isRefreshing,
                 error = chapterState.error,
+                errorDetails = chapterState.errorDetails,
                 onRefresh = { cache.refreshChapters(fiction.id) },
             ) {
                 LazyColumn(
@@ -1745,7 +1759,7 @@ private fun FictionScreen(
                                                 result?.let { cache.applyFollowing(fiction.id, it) }
                                             }
                                             .onFailure {
-                                                error = it.message ?: "Could not update your library"
+                                                error = it.userMessage("Could not update your library")
                                             }
                                         isFollowBusy = false
                                     }
@@ -1962,7 +1976,7 @@ private fun FictionScreen(
                                         playNext = playNext,
                                     )
                                 }.onFailure {
-                                    error = it.message ?: "Could not update the queue"
+                                    error = it.userMessage("Could not update the queue")
                                 }
                             }
                         }
@@ -2250,7 +2264,7 @@ private fun FictionScreen(
                                     }
                                 }
                                 .onFailure {
-                                    error = it.message ?: "Could not delete this fiction"
+                                    error = it.userMessage("Could not delete this fiction")
                                 }
                             isDeleting = false
                         }
@@ -3998,7 +4012,7 @@ internal fun SettingsScreen(
             null
         } else {
             runCatching { repository.feeds() }
-                .onFailure { feedsError = it.message ?: "Could not load your feed links" }
+                .onFailure { feedsError = it.userMessage("Could not load your feed links") }
                 .getOrNull()
         }
     }
@@ -4016,7 +4030,7 @@ internal fun SettingsScreen(
             null
         } else {
             runCatching { repository.audiobookExports() }
-                .onFailure { exportsError = it.message ?: "Could not load the export list" }
+                .onFailure { exportsError = it.userMessage("Could not load the export list") }
                 .getOrNull()
         }
     }
@@ -4048,7 +4062,7 @@ internal fun SettingsScreen(
                 }
             }
                 .onSuccess { backupNote = "Saved." }
-                .onFailure { backupError = it.message ?: "Could not save your listening state" }
+                .onFailure { backupError = it.userMessage("Could not save your listening state") }
             isBackupBusy = false
         }
     }
@@ -4073,7 +4087,7 @@ internal fun SettingsScreen(
                     ?: error("This server cannot restore listening state.")
             }
                 .onSuccess { backupNote = listeningStateImportSummary(it) }
-                .onFailure { backupError = it.message ?: "Could not restore that backup" }
+                .onFailure { backupError = it.userMessage("Could not restore that backup") }
             isBackupBusy = false
         }
     }
@@ -4801,7 +4815,7 @@ internal fun SettingsScreen(
                                     else -> "$removed books removed from your shelf."
                                 }
                             },
-                            onFailure = { "Could not empty your shelf: ${it.message ?: "unknown error"}" },
+                            onFailure = { "Could not empty your shelf: ${it.userMessage("unknown error")}" },
                         )
                     shelfCount = null
                     isBusy = false
@@ -4837,7 +4851,7 @@ internal fun SettingsScreen(
                                 )
                             } ?: run { feedsError = "This server cannot regenerate those links." }
                         }
-                        .onFailure { feedsError = it.message ?: "Could not regenerate your links" }
+                        .onFailure { feedsError = it.userMessage("Could not regenerate your links") }
                     isBusy = false
                 }
             },
@@ -4930,7 +4944,7 @@ private fun BookmarksScreen(
                 // Null means the server cannot do bookmarks at all, which the capability gate
                 // should already have caught; empty means none have been made yet.
                 .onSuccess { bookmarks = it.orEmpty() }
-                .onFailure { error = it.message ?: "Could not load bookmarks" }
+                .onFailure { error = it.userMessage("Could not load bookmarks") }
             isLoading = false
         }
     }
@@ -5013,7 +5027,7 @@ private fun BookmarksScreen(
                     isBusy = true
                     error = null
                     runCatching { repository.deleteBookmark(bookmark.id) }
-                        .onFailure { error = it.message ?: "Could not delete the bookmark" }
+                        .onFailure { error = it.userMessage("Could not delete the bookmark") }
                     isBusy = false
                     // Reload rather than removing locally: the server owns the list, and it is
                     // shared with the browser.
@@ -5097,7 +5111,7 @@ private fun PronunciationReportsScreen(
                 // Null means the server cannot take reports at all, which the capability gate on
                 // the Settings button should already have caught; empty means none are filed.
                 .onSuccess { reports = it.orEmpty() }
-                .onFailure { error = it.message ?: "Could not load your pronunciation reports" }
+                .onFailure { error = it.userMessage("Could not load your pronunciation reports") }
             isLoading = false
         }
     }
@@ -5154,7 +5168,7 @@ private fun PronunciationReportsScreen(
                     isBusy = true
                     error = null
                     runCatching { repository.deletePronunciationReport(report.id) }
-                        .onFailure { error = it.message ?: "Could not delete the report" }
+                        .onFailure { error = it.userMessage("Could not delete the report") }
                     isBusy = false
                     // Reload rather than removing locally: the server owns the list, and an admin
                     // working through it in the browser is changing the same rows.
@@ -5331,7 +5345,7 @@ private fun QueueScreen(
                     unsupported = loaded == null
                     queue = loaded
                 }
-                .onFailure { error = it.message ?: "Could not load the queue" }
+                .onFailure { error = it.userMessage("Could not load the queue") }
             isLoading = false
         }
     }
@@ -5358,7 +5372,7 @@ private fun QueueScreen(
                             ?: QueueResponse(items = response.items, total = response.total)
                     }
                 }
-                .onFailure { error = it.message ?: "Could not change the queue" }
+                .onFailure { error = it.userMessage("Could not change the queue") }
             isBusy = false
         }
     }
@@ -5384,7 +5398,7 @@ private fun QueueScreen(
                 )
             }
                 .onSuccess { onOpenPlayer() }
-                .onFailure { error = it.message ?: "Could not play that chapter" }
+                .onFailure { error = it.userMessage("Could not play that chapter") }
             isBusy = false
         }
     }
@@ -5666,7 +5680,7 @@ private fun DevicesScreen(
                     unsupported = loaded == null
                     devices = loaded
                 }
-                .onFailure { error = it.message ?: "Could not load device sessions" }
+                .onFailure { error = it.userMessage("Could not load device sessions") }
             isLoading = false
         }
     }
@@ -5680,7 +5694,7 @@ private fun DevicesScreen(
             error = null
             runCatching { action() }
                 .onSuccess { supported -> if (!supported) unsupported = true }
-                .onFailure { error = it.message ?: "Could not revoke the session" }
+                .onFailure { error = it.userMessage("Could not revoke the session") }
             isBusy = false
             load()
         }
@@ -6619,6 +6633,7 @@ internal fun FictionsScreen(
         fictions == null -> ErrorPane(
             padding = padding,
             message = state.error ?: "Could not load fictions",
+            details = state.errorDetails,
             onRetry = refresh,
         )
 
@@ -6673,6 +6688,7 @@ internal fun FictionsScreen(
                 padding = padding,
                 isRefreshing = state.isRefreshing,
                 error = state.error,
+                errorDetails = state.errorDetails,
                 onRefresh = refresh,
             ) {
                 // One scrolling owner for the whole screen (#100). Everything above the grid used
@@ -6762,7 +6778,7 @@ internal fun FictionsScreen(
                                     runCatching { repository.search(query) }
                                         .onSuccess { serverResults = it }
                                         .onFailure {
-                                            searchError = it.message ?: "Search failed"
+                                            searchError = it.userMessage("Search failed")
                                         }
                                     isSearching = false
                                 }
@@ -7411,7 +7427,7 @@ internal fun AddFictionSection(
 
                 is PickedEpub.Ready -> {
                     val result = runCatching { onUploadEpub(picked) }.getOrElse { failure ->
-                        FictionAddResult.Refused(failure.message ?: "Could not upload that book.")
+                        FictionAddResult.Refused(failure.userMessage("Could not upload that book."))
                     }
                     adopt(result, clearsUrl = false)
                 }
@@ -7485,7 +7501,7 @@ internal fun AddFictionSection(
                     isAdding = true
                     message = null
                     val result = runCatching { onAdd(url, options) }.getOrElse { failure ->
-                        FictionAddResult.Refused(failure.message ?: "Could not add this fiction.")
+                        FictionAddResult.Refused(failure.userMessage("Could not add this fiction."))
                     }
                     adopt(result, clearsUrl = true)
                     isAdding = false
@@ -8716,7 +8732,7 @@ internal fun FictionEditScreen(
         voiceLoadError = null
         runCatching { repository.voices() }
             .onSuccess { voices = it.orEmpty() }
-            .onFailure { voiceLoadError = it.message ?: "Could not load the server's voices." }
+            .onFailure { voiceLoadError = it.userMessage("Could not load the server's voices.") }
         isLoadingVoices = false
     }
 
@@ -8757,7 +8773,7 @@ internal fun FictionEditScreen(
             isSaving = true
             message = null
             val result = runCatching { repository.updateFiction(fiction.id, changes) }
-                .getOrElse { FictionEditResult.Refused(it.message ?: "Could not save those details.") }
+                .getOrElse { FictionEditResult.Refused(it.userMessage("Could not save those details.")) }
             val saved = adopt(result, "Saved.", "This server cannot edit fictions.")
             isSaving = false
             // Only on success: a refusal has to stay on screen with the text that caused it, so it
@@ -8778,7 +8794,7 @@ internal fun FictionEditScreen(
             message = null
             val result = runCatching {
                 repository.updateFiction(fiction.id, FictionUpdateRequest(clearOverrides = overridden))
-            }.getOrElse { FictionEditResult.Refused(it.message ?: "Could not hand those fields back.") }
+            }.getOrElse { FictionEditResult.Refused(it.userMessage("Could not hand those fields back.")) }
             adopt(
                 result,
                 "Handed back. The next poll may replace them.",
@@ -8808,7 +8824,7 @@ internal fun FictionEditScreen(
                         val result = runCatching {
                             repository.uploadFictionCover(fiction.id, picked.bytes, picked.mimeType)
                         }.getOrElse {
-                            FictionEditResult.Refused(it.message ?: "Could not upload that image.")
+                            FictionEditResult.Refused(it.userMessage("Could not upload that image."))
                         }
                         adopt(
                             result,
@@ -9418,7 +9434,7 @@ private fun ReaderScreen(
         runCatching { repository.readAlong(screen.chapterId) }
             .onSuccess { document = it }
             // A 404 is not an error and never lands here: the repository answers it with null.
-            .onFailure { error = it.message ?: "Could not load the chapter text" }
+            .onFailure { error = it.userMessage("Could not load the chapter text") }
         loading = false
     }
 
@@ -9925,6 +9941,7 @@ private fun ErrorPane(
     padding: PaddingValues,
     message: String,
     onRetry: () -> Unit,
+    details: String? = null,
 ) {
     Column(
         modifier = Modifier
@@ -9940,6 +9957,7 @@ private fun ErrorPane(
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
         )
+        ErrorDetails(details = details, horizontalAlignment = Alignment.CenterHorizontally)
         Spacer(modifier = Modifier.height(16.dp))
         Button(onClick = onRetry, shape = RectangleShape) {
             Text("RETRY")

@@ -3,6 +3,8 @@ package dk.perspektiva.ttsroad.data
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dk.perspektiva.ttsroad.core.ServerUrls
+import dk.perspektiva.ttsroad.core.plainLanguageForStatus
+import dk.perspektiva.ttsroad.core.toUserFacingError
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -126,7 +128,8 @@ sealed interface LoginResult {
     data object Success : LoginResult
     /** Password was accepted but a valid 2FA code is required; resubmit with [totpCode]. */
     data object TotpRequired : LoginResult
-    data class Failure(val message: String) : LoginResult
+    /** [details] is the raw failure behind a plain-language [message], when there is one (#360). */
+    data class Failure(val message: String, val details: String? = null) : LoginResult
 }
 
 class TtsRoadRepository(
@@ -332,10 +335,18 @@ class TtsRoadRepository(
             if (e.code() == 401 && body?.contains("totp_required") == true) {
                 LoginResult.TotpRequired
             } else {
-                LoginResult.Failure(detailMessage(body) ?: "Invalid username or password")
+                // A 502 from a proxy or a 404 from a wrong path is not a wrong password, and
+                // saying so sends people to reset a password that was fine.
+                val detail = detailMessage(body)
+                when {
+                    detail != null -> LoginResult.Failure(detail)
+                    e.code() == 401 || e.code() == 403 -> LoginResult.Failure("Invalid username or password")
+                    else -> LoginResult.Failure(plainLanguageForStatus(e.code()), "HTTP ${e.code()}")
+                }
             }
         } catch (e: Exception) {
-            LoginResult.Failure(e.message ?: "Login failed")
+            val described = e.toUserFacingError("Login failed")
+            LoginResult.Failure(described.message, described.details)
         }
     }
 

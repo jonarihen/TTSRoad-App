@@ -592,6 +592,41 @@ class TtsRoadRepositoryAuthTest {
     }
 
     @Test
+    fun `a proxy error at login is not reported as a wrong password`() = runTest {
+        val repository = TtsRoadRepository(FakeSessionStore(SessionState()))
+        server.enqueue(MockResponse().setResponseCode(502).setBody("<html>Bad Gateway</html>"))
+
+        val result = repository.login(
+            baseUrl = server.url("/").toString(),
+            username = "admin",
+            password = "correct",
+            deviceName = "Pixel",
+        )
+
+        assertEquals(
+            LoginResult.Failure("The server ran into a problem - try again in a moment.", "HTTP 502"),
+            result,
+        )
+    }
+
+    @Test
+    fun `an unreachable server at login is worded plainly with the raw text kept as details`() = runTest {
+        val repository = TtsRoadRepository(FakeSessionStore(SessionState()))
+        val unreachable = server.url("/").toString()
+        server.shutdown()
+
+        val result = repository.login(
+            baseUrl = unreachable,
+            username = "admin",
+            password = "correct",
+            deviceName = "Pixel",
+        ) as LoginResult.Failure
+
+        assertTrue(result.message, result.message.startsWith("Can't reach the server"))
+        assertTrue(result.details.orEmpty(), result.details.orEmpty().contains("ConnectException"))
+    }
+
+    @Test
     fun `a totp_required login is not treated as an expired session`() = runTest {
         val store = FakeSessionStore(SessionState())
         val repository = TtsRoadRepository(store)
