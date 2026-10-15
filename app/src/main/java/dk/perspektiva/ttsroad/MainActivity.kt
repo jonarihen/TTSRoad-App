@@ -770,9 +770,12 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     // Empty rather than pre-filled with "https://": a pasted address used to land after the
     // pre-filled scheme as https://https://… (#361). normalizeBaseUrl assumes https:// anyway.
     var serverUrl by remember { mutableStateOf(session.serverUrl) }
-    var username by remember { mutableStateOf(session.username.orEmpty().ifBlank { "admin" }) }
+    // The last account used on this phone, or nothing: a pre-filled "admin" left people who were
+    // only given a password unsure whether to change it (#362).
+    var username by remember { mutableStateOf(session.username.orEmpty()) }
     var password by remember { mutableStateOf("") }
     var deviceName by remember { mutableStateOf("${Build.MANUFACTURER} ${Build.MODEL}".trim()) }
+    var showAdvanced by remember { mutableStateOf(false) }
     var totpCode by remember { mutableStateOf("") }
     var twoFactorRequired by remember { mutableStateOf(false) }
     var isBusy by remember { mutableStateOf(false) }
@@ -833,6 +836,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             value = username,
             onValueChange = { username = it },
             label = { Text("USERNAME") },
+            placeholder = { Text("The username you were given") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -846,14 +850,27 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             visualTransformation = PasswordVisualTransformation(),
         )
-        Spacer(modifier = Modifier.height(12.dp))
-        OutlinedTextField(
-            value = deviceName,
-            onValueChange = { deviceName = it },
-            label = { Text("DEVICE NAME") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        // The device name only labels this sign-in under Device sessions, and the default is fine;
+        // shown up front it read like one more thing that had to be filled in (#362).
+        TextButton(
+            onClick = { showAdvanced = !showAdvanced },
+            modifier = Modifier.heightIn(min = 48.dp),
+        ) {
+            MetaText(
+                text = if (showAdvanced) "Hide advanced" else "Advanced",
+                color = AarisColor.Accent,
+            )
+        }
+        if (showAdvanced) {
+            OutlinedTextField(
+                value = deviceName,
+                onValueChange = { deviceName = it },
+                label = { Text("DEVICE NAME (OPTIONAL)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = { MetaText(text = "How this phone is listed under Device sessions") },
+            )
+        }
         if (twoFactorRequired) {
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedTextField(
