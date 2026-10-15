@@ -24,6 +24,7 @@ import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.historyAccountKey
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.SleepTimerController
+import dk.perspektiva.ttsroad.player.SleepTimerStopStore
 import dk.perspektiva.ttsroad.update.UpdateManager
 import dk.perspektiva.ttsroad.widget.NowPlayingStore
 import dk.perspektiva.ttsroad.widget.NowPlayingWidget
@@ -53,6 +54,9 @@ object ServiceLocator {
 
     @Volatile
     private var sleepTimer: SleepTimerController? = null
+
+    @Volatile
+    private var sleepTimerStops: SleepTimerStopStore? = null
 
     @Volatile
     private var playbackPreferences: PlaybackPreferences? = null
@@ -185,6 +189,11 @@ object ServiceLocator {
     fun sleepTimer(): SleepTimerController =
         sleepTimer ?: synchronized(this) {
             sleepTimer ?: SleepTimerController().also { sleepTimer = it }
+        }
+
+    fun sleepTimerStops(context: Context): SleepTimerStopStore =
+        sleepTimerStops ?: synchronized(this) {
+            sleepTimerStops ?: SleepTimerStopStore(context.applicationContext).also { sleepTimerStops = it }
         }
 
     fun playbackPreferences(context: Context): PlaybackPreferences =

@@ -327,6 +327,9 @@ import dk.perspektiva.ttsroad.player.mergeBreadcrumbs
 import dk.perspektiva.ttsroad.player.SleepTimeMatch
 import dk.perspektiva.ttsroad.player.matchSleepTime
 import dk.perspektiva.ttsroad.player.lastHeardSnapshot
+import dk.perspektiva.ttsroad.player.LastHeard
+import dk.perspektiva.ttsroad.player.LastHeardKind
+import dk.perspektiva.ttsroad.player.estimateLastHeard
 import dk.perspektiva.ttsroad.player.listeningSpanAtSpeed
 import dk.perspektiva.ttsroad.player.remainingMs
 import dk.perspektiva.ttsroad.player.remainingMsAtSpeed
@@ -1294,17 +1297,19 @@ internal fun LibraryScreen(
     // jump instead of making the user open the jump-back sheet and hunt for the time.
     val historyStore = remember { ServiceLocator.playbackHistory(context) }
     val history by historyStore.snapshots.collectAsStateWithLifecycle()
+    val sleepTimerStop by remember { ServiceLocator.sleepTimerStops(context) }
+        .latest.collectAsStateWithLifecycle()
     val playerState by playbackController.state.collectAsStateWithLifecycle()
     // Survives the screen swap, so leaving and returning does not resurrect a dismissed banner.
     var dismissedLastHeard by rememberSaveable { mutableStateOf(0L) }
     var lastHeardError by remember { mutableStateOf<String?>(null) }
     var lastHeardBusy by remember { mutableStateOf(false) }
-    val lastHeard = remember(history, playerState.isPlaying, dismissedLastHeard) {
+    val lastHeard = remember(history, sleepTimerStop, playerState.isPlaying, dismissedLastHeard) {
         if (playerState.isPlaying) {
             null
         } else {
-            lastHeardSnapshot(history, System.currentTimeMillis())
-                ?.takeIf { it.timestamp != dismissedLastHeard }
+            estimateLastHeard(history, System.currentTimeMillis(), sleepTimerStop)
+                ?.takeIf { it.snapshot.timestamp != dismissedLastHeard }
         }
     }
 
@@ -1373,7 +1378,7 @@ internal fun LibraryScreen(
                     if (lastHeard != null) {
                         item {
                             LastHeardBanner(
-                                snapshot = lastHeard,
+                                lastHeard = lastHeard,
                                 error = lastHeardError,
                                 busy = lastHeardBusy,
                                 onResume = {
@@ -1381,14 +1386,14 @@ internal fun LibraryScreen(
                                         lastHeardBusy = true
                                         lastHeardError = null
                                         scope.launch {
-                                            val failure = jumpToSnapshot(lastHeard, playbackController, repository)
+                                            val failure = jumpToSnapshot(lastHeard.snapshot, playbackController, repository)
                                             lastHeardBusy = false
                                             // Only open the player once there is something in it.
                                             if (failure == null) onOpenPlayer() else lastHeardError = failure
                                         }
                                     }
                                 },
-                                onDismiss = { dismissedLastHeard = lastHeard.timestamp },
+                                onDismiss = { dismissedLastHeard = lastHeard.snapshot.timestamp },
                             )
                         }
                     }
@@ -3858,19 +3863,20 @@ private fun SleepTimerOption(
 }
 
 /**
- * "Last heard 23:49 — Ashes of Aether — Ch 7 — 1:12:34", above the library's continue-listening
+ * "Audio stopped at 23:49 — Ashes of Aether — Ch 7 — 1:12:34" (or "Sleep timer set at"), above the library's continue-listening
  * section. Shown only when nothing is playing and the last snapshot is old enough to be a different
  * sitting, so it reads as catching up after a night rather than a rewind offer mid-listen.
  */
 @Composable
 private fun LastHeardBanner(
-    snapshot: HistorySnapshot,
+    lastHeard: LastHeard,
     error: String?,
     busy: Boolean,
     onResume: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val snapshot = lastHeard.snapshot
     AarisCard {
         Column(
             modifier = Modifier
@@ -3878,11 +3884,25 @@ private fun LastHeardBanner(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            MetaText(text = "// Last heard", color = AarisColor.Accent)
+            // Labelled for what the time actually is (#332): the moment the listener last set the
+            // sleep timer, or — with no better estimate — the moment the audio stopped.
+            MetaText(
+                text = when (lastHeard.kind) {
+                    LastHeardKind.TimerSet -> "// Sleep timer set at"
+                    LastHeardKind.AudioStopped -> "// Audio stopped at"
+                },
+                color = AarisColor.Accent,
+            )
             Text(
                 text = formatClockTime(context, snapshot.timestamp),
                 style = MaterialTheme.typography.titleLarge,
             )
+            if (lastHeard.kind == LastHeardKind.TimerSet) {
+                MetaText(
+                    text = "Timer stopped the audio at ${formatClockTime(context, lastHeard.stoppedAtMs)}",
+                    color = AarisColor.Muted,
+                )
+            }
             MetaText(
                 text = listOfNotNull(
                     snapshot.fictionTitle,

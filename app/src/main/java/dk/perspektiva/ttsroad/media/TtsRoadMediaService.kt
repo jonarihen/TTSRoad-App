@@ -77,6 +77,7 @@ import dk.perspektiva.ttsroad.player.ShakeDetector
 import dk.perspektiva.ttsroad.player.SleepTimerAction
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
+import dk.perspektiva.ttsroad.player.SleepTimerStop
 import dk.perspektiva.ttsroad.widget.NowPlayingSnapshot
 import dk.perspektiva.ttsroad.widget.NowPlayingStore
 import dk.perspektiva.ttsroad.widget.NowPlayingWidget
@@ -814,10 +815,26 @@ class TtsRoadMediaService : MediaLibraryService() {
             SleepTimerAction.None -> Unit
             is SleepTimerAction.SetVolume -> player.volume = action.volume
             SleepTimerAction.Expire -> {
+                recordSleepTimerStop()
                 player.pause()
                 // Restore after pausing, so the next play doesn't start silent.
                 player.volume = 1f
             }
+        }
+    }
+
+    /**
+     * Note when the timer stopped playback and when the listener last touched it, so the library's
+     * banner can offer the point they were last known awake rather than the point the audio was cut
+     * (#332). Wall clock, because the history it is matched against is wall clock.
+     */
+    private fun recordSleepTimerStop() {
+        val sinceInteraction = sleepTimer.lastExpirySinceInteractionMs ?: return
+        val now = System.currentTimeMillis()
+        runCatching {
+            ServiceLocator.sleepTimerStops(this).record(
+                SleepTimerStop(stoppedAtMs = now, lastInteractionAtMs = now - sinceInteraction),
+            )
         }
     }
 
