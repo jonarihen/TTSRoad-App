@@ -154,8 +154,16 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var lastBreadcrumbAt: Long? = null
     private var lastBreadcrumbPruneAt: Long? = null
 
-    @Volatile
-    private var audioAuth = dk.perspektiva.ttsroad.core.AudioAuthSnapshot()
+    private val sessionAudioAuth = dk.perspektiva.ttsroad.core.SessionAudioAuth()
+
+    // Every assignment comes from a real session (the session collector, a bound queue, recovery),
+    // so each one also releases the controllers waiting in [currentAudioAuth].
+    private var audioAuth: dk.perspektiva.ttsroad.core.AudioAuthSnapshot
+        get() = sessionAudioAuth.current
+        set(value) = sessionAudioAuth.publish(value)
+
+    /** [audioAuth] once the persisted session has been read; see [dk.perspektiva.ttsroad.core.SessionAudioAuth]. */
+    private suspend fun currentAudioAuth() = sessionAudioAuth.awaitCurrent()
     private var boundQueueSession: dk.perspektiva.ttsroad.data.SessionState? = null
     private var ownerProgressRetry: Job? = null
     private val ownerProgressFlush = OwnerProgressFlush { flushOwnedProgress() }
@@ -1181,7 +1189,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun searchItems(query: String): SearchResult? {
         // Taken first: if the account changes while this runs, the stamp names the old one and the
         // items fail closed (see [audioItemFromSession]) instead of passing as the new one's.
-        val origin = audioAuth
+        val origin = currentAudioAuth()
         val session = librarySessionGeneration
         val library = library() ?: return null
         val generation = searchCacheGeneration
@@ -1312,12 +1320,12 @@ class TtsRoadMediaService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> =
-            service.audioAuth.let { origin ->
-                Futures.immediateFuture(
-                    mediaItems.filter { audioItemFromSession(it, origin) }
-                        .map { withAudioAccount(restoreItem(it), origin.account) }
-                        .toMutableList(),
-                )
+            service.serviceScope.future {
+                // Awaited: on a cold start the item can arrive before the stored session is read.
+                val origin = service.currentAudioAuth()
+                mediaItems.filter { audioItemFromSession(it, origin) }
+                    .map { withAudioAccount(restoreItem(it), origin.account) }
+                    .toMutableList()
             }
 
         // Invoked when a controller sets what to play. When a single chapter is selected — e.g. from
@@ -1333,7 +1341,9 @@ class TtsRoadMediaService : MediaLibraryService() {
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
             service.serviceScope.future {
                 // Taken before anything is fetched: the queue is the account's that asked for it.
-                val origin = service.audioAuth
+                // Awaited, because Android Auto or a media button can get here on a fresh process
+                // before the stored session is read, and the blank default would refuse every item.
+                val origin = service.currentAudioAuth()
                 val account = origin.account
                 // A browse item the car kept from before an account switch names the previous
                 // account (or server). Its ids mean nothing — or something else — to this one.
@@ -1378,7 +1388,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             isForPlayback: Boolean,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
             service.serviceScope.future {
-                val account = service.audioAuth.account
+                val account = service.currentAudioAuth().account
                 service.resumeQueue()?.forAudioAccount(account)
                     ?: throw UnsupportedOperationException("Nothing to resume")
             }
@@ -1461,7 +1471,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // car keeps showing after an account switch is refused rather than adopted by the
                 // next account (see onSetMediaItems). Taken before the fetch, so a switch midway
                 // fails closed.
-                val origin = service.audioAuth
+                val origin = service.currentAudioAuth()
                 val items = when {
                     parentId == TtsRoadMediaIds.Root -> rootChildren()
                     parentId == TtsRoadMediaIds.Continue -> continueItems()

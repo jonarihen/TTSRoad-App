@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.core
 
 import androidx.media3.datasource.DataSpec
 import dk.perspektiva.ttsroad.data.SessionState
+import kotlinx.coroutines.CompletableDeferred
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal data class AudioAuthSnapshot(
@@ -33,3 +34,30 @@ internal data class AudioAuthSnapshot(
 /** The audio credential of [this] session, including which account it belongs to. */
 internal fun SessionState.audioAuthSnapshot(): AudioAuthSnapshot =
     AudioAuthSnapshot(serverUrl, authorizationHeader, username)
+
+/**
+ * The media service's current [AudioAuthSnapshot], and whether a real session has set it yet.
+ *
+ * On a fresh-process start — Android Auto connecting, a media button — a controller can hand the
+ * service a server-stamped item before the persisted session has been read. Checked against the
+ * blank default, every such item looks like another server's and is dropped, so ownership checks
+ * wait with [awaitCurrent] until the first [publish]. Readers that cannot suspend (the data-source
+ * resolver) use [current]; nothing reaches them before an item has passed that check.
+ */
+internal class SessionAudioAuth {
+    @Volatile
+    var current: AudioAuthSnapshot = AudioAuthSnapshot()
+        private set
+
+    private val published = CompletableDeferred<Unit>()
+
+    fun publish(snapshot: AudioAuthSnapshot) {
+        current = snapshot
+        published.complete(Unit)
+    }
+
+    suspend fun awaitCurrent(): AudioAuthSnapshot {
+        published.await()
+        return current
+    }
+}

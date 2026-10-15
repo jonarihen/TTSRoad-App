@@ -7,9 +7,13 @@ import dk.perspektiva.ttsroad.data.SessionStore
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.normalizeBaseUrl
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -448,7 +452,6 @@ class ProgressSyncTest {
         assertEquals(0, server.requestCount - 1) // only the capabilities call so far
         assertEquals(1, store.pending().size)
 
-        trigger.onSession(bob.copy(token = "bob-rotated"))
         trigger.onSession(SessionState(serverUrl = alice.serverUrl))
         assertEquals(1, requested)
 
@@ -462,6 +465,81 @@ class ProgressSyncTest {
         val request = server.takeRequest()
         assertEquals("/api/mobile/playback/sync", request.path)
         assertEquals("Bearer alice-token", request.getHeader("Authorization"))
+        assertTrue(store.pending().isEmpty())
+    }
+
+    @Test
+    fun `a same-account token rotation asks for another flush`() {
+        // A password change rotates the token mid-flush: the old-token request fails or the next
+        // batch stops at the session check, and nothing else would retry with nothing playing.
+        val alice = SessionState(serverUrl = "https://home.example/", token = "alice-token", username = "alice")
+        var requested = 0
+        val trigger = OwnerProgressFlush { requested++ }
+
+        trigger.onSession(alice)
+        trigger.onSession(alice)
+        assertEquals(1, requested)
+
+        trigger.onSession(alice.copy(token = "alice-rotated"))
+        assertEquals(2, requested)
+        trigger.onSession(alice.copy(token = "alice-rotated"))
+        assertEquals(2, requested)
+
+        trigger.onSession(SessionState(serverUrl = alice.serverUrl))
+        assertEquals(2, requested)
+    }
+
+    @Test
+    fun `a rotated token flushes the backlog the old token left behind`() = runTest {
+        val alice = SessionState(serverUrl = server.url("/").toString(), token = "alice-token", username = "alice")
+        var current = alice.copy(token = "alice-rotated")
+        val sessions = ScriptedSessionStore { current }
+        val repository = scriptedRepository(batchProgress = true, sessions)
+        val store = pendingStore()
+        // Recorded under the old token; ownership is by server and account, not by credential.
+        store.record(1, 7, 30.0, false, owner = alice)
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+            .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}"""))
+
+        val result = ProgressSync(repository, store).flush()
+
+        val request = server.takeRequest()
+        assertEquals("/api/mobile/playback/sync", request.path)
+        assertEquals("Bearer alice-rotated", request.getHeader("Authorization"))
+        assertEquals(1, result.accepted)
+        assertTrue(store.pending().isEmpty())
+    }
+
+    @Test
+    fun `a discovery that fails while a concurrent one succeeds still sends stamped progress`() = runTest {
+        val owner = SessionState(serverUrl = server.url("/").toString(), token = "alice-token", username = "alice")
+        val repository = TtsRoadRepository(ScriptedSessionStore { owner })
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        val capabilityCalls = AtomicInteger()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/mobile/capabilities" -> if (capabilityCalls.incrementAndGet() == 1) {
+                    // While the flush's own discovery is in flight, another caller (the UI's
+                    // refresh) discovers the same server successfully; then this one fails.
+                    runBlocking { repository.capabilities(owner.serverUrl, forceRefresh = true) }
+                    MockResponse().setResponseCode(503)
+                } else {
+                    MockResponse().setBody(capabilities(batchProgress = true)).setHeader("Content-Type", "application/json")
+                }
+                "/api/mobile/playback/sync" -> MockResponse().setHeader("Content-Type", "application/json")
+                    .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}""")
+                else -> MockResponse().setResponseCode(500)
+            }
+        }
+
+        val result = ProgressSync(repository, store).flush()
+
+        assertEquals(2, capabilityCalls.get())
+        val paths = List(server.requestCount) { server.takeRequest().path }
+        assertTrue(paths.toString(), "/api/mobile/playback/sync" in paths)
+        assertFalse(paths.toString(), "/api/mobile/playback/progress" in paths)
+        assertEquals(1, result.accepted)
         assertTrue(store.pending().isEmpty())
     }
 

@@ -445,20 +445,30 @@ class TtsRoadRepository(
             _currentCapabilitiesResolved.value = false
             return ServerCapabilities.Baseline
         }
-        val discovered = capabilities(session.serverUrl, forceRefresh)
+        val fetched = capabilities(session.serverUrl, forceRefresh)
         val current = tokenStore.current()
-        if (current.serverUrl != session.serverUrl || current.token != session.token) return discovered
-        return discovered.also {
+        if (current.serverUrl != session.serverUrl || current.token != session.token) return fetched
+        // A cache entry exists only after a successful response or a definitive old-server 404.
+        // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
+        // treating that provisional value as proof of a shared catalogue could destroy a saved
+        // filter whose source exists only outside the followed shelf.
+        val resolved = cachedCapabilities(session.serverUrl)
+        return (resolved ?: fetched).also {
             _currentCapabilities.value = it.copy(discoveryBaseUrl = session.serverUrl)
-            val normalized = runCatching { normalizeBaseUrl(session.serverUrl) }.getOrNull()
-            // A cache entry exists only after a successful response or a definitive old-server 404.
-            // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
-            // treating that provisional value as proof of a shared catalogue could destroy a saved
-            // filter whose source exists only outside the followed shelf.
-            _currentCapabilitiesResolved.value = normalized != null && synchronized(capabilityCache) {
-                capabilityCache.containsKey(normalized)
-            }
+            _currentCapabilitiesResolved.value = resolved != null
         }
+    }
+
+    /**
+     * The cached answer for [baseUrl], whatever this call's own request returned. Two discoveries
+     * of one server can overlap — the UI's refresh and an owner-progress flush, say — and when one
+     * succeeds while the other fails transiently, the failure's provisional Baseline must not be
+     * reported as resolved: on a `batch_progress` server it would send stamped progress down the
+     * unordered legacy endpoint.
+     */
+    private fun cachedCapabilities(baseUrl: String): ServerCapabilities? {
+        val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull() ?: return null
+        return synchronized(capabilityCache) { capabilityCache[normalized]?.value }
     }
 
     /**
@@ -470,8 +480,8 @@ class TtsRoadRepository(
      */
     suspend fun resolvedCapabilitiesFor(baseUrl: String): ServerCapabilities? {
         val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull() ?: return null
-        val discovered = capabilities(normalized)
-        return discovered.takeIf { synchronized(capabilityCache) { capabilityCache.containsKey(normalized) } }
+        capabilities(normalized)
+        return cachedCapabilities(normalized)
     }
 
     /** Drop discovered capabilities for [baseUrl], so the next call re-asks. Used on sign-out. */

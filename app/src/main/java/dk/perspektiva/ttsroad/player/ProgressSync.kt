@@ -213,12 +213,17 @@ fun PendingProgress.asSyncItem(): PlaybackSyncItem = PlaybackSyncItem(
  * the current account's own entries, so without this a returning account's backlog would sit
  * until its next playback tick. Flushes are serialised inside [ProgressSync], so one triggered here
  * cannot overlap the tick, pause or chapter-end flushes.
+ *
+ * A new token for the same account counts too. A password change can rotate it while a flush is
+ * running on the old one, which then fails or stops at the session check — and with nothing playing
+ * and capabilities already resolved, nothing else would ask again. Which entries go out is still
+ * decided by server and account in [PendingProgressStore.pendingFor], not by the token.
  */
 class OwnerProgressFlush(private val flush: () -> Unit) {
-    private var current: Pair<String, String?>? = null
+    private var current: Triple<String, String?, String?>? = null
 
     fun onSession(session: SessionState) {
-        val identity = if (session.isLoggedIn) session.serverUrl to session.username else null
+        val identity = if (session.isLoggedIn) Triple(session.serverUrl, session.username, session.token) else null
         if (identity == current) return
         current = identity
         if (identity != null) flush()
