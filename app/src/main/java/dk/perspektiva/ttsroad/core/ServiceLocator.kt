@@ -17,6 +17,7 @@ import dk.perspektiva.ttsroad.download.AudioHashRecord
 import dk.perspektiva.ttsroad.download.OfflineDownloads
 import dk.perspektiva.ttsroad.download.StaleDownloadScanner
 import dk.perspektiva.ttsroad.player.PendingProgressStore
+import dk.perspektiva.ttsroad.player.PlayedMarks
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.ProgressSync
@@ -89,6 +90,9 @@ object ServiceLocator {
     @Volatile
     private var progressSync: ProgressSync? = null
 
+    /** What this process knows about chapters' played flags; read by the service, fed by marks. */
+    val playedMarks: PlayedMarks = PlayedMarks()
+
     fun init(context: Context) {
         tokenStore(context)
         // Off the main thread and fire-and-forget: it touches the keystore and DataStore, and a
@@ -117,7 +121,10 @@ object ServiceLocator {
                 readAlongStore = ReadAlongFileStore(
                     File(appContext.filesDir, "readalong"),
                 ),
-                onSessionCleared = { pendingProgress(appContext).clear() },
+                onSessionCleared = {
+                    pendingProgress(appContext).clear()
+                    playedMarks.clear()
+                },
             ).also { repository = it }
         }
 
