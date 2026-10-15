@@ -32,7 +32,9 @@ import java.io.File
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
@@ -79,8 +81,7 @@ class OfflineDownloads(
     downloadPrefs: Flow<DownloadPrefs> = flowOf(DownloadPrefs()),
     /**
      * Fetch and hold a chapter's read-along document, so a downloaded chapter can be read offline
-     * as well as heard. Answers whether one is now held; a chapter converted before timings existed
-     * has none, which is an ordinary false.
+     * as well as heard. Answers whether one is now held.
      *
      * Injected rather than reached through the service locator so the download logic stays testable
      * without a repository, and defaulted to a no-op so a caller that does not care need not say so.
@@ -100,11 +101,16 @@ class OfflineDownloads(
     private val initializeManager: Boolean = true,
     private val replacementHash: (Int) -> String? = { null },
     private val replacementCompleted: (Int, String) -> Unit = { _, _ -> },
+    private val sendRemoveAllDownloads: () -> Unit = {
+        DownloadService.sendRemoveAllDownloads(context, TtsRoadDownloadService::class.java, false)
+    },
     session: Flow<SessionState> = tokenStore.session,
     private val migrationIndex: DownloadIndex? = null,
     private val migrationDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val readerPinLock = Any()
+    private val readerPins = mutableMapOf<Int, Job>()
 
     // Same contract as the player's resolver: read the latest header per request, so signing out
     // and back in does not require rebuilding the cache, the manager or the player.
@@ -447,28 +453,23 @@ class OfflineDownloads(
             }
         } else emptySet()
         val request = spec.toDownloadRequest(hash, invalidationKeys)
-        // Asked for again: an earlier deletion must not keep the migration from moving it, and a
-        // rekey retained for it must not later overwrite it. Dropped only once the add went out.
-        identityMigration.restore(request.id, retainedScope()) { send(request) }
-        pinReadAlongFor(chapter)
+        // A replacement re-pins rather than unpinning: the chapter stays downloaded throughout, so
+        // its read-along document must stay held while the new audio bytes arrive.
+        synchronized(readerPinLock) {
+            // Asked for again: an earlier deletion must not keep the migration from moving it, and a
+            // rekey retained for it must not later overwrite it. Dropped only once the add went out.
+            identityMigration.restore(request.id, retainedScope()) { send(request) }
+            pinReadAlongFor(chapter)
+        }
     }
 
-    /**
-     * Hold the chapter's text and cues alongside its audio.
-     *
-     * Audio alone makes a chapter playable offline and not readable offline, which is half the
-     * feature missing precisely when the feature is needed (#123).
-     *
-     * Skipped when the server has no read-along surface, and when the chapter payload says outright
-     * that this chapter has no timings — `hasTimings` is null on a server that predates the field,
-     * and that is deliberately treated as "ask", not as "no".
-     */
     private fun pinReadAlongFor(chapter: ChapterSummary) {
-        if (!readAlongSupported || chapter.hasTimings == false) return
+        if (!readAlongSupported) return
         val chapterId = chapter.resolvedChapterId.takeIf { it > 0 } ?: return
-        // Detached from the audio download on purpose: a document that cannot be fetched must not
-        // fail, delay or cancel the download the user actually asked for.
-        scope.launch { runCatching { pinReadAlong(chapterId) } }
+        readerPins.remove(chapterId)?.cancel()
+        val job = scope.launch(start = CoroutineStart.LAZY) { runCatching { pinReadAlong(chapterId) } }
+        readerPins[chapterId] = job
+        job.start()
     }
 
     /** Queue several chapters in one go — the fiction header's "download next N". */
@@ -551,18 +552,23 @@ class OfflineDownloads(
      * could not be durably dropped — deleting anyway would let a restart queue it straight back.
      */
     fun remove(chapterId: Int): Boolean {
-        // Committed together with the remove: a rekey retained from a failed migration dispatch
-        // would otherwise queue this chapter again on the next retry.
-        val removed = identityMigration.forget(TtsRoadMediaIds.chapter(chapterId), retainedScope()) {
-            DownloadService.sendRemoveDownload(
-                context,
-                TtsRoadDownloadService::class.java,
-                TtsRoadMediaIds.chapter(chapterId),
-                /* foreground= */ false,
-            )
+        synchronized(readerPinLock) {
+            // The audio hash is forgotten when the download service reports the removal (#288), not
+            // here: an unfinished replacement must keep the hash it was verifying against.
+            // Committed together with the remove: a rekey retained from a failed migration dispatch
+            // would otherwise queue this chapter again on the next retry.
+            val removed = identityMigration.forget(TtsRoadMediaIds.chapter(chapterId), retainedScope()) {
+                DownloadService.sendRemoveDownload(
+                    context,
+                    TtsRoadDownloadService::class.java,
+                    TtsRoadMediaIds.chapter(chapterId),
+                    /* foreground= */ false,
+                )
+            }
+            if (!removed) return false
+            readerPins.remove(chapterId)?.cancel()
+            unpinReadAlong(chapterId)
         }
-        if (!removed) return false
-        unpinReadAlong(chapterId)
         return true
     }
 
@@ -574,18 +580,14 @@ class OfflineDownloads(
      * there for anyone who only wants the disposable half back.
      */
     fun removeAll(): Boolean {
-        val removed = identityMigration.forgetAll(retainedScope()) {
-            DownloadService.sendRemoveAllDownloads(
-                context,
-                TtsRoadDownloadService::class.java,
-                /* foreground= */ false,
-            )
+        synchronized(readerPinLock) {
+            val chapterIds = readerPins.keys + _downloads.value.keys.mapNotNull(TtsRoadMediaIds::chapterId)
+            if (!identityMigration.forgetAll(retainedScope()) { sendRemoveAllDownloads() }) return false
+            readerPins.values.forEach { it.cancel() }
+            readerPins.clear()
+            chapterIds.forEach(unpinReadAlong)
+            forgetAllAudioHashes()
         }
-        if (!removed) return false
-        // Every document held for a download goes with it. A chapter still in the browse cache
-        // keeps its copy there, bounded and evictable as it was before it was ever downloaded.
-        _downloads.value.keys.mapNotNull(TtsRoadMediaIds::chapterId).forEach(unpinReadAlong)
-        forgetAllAudioHashes()
         scope.launch(Dispatchers.IO) {
             // removeAllDownloads only clears what the index knows about; a download cache upgraded
             // from before the split can still hold spans no record claims.
