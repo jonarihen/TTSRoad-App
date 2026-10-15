@@ -3,8 +3,10 @@ package dk.perspektiva.ttsroad.media
 import android.app.PendingIntent
 import android.content.Context
 import android.media.AudioManager
+import android.net.ConnectivityManager
 import android.media.audiofx.LoudnessEnhancer
 import android.os.Bundle
+import android.os.Handler
 import androidx.annotation.OptIn
 import androidx.glance.appwidget.updateAll
 import androidx.media3.common.AudioAttributes
@@ -19,6 +21,7 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.LibraryResult
@@ -56,6 +59,8 @@ import dk.perspektiva.ttsroad.data.mergeLibraryDelta
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.InProcessPlayer
+import dk.perspektiva.ttsroad.player.NetworkReturnWatcher
+import dk.perspektiva.ttsroad.player.shouldRecoverOnNetworkReturn
 import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.adSkipTarget
 import dk.perspektiva.ttsroad.player.PlaybackFailure
@@ -100,6 +105,10 @@ import kotlinx.coroutines.withContext
 const val PlaybackFeedbackCommand = "ttsroad.playback_feedback"
 const val PlaybackFeedbackMessage = "message"
 
+// See TtsRoadMediaService.speechLoadControl.
+private const val SpeechMinBufferMs = 120_000
+private const val SpeechMaxBufferMs = 300_000
+
 @OptIn(UnstableApi::class)
 class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -134,6 +143,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     // outage later in the night gets a fresh set of attempts rather than giving up immediately.
     private var retryJob: Job? = null
     private var retryAttempt = 0
+
+    // Whether the last player error was one a returning network can heal; see NetworkRecovery.kt.
+    private var lastFailureTransient = false
+    private var networkWatcher: NetworkReturnWatcher? = null
 
     // The chapter, window size and setting generation the window was last planned around.
     private var lastKeepAheadPlan: Triple<Int, Int, Long>? = null
@@ -260,6 +273,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     if (playbackState == Player.STATE_READY) {
                         retryAttempt = 0
                         retryJob?.cancel()
+                        lastFailureTransient = false
                     }
                 }
 
@@ -335,6 +349,12 @@ class TtsRoadMediaService : MediaLibraryService() {
             },
         )
         growingQueue.start()
+        // The backoff gives up after ~22s; this is what resumes after a longer outage (#326).
+        networkWatcher = NetworkReturnWatcher(
+            connectivity = getSystemService(ConnectivityManager::class.java),
+            mainHandler = Handler(mainLooper),
+            onNetworkReturned = { serviceScope.launch { recoverAfterNetworkReturn() } },
+        ).also { it.start() }
         startProgressTicker()
         startPlaybackSkipTicker()
         startSleepTimer()
@@ -365,6 +385,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
+        networkWatcher?.stop()
         serviceScope.cancel()
         runBlocking {
             flushHistoryForTeardown(player, ServiceLocator.playbackHistory(this@TtsRoadMediaService), ::recordHistory)
@@ -410,6 +431,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         val mediaSourceFactory = DefaultMediaSourceFactory(cachingFactory)
         return ExoPlayer.Builder(this)
             .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(speechLoadControl())
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
@@ -420,6 +442,22 @@ class TtsRoadMediaService : MediaLibraryService() {
             .setHandleAudioBecomingNoisy(true)
             .build()
     }
+
+    /**
+     * Buffer further ahead than ExoPlayer's 50s default (#326).
+     *
+     * Speech is a few megabytes an hour, so five minutes of it is cheap, and every minute held is a
+     * minute of tunnel or dead zone the listener never hears. The byte cap ExoPlayer derives for
+     * audio still applies, so an unusually high-bitrate file cannot run away with memory.
+     */
+    private fun speechLoadControl(): DefaultLoadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            /* minBufferMs = */ SpeechMinBufferMs,
+            /* maxBufferMs = */ SpeechMaxBufferMs,
+            /* bufferForPlaybackMs = */ DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
+            /* bufferForPlaybackAfterRebufferMs = */ DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+        )
+        .build()
 
     /**
      * Apply the two TTS-specific audio settings, and keep applying them as they change.
@@ -491,6 +529,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // would just burn battery against a server that will keep saying no.
                 retryJob?.cancel()
                 retryAttempt = 0
+                lastFailureTransient = false
                 // Bearer-authenticated /audio/... requests carry the same structured 401 body as
                 // the JSON API, so go through the repository rather than clearing the token here:
                 // that is what carries the reason to the login screen instead of dropping the user
@@ -499,11 +538,15 @@ class TtsRoadMediaService : MediaLibraryService() {
                 serviceScope.launch { repository.endSession(parseSessionEnd(body)) }
             }
 
-            is PlaybackFailure.Transient -> scheduleRetry()
+            is PlaybackFailure.Transient -> {
+                lastFailureTransient = true
+                scheduleRetry()
+            }
 
             is PlaybackFailure.Permanent -> {
                 retryJob?.cancel()
                 retryAttempt = 0
+                lastFailureTransient = false
             }
         }
     }
@@ -521,6 +564,18 @@ class TtsRoadMediaService : MediaLibraryService() {
             delay(delayMs)
             player.prepare()
         }
+    }
+
+    /**
+     * A network came back. If the player gave up on a transient failure while it was meant to be
+     * playing, start over: a fresh backoff and an immediate prepare, which resumes at the position
+     * the player stopped at.
+     */
+    private fun recoverAfterNetworkReturn() {
+        if (!shouldRecoverOnNetworkReturn(player, lastFailureTransient)) return
+        retryJob?.cancel()
+        retryAttempt = 0
+        player.prepare()
     }
 
     private fun startProgressTicker() {
