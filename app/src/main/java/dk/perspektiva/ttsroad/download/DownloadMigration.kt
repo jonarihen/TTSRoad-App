@@ -86,9 +86,17 @@ internal class DownloadIdentityMigration(
      * before anything is dispatched, so the process being reaped in between cannot lose the chapter.
      * That same independence from the index is why a user's delete has to reach it through [forget]
      * and [forgetAll]: otherwise the next retry would queue the chapter they just removed.
+     *
+     * Empty, and not to be trusted as empty, until [loaded]: see [ensureLoaded].
      */
-    private val undispatched: MutableMap<String, MutableMap<String, DownloadRequest>> =
-        store.load().mapValuesTo(mutableMapOf()) { (_, requests) -> requests.toMutableMap() }
+    private val undispatched: MutableMap<String, MutableMap<String, DownloadRequest>> = mutableMapOf()
+
+    /**
+     * Whether [undispatched] holds what the file held. A file that exists but could not be read may
+     * hold the only copy of a stranded chapter, so until a load succeeds nothing is migrated,
+     * dispatched or deleted against an assumed-empty map, and the file is never written over.
+     */
+    private var loaded = false
 
     /**
      * Guards [undispatched] and the withdrawal marks, and is held across each single dispatch.
@@ -116,6 +124,23 @@ internal class DownloadIdentityMigration(
     private val restored = mutableSetOf<String>()
 
     private fun isWithdrawn(id: String) = id in withdrawn || (withdrewAll && id !in restored)
+
+    init {
+        synchronized(pendingLock) { ensureLoaded() }
+    }
+
+    /**
+     * Load the retained-rekey file if that has not succeeded yet, retrying on every call that needs
+     * it. Answers whether [undispatched] is now authoritative. Called under [pendingLock].
+     */
+    private fun ensureLoaded(): Boolean {
+        if (loaded) return true
+        val disk = store.load() ?: return false
+        // Nothing reaches memory before the load: every path that adds or removes waits for it.
+        disk.forEach { (identity, requests) -> undispatched[identity] = requests.toMutableMap() }
+        loaded = true
+        return true
+    }
 
     /*
      * How memory and the retained-rekey file are kept consistent, so that a failed write, a refused
@@ -147,7 +172,7 @@ internal class DownloadIdentityMigration(
     /** Ids dropped from memory whose removal may not be on disk yet. */
     private val unsavedRemovals = mutableSetOf<String>()
 
-    private fun persist(): Boolean = store.save(undispatched).also { saved ->
+    private fun persist(): Boolean = loaded && store.save(undispatched).also { saved ->
         if (saved) {
             unsavedAdditions = false
             unsavedRemovals.clear()
@@ -156,7 +181,10 @@ internal class DownloadIdentityMigration(
 
     /** Whether rekeys retained for [identity] are still waiting to be dispatched. */
     fun hasRetained(identity: String): Boolean =
-        synchronized(pendingLock) { undispatched[identity]?.isNotEmpty() == true }
+        synchronized(pendingLock) {
+            // Unknown counts as retained, so the caller's retry path keeps trying the load.
+            !ensureLoaded() || undispatched[identity]?.isNotEmpty() == true
+        }
 
     /**
      * The user deletes [requestId] while signed in to the server filed under [identity]: never
@@ -172,6 +200,9 @@ internal class DownloadIdentityMigration(
      * deleting a chapter on one server must not erase another server's download. A null [identity]
      * (a server that never named itself) owns no retained rekeys, so none are touched.
      *
+     * Also answers false, having done nothing, while the retained-rekey file exists but cannot be
+     * read: it may hold this very chapter, and a delete that left it there would be undone later.
+     *
      * The withdrawal mark is not scoped: it guards a row in the one download index every server
      * shares, and the user's remove takes that row whichever server queued it. It is not persisted:
      * if the process dies before the service carries out the remove, the row survives and is
@@ -182,6 +213,7 @@ internal class DownloadIdentityMigration(
      */
     fun forget(requestId: String, identity: String?, remove: () -> Unit = {}): Boolean =
         synchronized(pendingLock) {
+            if (identity != null && !ensureLoaded()) return false
             val bucket = identity?.let { undispatched[it] }
             val previous = bucket?.remove(requestId)
             if ((previous != null || requestId in unsavedRemovals) && !persist()) {
@@ -207,12 +239,19 @@ internal class DownloadIdentityMigration(
             true
         }
 
-    /** The user deletes every download. Same contract and scoping as [forget], for all of them. */
-    fun forgetAll(identity: String?, removeAll: () -> Unit = {}): Boolean =
+    /**
+     * The user deletes every download. Same contract as [forget], for all of them — but not scoped:
+     * the remove-all command and the cache sweep that follow it take every server's downloads, so
+     * every server's retained rekeys go too. One left behind for a server the user is not signed in
+     * to would re-download, on the next visit there, a chapter whose data was just deleted.
+     */
+    fun forgetAll(removeAll: () -> Unit = {}): Boolean =
         synchronized(pendingLock) {
-            val previous = identity?.let { undispatched.remove(it) }
-            if ((previous?.isNotEmpty() == true || unsavedRemovals.isNotEmpty()) && !persist()) {
-                if (previous != null && identity != null) undispatched[identity] = previous
+            if (!ensureLoaded()) return false
+            val previous = undispatched.toMap()
+            undispatched.clear()
+            if ((previous.values.any { it.isNotEmpty() } || unsavedRemovals.isNotEmpty()) && !persist()) {
+                undispatched += previous
                 return false
             }
             val marks = Triple(withdrawn.toSet(), restored.toSet(), withdrewAll)
@@ -222,8 +261,8 @@ internal class DownloadIdentityMigration(
             try {
                 removeAll()
             } catch (e: Throwable) {
-                if (previous?.isNotEmpty() == true && identity != null) {
-                    undispatched[identity] = previous
+                if (previous.isNotEmpty()) {
+                    undispatched += previous
                     unsavedAdditions = true
                     persist()
                 }
@@ -293,6 +332,9 @@ internal class DownloadIdentityMigration(
                 withdrewAll = false
                 restored.clear()
             }
+            // Rekeying against a journal that could not be read could strand a chapter whose only
+            // record is in that file, and the write below would then overwrite it.
+            if (!ensureLoaded()) return false
             val pending = undispatched.getOrPut(incoming) { mutableMapOf() }
             var added = false
             stale.filterNot { isWithdrawn(it.id) }.forEach {
@@ -334,7 +376,10 @@ internal class DownloadIdentityMigration(
         isCurrent: () -> Boolean = { true },
         rekey: (DownloadRequest) -> Unit,
     ): Boolean {
-        val ids = synchronized(pendingLock) { undispatched[incoming]?.keys?.toList() } ?: return true
+        val ids = synchronized(pendingLock) {
+            if (!ensureLoaded()) return false
+            undispatched[incoming]?.keys?.toList()
+        } ?: return true
         if (!dispatch(incoming, index, ids, isCurrent, rekey)) return false
         synchronized(pendingLock) {
             if (undispatched[incoming]?.isEmpty() == true) undispatched.remove(incoming)

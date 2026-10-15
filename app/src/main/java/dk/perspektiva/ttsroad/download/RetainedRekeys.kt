@@ -7,6 +7,8 @@ import androidx.media3.exoplayer.offline.DownloadRequest
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Base64
 
 /**
@@ -19,8 +21,13 @@ import java.util.Base64
  */
 @OptIn(UnstableApi::class)
 internal interface RetainedRekeyStore {
-    /** Everything retained, by identity and then request id. Unreadable state reads as empty. */
-    fun load(): Map<String, Map<String, DownloadRequest>>
+    /**
+     * Everything retained, by identity and then request id — or null when retained state exists but
+     * could not be read this time. Null is not "nothing retained": the unread file may be the only
+     * record of a stranded chapter, so the caller retries rather than acting on, or saving over, an
+     * empty map.
+     */
+    fun load(): Map<String, Map<String, DownloadRequest>>?
 
     /** Replace what is retained with [retained]. Answers whether it is now durable. */
     fun save(retained: Map<String, Map<String, DownloadRequest>>): Boolean
@@ -41,17 +48,40 @@ internal interface RetainedRekeyStore {
 }
 
 /**
- * [RetainedRekeyStore] as one small JSON file, written to a sibling and renamed into place so a file
- * that exists is always complete — the same pattern as the playback history and pending progress.
+ * [RetainedRekeyStore] as one small JSON file, written to a sibling and moved into place with a single
+ * atomic replace, so a file that exists is always complete and the previous snapshot stands until the
+ * new one has taken its place. Never delete-then-rename: a failure between the two would leave no
+ * snapshot at all while callers still hold the requests only in memory.
+ *
+ * A file that cannot be *read* loads as null, to be retried. One that reads but cannot be decoded will
+ * not decode on a retry either; it is moved aside to `<name>.corrupt` — kept for inspection, never
+ * overwritten — and loads as empty, so one bad write cannot block every later migration and delete.
  *
  * Hand-encoded with `org.json` rather than Moshi on purpose: nothing here is reflected over, so there
  * is no model for R8 to rename and no keep rule to forget.
  */
 @OptIn(UnstableApi::class)
-internal class RetainedRekeyFile(private val file: File) : RetainedRekeyStore {
-    override fun load(): Map<String, Map<String, DownloadRequest>> =
-        runCatching { if (file.isFile) decodeRetainedRekeys(file.readText()) else emptyMap() }
-            .getOrDefault(emptyMap())
+internal class RetainedRekeyFile(
+    private val file: File,
+    private val readFile: (File) -> String = File::readText,
+    private val replaceFile: (File, File) -> Unit = { source, target ->
+        Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    },
+) : RetainedRekeyStore {
+    override fun load(): Map<String, Map<String, DownloadRequest>>? {
+        val text = try {
+            if (!file.exists()) return emptyMap()
+            readFile(file)
+        } catch (e: Exception) {
+            return null
+        }
+        return try {
+            decodeRetainedRekeys(text)
+        } catch (e: Exception) {
+            val aside = File(file.parentFile, "${file.name}.corrupt")
+            if (runCatching { replaceFile(file, aside) }.isSuccess) emptyMap() else null
+        }
+    }
 
     override fun save(retained: Map<String, Map<String, DownloadRequest>>): Boolean = runCatching {
         val nonEmpty = retained.filterValues { it.isNotEmpty() }
@@ -62,10 +92,8 @@ internal class RetainedRekeyFile(private val file: File) : RetainedRekeyStore {
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeText(encodeRetainedRekeys(nonEmpty))
-        if (!tmp.renameTo(file)) {
-            if (file.exists()) file.delete()
-            check(tmp.renameTo(file)) { "could not move ${tmp.name} into place" }
-        }
+        // On failure the destination is untouched and the previous snapshot still stands.
+        replaceFile(tmp, file)
     }.isSuccess
 }
 

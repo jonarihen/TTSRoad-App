@@ -320,6 +320,11 @@ class OfflineDownloads(
         }
     }
 
+    // Declared before [init]: its collectors call [refreshCacheBytes] on Dispatchers.IO, which can
+    // run before property initialisers further down the class have.
+    private val _downloadCacheBytes = MutableStateFlow(0L)
+    private val _streamingCacheBytes = MutableStateFlow(0L)
+
     init {
         scope.launch {
             combine(session, capabilities) { current, discovered -> current to discovered }
@@ -582,7 +587,9 @@ class OfflineDownloads(
     fun removeAll(): Boolean {
         synchronized(readerPinLock) {
             val chapterIds = readerPins.keys + _downloads.value.keys.mapNotNull(TtsRoadMediaIds::chapterId)
-            if (!identityMigration.forgetAll(retainedScope()) { sendRemoveAllDownloads() }) return false
+            // Global, like the remove-all command and the cache sweep below: every server's retained
+            // rekeys go too, or one stranded on another server would re-download what was deleted.
+            if (!identityMigration.forgetAll { sendRemoveAllDownloads() }) return false
             readerPins.values.forEach { it.cancel() }
             readerPins.clear()
             chapterIds.forEach(unpinReadAlong)
@@ -650,9 +657,6 @@ class OfflineDownloads(
             )
         }
     }
-
-    private val _downloadCacheBytes = MutableStateFlow(0L)
-    private val _streamingCacheBytes = MutableStateFlow(0L)
 
     /** Bytes held by chapters downloaded on purpose. Nothing reclaims these but the user. */
     val downloadCacheBytes: StateFlow<Long> = _downloadCacheBytes.asStateFlow()
