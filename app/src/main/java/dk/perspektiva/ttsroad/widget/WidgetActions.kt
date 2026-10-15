@@ -76,18 +76,30 @@ private suspend fun refresh(context: Context) {
  * the service foregrounds itself, destroying it mid-resumption. Once media3 reaches a playing or
  * buffering state it has foregrounded the service, so the `finally` in [withController] is safe.
  * On timeout it degrades to the old behaviour: release and let the widget still show Play.
+ *
+ * Resumes at most once (#320). Buffering and `isPlaying` usually arrive as two separate events, and
+ * a second one can land on the main looper before the resumed coroutine has run; resuming again
+ * would throw "Already resumed" inside a Media3 listener. So the first matching event detaches the
+ * listener and every callback checks [kotlinx.coroutines.CancellableContinuation.isActive].
+ *
+ * Declared on [Player] rather than [MediaController] so a test can fire the events itself.
  */
-internal suspend fun MediaController.awaitPlaybackStart(timeoutMs: Long = 7_000L) {
+internal suspend fun Player.awaitPlaybackStart(timeoutMs: Long = 7_000L) {
     if (isPlaying) return
     withTimeoutOrNull(timeoutMs) {
         suspendCancellableCoroutine { cont ->
             val listener = object : Player.Listener {
+                fun started() {
+                    removeListener(this)
+                    if (cont.isActive) cont.resume(Unit) { _, _, _ -> }
+                }
+
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    if (isPlaying) cont.resume(Unit) { _, _, _ -> }
+                    if (isPlaying) started()
                 }
 
                 override fun onPlaybackStateChanged(state: Int) {
-                    if (state == Player.STATE_BUFFERING) cont.resume(Unit) { _, _, _ -> }
+                    if (state == Player.STATE_BUFFERING) started()
                 }
             }
             addListener(listener)
