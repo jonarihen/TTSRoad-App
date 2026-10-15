@@ -32,6 +32,16 @@ class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) 
 
     private val _hashes = MutableStateFlow(read())
 
+    /**
+     * Serialises every read-modify-write of [_hashes] together with the file write that follows it.
+     *
+     * Today's callers all happen to run on the main thread, but nothing about this class says so:
+     * two scans finishing at once on different threads would each read the same map, add their own
+     * fiction's hashes and write — and the later write would silently drop the earlier one's (#325).
+     * Holding the lock across the write as well keeps the file in the same order as the flow.
+     */
+    private val lock = Any()
+
     /** chapter id -> the sha256 of the audio this device downloaded. */
     val hashes: StateFlow<Map<Int, String>> = _hashes.asStateFlow()
 
@@ -40,10 +50,7 @@ class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) 
     /** Record [update] over what is held. */
     fun merge(update: Map<Int, String>) {
         if (update.isEmpty()) return
-        val next = _hashes.value + update
-        if (next == _hashes.value) return
-        _hashes.value = next
-        write(next)
+        mutate { it + update }
     }
 
     /**
@@ -54,23 +61,30 @@ class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) 
      * every other fiction's record.
      */
     fun prune(downloaded: Set<Int>) {
-        val next = pruneRecordedHashes(_hashes.value, downloaded)
-        if (next == _hashes.value) return
-        _hashes.value = next
-        write(next)
+        mutate { pruneRecordedHashes(it, downloaded) }
     }
 
     /** Forget one chapter — called when its download goes, so a later re-download starts clean. */
     fun forget(chapterId: Int) {
-        val next = _hashes.value - chapterId
-        if (next == _hashes.value) return
-        _hashes.value = next
-        write(next)
+        mutate { it - chapterId }
     }
 
     fun clear() {
-        _hashes.value = emptyMap()
-        runCatching { file.delete() }
+        synchronized(lock) {
+            _hashes.value = emptyMap()
+            runCatching { file.delete() }
+        }
+    }
+
+    private inline fun mutate(transform: (Map<Int, String>) -> Map<Int, String>) {
+        synchronized(lock) {
+            val current = _hashes.value
+            val next = transform(current)
+            if (next != current) {
+                _hashes.value = next
+                write(next)
+            }
+        }
     }
 
     private fun read(): Map<Int, String> = runCatching {

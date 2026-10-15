@@ -1639,7 +1639,12 @@ private fun FictionScreen(
         scope.launch {
             error = null
             runCatching { repository.markPlayed(ids, played) }
-                .onSuccess { cache.applyPlayed(fiction.id, ids, played) }
+                .onSuccess {
+                    cache.applyPlayed(fiction.id, ids, played)
+                    // The playing item's extras still carry the old flag; this is what the service
+                    // believes over them on its next progress tick (#325).
+                    ServiceLocator.playedMarks.remember(ids, played)
+                }
                 .onFailure { error = it.message ?: "Could not update chapter" }
         }
     }
