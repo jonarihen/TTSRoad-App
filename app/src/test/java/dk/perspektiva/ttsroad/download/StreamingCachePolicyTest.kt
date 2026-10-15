@@ -89,6 +89,14 @@ class StreamingCachePolicyTest {
     }
 
     @Test
+    fun `the default stays modest, because the OS cannot reclaim a cache in filesDir`() {
+        // A cap someone chose is stored and honoured; only installs that never picked one get this.
+        assertEquals(512L * 1024L * 1024L, DefaultStreamingCacheBytes)
+        assertEquals(512L * 1024L * 1024L, normalisedStreamingCacheBytes(null))
+        assertEquals(1024L * 1024L * 1024L, normalisedStreamingCacheBytes(1024L * 1024L * 1024L))
+    }
+
+    @Test
     fun `the caps read as chosen sizes rather than as measurements`() {
         assertEquals("256 MB", streamingCacheChoiceLabel(256L * 1024L * 1024L))
         assertEquals("1 GB", streamingCacheChoiceLabel(1024L * 1024L * 1024L))
