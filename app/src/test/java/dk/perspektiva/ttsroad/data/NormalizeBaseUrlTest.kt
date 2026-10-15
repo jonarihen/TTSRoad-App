@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -18,12 +19,57 @@ class NormalizeBaseUrlTest {
     }
 
     @Test
-    fun `rejects a host with no scheme and names the requirement`() {
+    fun `collapses several trailing slashes`() {
+        assertEquals("https://ttsroad.example.com/", normalizeBaseUrl("https://ttsroad.example.com///"))
+        assertEquals("https://home.example.dk/ttsroad/", normalizeBaseUrl("https://home.example.dk/ttsroad//"))
+    }
+
+    @Test
+    fun `collapses a doubled scheme from pasting into a pre-filled field`() {
+        assertEquals("https://home.example.dk/", normalizeBaseUrl("https://https://home.example.dk"))
+        // The pasted address is the one the user meant, so its scheme wins.
+        assertEquals("http://100.64.1.2:8000/", normalizeBaseUrl("https://http://100.64.1.2:8000"))
+    }
+
+    @Test
+    fun `lowercases a scheme the keyboard capitalised`() {
+        assertEquals("https://home.example.dk/", normalizeBaseUrl("Https://home.example.dk"))
+        assertEquals("http://nas:8000/", normalizeBaseUrl("HTTP://nas:8000"))
+    }
+
+    @Test
+    fun `assumes https for a bare host`() {
+        assertEquals("https://ttsroad.example.com/", normalizeBaseUrl("ttsroad.example.com"))
+        assertEquals("https://192.168.1.5:8000/", normalizeBaseUrl("192.168.1.5:8000"))
+    }
+
+    @Test
+    fun `rejects other schemes and names the requirement`() {
         // The message is what the login screen renders in its error slot, so the
         // wording is part of the contract, not just an assertion detail.
-        for (input in listOf("192.168.1.5:8000", "ttsroad.example.com", "ftp://ttsroad.example.com", "")) {
-            val error = assertThrows(IllegalArgumentException::class.java) { normalizeBaseUrl(input) }
-            assertEquals("Server URL must start with http:// or https://", error.message)
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            normalizeBaseUrl("ftp://ttsroad.example.com")
+        }
+        assertEquals("Server URL must start with http:// or https://", error.message)
+    }
+
+    @Test
+    fun `rejects an empty address`() {
+        for (input in listOf("", "   ", "https://", "https:///")) {
+            assertThrows(IllegalArgumentException::class.java) { normalizeBaseUrl(input) }
+        }
+    }
+
+    @Test
+    fun `probes only a host that looks finished`() {
+        assertEquals("https://home.example.dk/", probeableBaseUrl("home.example.dk"))
+        assertEquals("http://192.168.1.5:8000/", probeableBaseUrl("http://192.168.1.5:8000"))
+        assertEquals("http://localhost:8000/", probeableBaseUrl("http://localhost:8000"))
+        assertEquals("http://[::1]:8000/", probeableBaseUrl("http://[::1]:8000"))
+        assertEquals("https://home.example.dk/ttsroad/", probeableBaseUrl("https://home.example.dk/ttsroad"))
+
+        for (partial in listOf("", "https://", "https://h", "https://home", "https://home.", "https://home.e", "https://192.168.1", "https://home.example.dk:", "ftp://home.example.dk")) {
+            assertNull(partial, probeableBaseUrl(partial))
         }
     }
 }

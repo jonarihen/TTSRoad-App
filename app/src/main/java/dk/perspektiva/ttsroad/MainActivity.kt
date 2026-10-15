@@ -149,6 +149,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -191,6 +192,7 @@ import dk.perspektiva.ttsroad.data.changedFieldLabels
 import dk.perspektiva.ttsroad.data.formatDiscardBody
 import dk.perspektiva.ttsroad.data.shortVoiceName
 import dk.perspektiva.ttsroad.data.parseSyncLimit
+import dk.perspektiva.ttsroad.data.probeableBaseUrl
 import dk.perspektiva.ttsroad.data.SyncDirection
 import dk.perspektiva.ttsroad.data.InitialSync
 import dk.perspektiva.ttsroad.data.AddFictionOptions
@@ -765,7 +767,9 @@ internal fun UpdateOverlay(
 @Composable
 private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     val scope = rememberCoroutineScope()
-    var serverUrl by remember { mutableStateOf(session.serverUrl.ifBlank { "https://" }) }
+    // Empty rather than pre-filled with "https://": a pasted address used to land after the
+    // pre-filled scheme as https://https://… (#361). normalizeBaseUrl assumes https:// anyway.
+    var serverUrl by remember { mutableStateOf(session.serverUrl) }
     var username by remember { mutableStateOf(session.username.orEmpty().ifBlank { "admin" }) }
     var password by remember { mutableStateOf("") }
     var deviceName by remember { mutableStateOf("${Build.MANUFACTURER} ${Build.MODEL}".trim()) }
@@ -781,13 +785,15 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var probed by remember { mutableStateOf<ServerCapabilities?>(null) }
 
     // Capability discovery is public, so the URL can be checked before any credentials are typed.
-    // Debounced because this runs on every keystroke in the URL field; a failure stays silent since
-    // an unreachable server here is usually just a half-typed address.
-    LaunchedEffect(serverUrl) {
+    // Only once the host looks finished (#361) — half-typed names must not become DNS lookups — and
+    // still debounced, because a finished-looking "home.ex" is often on its way to "home.example.dk".
+    // A failure stays silent since an unreachable server here is usually just a typo in progress.
+    val probeUrl = remember(serverUrl) { probeableBaseUrl(serverUrl) }
+    LaunchedEffect(probeUrl) {
         probed = null
-        if (!serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) return@LaunchedEffect
-        delay(600)
-        probed = repository.capabilities(serverUrl).takeIf { it.serverVersion != null }
+        val url = probeUrl ?: return@LaunchedEffect
+        delay(800)
+        probed = repository.capabilities(url).takeIf { it.serverVersion != null }
     }
 
     Column(
@@ -810,9 +816,14 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             value = serverUrl,
             onValueChange = { serverUrl = it },
             label = { Text("SERVER URL") },
+            placeholder = { Text("https://ttsroad.example.com") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Uri,
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
             supportingText = probed?.let { found ->
                 { MetaText(text = "${found.serverName} ${found.serverVersion}", color = AarisColor.Accent) }
             },
