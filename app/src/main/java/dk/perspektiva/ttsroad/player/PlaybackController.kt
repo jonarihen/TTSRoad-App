@@ -340,7 +340,7 @@ class PlaybackController internal constructor(
 
     fun skipToNextChapter() {
         val controller = controller ?: return
-        if (controller.hasNextMediaItem()) {
+        if (canRequestNextChapter(controller)) {
             controller.seekToNextMediaItem()
             publishState(controller)
         }
