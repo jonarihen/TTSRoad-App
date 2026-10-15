@@ -314,6 +314,7 @@ import dk.perspektiva.ttsroad.nav.switchToRoot
 import dk.perspektiva.ttsroad.nav.withFiction
 import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
+import dk.perspektiva.ttsroad.player.chaptersPlayedAfter
 import dk.perspektiva.ttsroad.player.jumpBackOptions
 import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
@@ -3064,6 +3065,9 @@ private fun PlayerScreen(
     // should show where you are, not the last thing you went looking for.
     var queueQuery by remember(showChapters) { mutableStateOf("") }
     var showJumpBack by remember { mutableStateOf(false) }
+    // Chapters playback went on to finish after the moment just jumped back to, by fiction (#342).
+    // Non-empty only right after a jump, and only while the offer to unmark them is on screen.
+    var playedAfterJump by remember { mutableStateOf<Map<Int, Set<Int>>>(emptyMap()) }
     LaunchedEffect(showJumpBack) {
         if (!showJumpBack) return@LaunchedEffect
         remoteBreadcrumbs = runCatching {
@@ -3506,6 +3510,43 @@ private fun PlayerScreen(
         }
     }
 
+    if (playedAfterJump.isNotEmpty()) {
+        val count = playedAfterJump.values.sumOf { it.size }
+        val dismiss = { playedAfterJump = emptyMap() }
+        AlertDialog(
+            onDismissRequest = dismiss,
+            containerColor = AarisColor.BgRaise,
+            title = { Text("MARK AS UNPLAYED?", style = MaterialTheme.typography.titleLarge) },
+            text = {
+                Text(
+                    text = "Playback carried on through $count " +
+                        (if (count == 1) "chapter" else "chapters") +
+                        " after this point, marking the ones it finished as played. Mark them " +
+                        "unplayed so they show up as unheard?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AarisColor.Muted,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val marked = playedAfterJump
+                        playedAfterJump = emptyMap()
+                        scope.launch {
+                            actionFeedback = unmarkPlayedAfterJump(marked, repository, context)
+                        }
+                    },
+                    shape = RectangleShape,
+                ) {
+                    Text("MARK UNPLAYED")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = dismiss) { Text("KEEP") }
+            },
+        )
+    }
+
     if (showJumpBack) {
         val now = System.currentTimeMillis()
         var sleepTimeInput by remember { mutableStateOf("") }
@@ -3559,6 +3600,7 @@ private fun PlayerScreen(
                                     scope.launch {
                                         jumpToSnapshot(nearest, playbackController, repository)
                                     }
+                                    playedAfterJump = chaptersPlayedAfter(history, nearest)
                                     showJumpBack = false
                                 }
                             }
@@ -3591,6 +3633,7 @@ private fun PlayerScreen(
                                 scope.launch {
                                     jumpToSnapshot(snap, playbackController, repository)
                                 }
+                                playedAfterJump = chaptersPlayedAfter(history, snap)
                                 showJumpBack = false
                             }
                             .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -3716,6 +3759,36 @@ private suspend fun jumpToSnapshot(
             )
         }
     }
+}
+
+/**
+ * Put back the played marks made while the listener was asleep (#342), in one request.
+ *
+ * The service is told too, through [ServiceLocator.playedMarks]: the item now playing was loaded
+ * with its old flag, and without this the next progress tick would mark it played again.
+ */
+private suspend fun unmarkPlayedAfterJump(
+    chaptersByFiction: Map<Int, Set<Int>>,
+    repository: TtsRoadRepository,
+    context: Context,
+): PlayerActionFeedback {
+    val ids = chaptersByFiction.values.flatten().distinct()
+    return runCatching { repository.markPlayed(ids, played = false) }
+        .fold(
+            onSuccess = {
+                ServiceLocator.playedMarks.remember(ids, played = false)
+                val cache = ServiceLocator.libraryCache(context)
+                chaptersByFiction.forEach { (fictionId, chapterIds) ->
+                    cache.applyPlayed(fictionId, chapterIds, played = false)
+                }
+                PlayerActionFeedback(
+                    "Marked ${ids.size} " + (if (ids.size == 1) "chapter" else "chapters") + " unplayed",
+                )
+            },
+            onFailure = {
+                PlayerActionFeedback(it.message ?: "Could not mark chapters unplayed", danger = true)
+            },
+        )
 }
 
 /**
