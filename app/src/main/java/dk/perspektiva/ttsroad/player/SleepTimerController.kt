@@ -206,7 +206,42 @@ class SleepTimerController {
     private fun restoreVolumeIfFaded(): SleepTimerAction =
         if (appliedVolume < 1f) applyVolume(1f) else SleepTimerAction.None
 
+    /**
+     * One press of the sleep-timer button on the notification, lockscreen or car (#337): off arms
+     * [defaultMinutes]; an armed countdown steps up to the next longer preset; past the longest —
+     * or on an end-of-chapter timer, which has no preset to step to — the timer is cancelled. So
+     * a few presses from bed reach any preset and one more turns it off, with no app needed.
+     */
+    fun cyclePreset(defaultMinutes: Int) {
+        val current = _state.value
+        val next = nextPresetMinutes(current, defaultMinutes)
+        if (next == null) cancel() else armDuration(next * 60_000L)
+    }
+
     companion object {
+        /** See [cyclePreset]; null means "turn it off". */
+        fun nextPresetMinutes(state: SleepTimerState, defaultMinutes: Int): Int? = when (state.mode) {
+            SleepTimerMode.Off -> defaultMinutes.takeIf { it > 0 } ?: ButtonFallbackMinutes
+            SleepTimerMode.EndOfChapter -> null
+            SleepTimerMode.Duration -> DurationOptionsMinutes.firstOrNull { it * 60_000L > state.remainingMs }
+        }
+
+        /**
+         * The button's name, which is the only place its state shows on the notification or car:
+         * whole minutes rounded up, so a fresh 30-minute timer reads "30 min", not "29 min".
+         */
+        fun buttonLabel(state: SleepTimerState): String = when (state.mode) {
+            SleepTimerMode.Off -> "Sleep timer: off"
+            SleepTimerMode.EndOfChapter -> "Sleep timer: end of chapter"
+            SleepTimerMode.Duration -> "Sleep timer: ${(state.remainingMs + 59_999L) / 60_000L} min"
+        }
+
+        /**
+         * What the button arms when the default is "ask me every time" (0): there is nobody to
+         * ask on a lockscreen, and half an hour is the middle of the presets.
+         */
+        const val ButtonFallbackMinutes = 30
+
         /** Ramp the volume down over the last stretch, so audio doesn't cut mid-sentence. */
         const val FadeMs = 30_000L
 

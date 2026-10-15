@@ -148,4 +148,32 @@ class TtsRoadSessionCommandsTest {
                 .filter { it != TtsRoadSessionCommands.SkipBack && it != TtsRoadSessionCommands.SkipForward },
         )
     }
+
+    @Test
+    fun `the sleep timer button is offered in the overflow, last, carrying its state`() {
+        val buttons = TtsRoadSessionCommands.mediaButtonPreferences(
+            bookmarks = true,
+            pronunciationReports = true,
+            sleepTimerLabel = "Sleep timer: off",
+        )
+
+        assertEquals(TtsRoadSessionCommands.SleepTimer, actions(buttons).last())
+        val sleep = buttons.last()
+        assertEquals(listOf(CommandButton.SLOT_OVERFLOW), sleep.slots.asList())
+        assertEquals("Sleep timer: off", sleep.displayName.toString())
+    }
+
+    @Test
+    fun `the sleep timer button does not cost the skips their slots`() {
+        val buttons = TtsRoadSessionCommands.mediaButtonPreferences(sleepTimerLabel = "Sleep timer: off")
+
+        assertEquals(
+            listOf(
+                TtsRoadSessionCommands.SkipBack,
+                TtsRoadSessionCommands.SkipForward,
+                TtsRoadSessionCommands.SleepTimer,
+            ),
+            actions(buttons),
+        )
+    }
 }

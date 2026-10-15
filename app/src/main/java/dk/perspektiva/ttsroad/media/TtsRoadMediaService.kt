@@ -43,6 +43,7 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
+import dk.perspektiva.ttsroad.data.DefaultSleepTimerMinutes
 import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
@@ -158,6 +159,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     @Volatile
     private var skipIntervalMs: Long = DefaultSkipIntervalMs
 
+    // Read by the sleep-timer button on the notification for the same reason (#337).
+    @Volatile
+    private var sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes
+
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
@@ -240,6 +245,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .map { it.skipIntervalMs }
                 .distinctUntilChanged()
                 .collect { skipIntervalMs = it }
+        }
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.sleepTimerDefaultMinutes }
+                .distinctUntilChanged()
+                .collect { sleepTimerDefaultMinutes = it }
         }
         player.addListener(
             departingChapterProgressListener(player, serviceScope) { item, position, duration, completed, flushHistory ->
@@ -341,21 +352,30 @@ class TtsRoadMediaService : MediaLibraryService() {
         browserCallback = BrowserCallback(this)
         session = MediaLibrarySession.Builder(this, growingQueue.sessionPlayer, browserCallback)
             .setSessionActivity(playerActivityIntent())
-            .setMediaButtonPreferences(TtsRoadSessionCommands.mediaButtonPreferences())
+            .setMediaButtonPreferences(
+                TtsRoadSessionCommands.mediaButtonPreferences(
+                    sleepTimerLabel = SleepTimerController.buttonLabel(sleepTimer.state.value),
+                ),
+            )
             .build()
         // The overflow buttons depend on what the server can hold, and that is not known when the
         // session is built — discovery is asynchronous, and a start from the car runs with no UI to
         // have done it. Republishing the buttons when the answer arrives is what makes each one
         // appear on a server that supports it and stay absent on one that does not.
+        // The sleep-timer button's name carries the timer's state, so it is republished as that
+        // changes too — at most once a minute, since the label counts whole minutes.
         serviceScope.launch {
-            repository.currentCapabilities
-                .map { it.bookmarks to it.pronunciationReports }
+            combine(
+                repository.currentCapabilities.map { it.bookmarks to it.pronunciationReports },
+                sleepTimer.state.map { SleepTimerController.buttonLabel(it) },
+            ) { capabilities, sleepLabel -> capabilities to sleepLabel }
                 .distinctUntilChanged()
-                .collect { (bookmarks, pronunciationReports) ->
+                .collect { (capabilities, sleepLabel) ->
                     session.setMediaButtonPreferences(
                         TtsRoadSessionCommands.mediaButtonPreferences(
-                            bookmarks = bookmarks,
-                            pronunciationReports = pronunciationReports,
+                            bookmarks = capabilities.first,
+                            pronunciationReports = capabilities.second,
+                            sleepTimerLabel = sleepLabel,
                         ),
                     )
                 }
@@ -1201,6 +1221,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                         // this decides whether an assistant or a stale controller asking for it
                         // gets an answer at all.
                         .add(TtsRoadSessionCommands.reportPronunciationCommand)
+                        .add(TtsRoadSessionCommands.sleepTimerCommand)
                         .build(),
                 )
                 .build()
@@ -1236,6 +1257,12 @@ class TtsRoadMediaService : MediaLibraryService() {
             }
             if (customCommand.customAction == TtsRoadSessionCommands.ReportPronunciation) {
                 return service.reportPronunciationHere(session, controller)
+            }
+            if (customCommand.customAction == TtsRoadSessionCommands.SleepTimer) {
+                // The timer is the same one the app's sheets drive, so the player screen shows a
+                // timer armed from the lockscreen and vice versa.
+                service.sleepTimer.cyclePreset(service.sleepTimerDefaultMinutes)
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
             val delta = when (customCommand.customAction) {
                 TtsRoadSessionCommands.SkipBack -> -service.skipIntervalMs
