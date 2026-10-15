@@ -243,8 +243,10 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
 
     setup?.let { provisional ->
         LaunchedEffect(provisional) { authenticationCodeFocus.requestFocus() }
+        SecureWindow()
         AlertDialog(
             onDismissRequest = { if (!busy) setup = null },
+            properties = SecretDialogProperties,
             title = { Text("Connect an authenticator") },
             text = {
                 Column(
@@ -383,8 +385,10 @@ internal fun RecoveryCodesDialog(owner: RecoveryCodesOwner) {
     val context = LocalContext.current
     if (hasUnsavedRecoveryCodes(recoveryState.codes)) {
         val codes = recoveryState.codes
+        SecureWindow()
         AlertDialog(
             onDismissRequest = {},
+            properties = SecretDialogProperties,
             title = { Text("Save these recovery codes") },
             text = {
                 Column {
