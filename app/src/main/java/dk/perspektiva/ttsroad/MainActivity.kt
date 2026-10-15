@@ -156,10 +156,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import dk.perspektiva.ttsroad.widget.NowPlayingWidget
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
@@ -4534,10 +4536,17 @@ internal fun SettingsScreen(
                     options = SkipIntervalOptionsMs,
                     selected = prefs.skipIntervalMs,
                     label = ::formatSkipInterval,
-                    onSelect = { scope.launch { preferences.setSkipIntervalMs(it) } },
+                    onSelect = {
+                        scope.launch {
+                            preferences.setSkipIntervalMs(it)
+                            // The widget's skip labels come from this preference, and nothing
+                            // else redraws a widget while playback is paused (#335).
+                            runCatching { NowPlayingWidget().updateAll(context) }
+                        }
+                    },
                 )
                 MetaText(
-                    text = "Used by the player, the mini player, and the lockscreen buttons. " +
+                    text = "Used by the player, the mini player, the lockscreen, the car and the widget. " +
                         PreferenceScope.DevicePlayer,
                     color = AarisColor.Dim,
                 )

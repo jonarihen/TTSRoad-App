@@ -204,4 +204,12 @@ class WidgetPresentationTest {
         assertEquals("1h 12m left", remainingLabel(72 * 60_000L))
         assertEquals("3h 20m left", remainingLabel(200 * 60_000L))
     }
+
+    @Test
+    fun `skip buttons are labelled with the configured interval`() {
+        // #335: the widget said 30 whatever the setting was.
+        assertEquals(SkipButtonLabels("\u221230", "+30"), skipButtonLabels(30_000L))
+        assertEquals(SkipButtonLabels("\u221210", "+10"), skipButtonLabels(10_000L))
+        assertEquals(SkipButtonLabels("\u221260", "+60"), skipButtonLabels(60_000L))
+    }
 }

@@ -41,6 +41,7 @@ import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import dk.perspektiva.ttsroad.MainActivity
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.ui.AarisColor
 
 /** Below this height the widget is one launcher cell tall and only the essentials fit. */
@@ -63,7 +64,7 @@ class NowPlayingWidget : GlanceAppWidget() {
      * Two shapes rather than one that clips.
      *
      * A one-cell strip has room for the book, the chapter and pause; a two-cell one also has room
-     * for the time remaining and the 30-second skips. Glance builds both and the launcher picks,
+     * for the time remaining and the skips. Glance builds both and the launcher picks,
      * so resizing does not require this to be redrawn from the service.
      */
     override val sizeMode = SizeMode.Responsive(
@@ -77,6 +78,12 @@ class NowPlayingWidget : GlanceAppWidget() {
         val signedIn = runCatching { ServiceLocator.tokenStore(context).current().isLoggedIn }
             .getOrDefault(false)
         val view = widgetView(snapshot, signedIn = signedIn, now = System.currentTimeMillis())
+        // The skips move by the configured interval, so the buttons say so (#335). Read here for the
+        // same reason as the session: the process that draws this may have no service running.
+        val skips = skipButtonLabels(
+            runCatching { ServiceLocator.playbackPreferences(context).current().skipIntervalMs }
+                .getOrDefault(DefaultSkipIntervalMs),
+        )
         // Fetched before the composition rather than inside it: a launcher is handed pixels, not a
         // URL, and composition is not the place to be on the network.
         val cover = (view as? WidgetView.Playback)?.let { loadCoverBitmap(context, it.coverUrl) }
@@ -92,14 +99,14 @@ class NowPlayingWidget : GlanceAppWidget() {
 
         provideContent {
             GlanceTheme {
-                WidgetBody(view, cover, open)
+                WidgetBody(view, cover, open, skips)
             }
         }
     }
 }
 
 @Composable
-private fun WidgetBody(view: WidgetView, cover: Bitmap?, open: Intent) {
+private fun WidgetBody(view: WidgetView, cover: Bitmap?, open: Intent, skips: SkipButtonLabels) {
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
@@ -112,7 +119,7 @@ private fun WidgetBody(view: WidgetView, cover: Bitmap?, open: Intent) {
         when (view) {
             WidgetView.SignedOut -> Message("Sign in to TTSRoad")
             WidgetView.NothingPlayed -> Message("Nothing played yet")
-            is WidgetView.Playback -> PlaybackBody(view, cover)
+            is WidgetView.Playback -> PlaybackBody(view, cover, skips)
         }
     }
 }
@@ -126,7 +133,7 @@ private fun Message(text: String) {
 }
 
 @Composable
-private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?) {
+private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?, skips: SkipButtonLabels) {
     val compact = LocalSize.current.height < CompactCeiling
     Row(
         modifier = GlanceModifier.fillMaxWidth(),
@@ -188,11 +195,11 @@ private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?) {
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.Vertical.CenterVertically,
         ) {
-            TransportButton("−30", actionRunCallback<SkipBackAction>())
+            TransportButton(skips.back, actionRunCallback<SkipBackAction>())
             Spacer(GlanceModifier.width(6.dp))
             PlayPauseButton(view)
             Spacer(GlanceModifier.width(6.dp))
-            TransportButton("+30", actionRunCallback<SkipForwardAction>())
+            TransportButton(skips.forward, actionRunCallback<SkipForwardAction>())
         }
     }
 }

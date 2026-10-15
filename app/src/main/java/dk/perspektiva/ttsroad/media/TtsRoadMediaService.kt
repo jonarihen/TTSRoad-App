@@ -193,7 +193,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         ownerProgressRetry = serviceScope.launch { progressSync.flushUntilCapabilitiesResolve() }
     }
 
-    // onCustomCommand is not suspending, so the -30s/+30s buttons on the notification, lockscreen
+    // onCustomCommand is not suspending, so the skip buttons on the notification, lockscreen
     // and car transport read the preference from here rather than the DataStore.
     @Volatile
     private var skipIntervalMs: Long = DefaultSkipIntervalMs
@@ -415,6 +415,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             .setSessionActivity(playerActivityIntent())
             .setMediaButtonPreferences(
                 TtsRoadSessionCommands.mediaButtonPreferences(
+                    skipIntervalMs = skipIntervalMs,
                     sleepTimerLabel = SleepTimerController.buttonLabel(sleepTimer.state.value),
                 ),
             )
@@ -426,14 +427,18 @@ class TtsRoadMediaService : MediaLibraryService() {
         // The sleep-timer button's name carries the timer's state, so it is republished as that
         // changes too — at most once a minute, since the label counts whole minutes.
         serviceScope.launch {
+            // The skip interval rides along for the same reason: the labels and icons have to say
+            // what a press does, and the preference can change while the session is up (#335).
             combine(
                 repository.currentCapabilities.map { it.bookmarks to it.pronunciationReports },
                 sleepTimer.state.map { SleepTimerController.buttonLabel(it) },
-            ) { capabilities, sleepLabel -> capabilities to sleepLabel }
+                preferences.prefs.map { it.skipIntervalMs },
+            ) { capabilities, sleepLabel, skipInterval -> Triple(capabilities, sleepLabel, skipInterval) }
                 .distinctUntilChanged()
-                .collect { (capabilities, sleepLabel) ->
+                .collect { (capabilities, sleepLabel, skipInterval) ->
                     session.setMediaButtonPreferences(
                         TtsRoadSessionCommands.mediaButtonPreferences(
+                            skipIntervalMs = skipInterval,
                             bookmarks = capabilities.first,
                             pronunciationReports = capabilities.second,
                             sleepTimerLabel = sleepLabel,
