@@ -912,6 +912,29 @@ class AudioAuthSnapshotTest {
     }
 
     @Test
+    fun `an item submitted before the stored session is read waits for it instead of being refused`() = runTest {
+        // A cold start from Android Auto or a media button: the controller's item arrives before
+        // the service's session collector has published anything.
+        val address = "https://home.example/ttsroad/"
+        val chapter = withAudioOrigin(requireNotNull(TtsRoadMediaItems.chapter(
+            ChapterSummary(id = 7, fictionId = 1, audio = AudioInfo(url = "/audio/book/1.mp3")), serverUrl = address,
+        )), AudioAuthSnapshot(address, "Bearer a", "alice"))
+        val auth = SessionAudioAuth()
+        // The blank default is exactly what refused every item before.
+        assertFalse(audioItemFromSession(chapter, auth.current))
+
+        val waiting = async { auth.awaitCurrent() }
+        testScheduler.runCurrent()
+        assertFalse(waiting.isCompleted)
+
+        auth.publish(SessionState(serverUrl = address, token = "a", username = "alice").audioAuthSnapshot())
+        assertTrue(audioItemFromSession(chapter, waiting.await()))
+        // Later reads do not wait, and see later sessions.
+        auth.publish(AudioAuthSnapshot(address, "Bearer b", "bob"))
+        assertFalse(audioItemFromSession(chapter, auth.awaitCurrent()))
+    }
+
+    @Test
     fun `active 401 and 403 end the session with a reason and never schedule recovery`() = runTest {
         for (code in listOf(401, 403)) {
             val store = loggedInStore()
