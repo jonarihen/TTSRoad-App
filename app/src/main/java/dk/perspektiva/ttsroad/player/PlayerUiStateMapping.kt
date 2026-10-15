@@ -51,6 +51,14 @@ internal fun buildQueue(player: Player): List<QueueItem> {
 }
 
 /**
+ * Whether "next chapter" can be offered: either the queue already holds a successor, or the
+ * session advertises next for a fiction queue that the service can grow on demand.
+ */
+internal fun canRequestNextChapter(player: Player): Boolean = player.hasNextMediaItem() ||
+    (player.currentMediaItem?.mediaMetadata?.extras?.getInt("fiction_id", 0)?.let { it > 0 } == true &&
+        player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM))
+
+/**
  * Map the player's current state onto the UI state, given an already-resolved [queue].
  *
  * [queue] is passed in rather than derived so the caller can reuse a cached list.
@@ -76,7 +84,7 @@ internal fun playerUiStateOf(player: Player, queue: List<QueueItem>): PlayerUiSt
         speed = player.playbackParameters.speed,
         queue = queue,
         currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
-        hasNext = player.hasNextMediaItem(),
+        hasNext = canRequestNextChapter(player),
         hasPrevious = player.hasPreviousMediaItem(),
         // The cause does not survive the binder, so the HTTP status is unavailable here; the
         // service reads it from the real exception and handles the 401 case there.
