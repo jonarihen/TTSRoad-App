@@ -984,7 +984,6 @@ private fun MainScaffold(
         }
     }
     BackHandler(enabled = canGoBack, onBack = requestBack)
-    val scaffoldScope = rememberCoroutineScope()
     val scaffoldCapabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
     val scaffoldCapabilitiesResolved by repository.currentCapabilitiesResolved.collectAsStateWithLifecycle()
     val playerState by playbackController.state.collectAsStateWithLifecycle()
@@ -1175,35 +1174,32 @@ private fun MainScaffold(
                     state = newChapters,
                     repository = repository,
                     onPlay = { entry ->
-                        scaffoldScope.launch {
-                            runCatching {
-                                val played = playNotificationChapter(
-                                    route = NotificationRoute.Play(entry.fiction.id, entry.chapter.id),
-                                    session = session,
-                                    load = { repository.chapters(it, playableOnly = true) },
-                                    stillAllowed = {
-                                        val current = ServiceLocator.tokenStore(context).current()
-                                        current.serverUrl == session.serverUrl && current.token == session.token &&
-                                            canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
-                                    },
-                                    playQueue = { response, chapterId ->
-                                        playbackController.playQueue(response.chapters, chapterId, response.fiction, expectedSession = session)
-                                    },
-                                )
-                                if (played) onScreenChange(AppScreen.Player)
-                            }
+                        // Failures propagate to the screen, which shows them inline (#348).
+                        val played = playNotificationChapter(
+                            route = NotificationRoute.Play(entry.fiction.id, entry.chapter.id),
+                            session = session,
+                            load = { repository.chapters(it, playableOnly = true) },
+                            stillAllowed = {
+                                val current = ServiceLocator.tokenStore(context).current()
+                                current.serverUrl == session.serverUrl && current.token == session.token &&
+                                    canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
+                            },
+                            playQueue = { response, chapterId ->
+                                playbackController.playQueue(response.chapters, chapterId, response.fiction, expectedSession = session)
+                            },
+                        )
+                        if (played) {
+                            onScreenChange(AppScreen.Player)
+                        } else {
+                            error("That chapter can no longer be played")
                         }
                     },
                     onOpenFiction = { entry ->
-                        scaffoldScope.launch {
-                            runCatching {
-                                // Fetched rather than synthesised from the notice: the payload
-                                // carries enough to draw a row, deliberately not enough to be the
-                                // FictionSummary every screen downstream expects.
-                                val resp = repository.chapters(entry.fiction.id, playableOnly = false)
-                                onScreenChange(AppScreen.Fiction(resp.fiction))
-                            }
-                        }
+                        // Fetched rather than synthesised from the notice: the payload carries
+                        // enough to draw a row, deliberately not enough to be the FictionSummary
+                        // every screen downstream expects.
+                        val resp = repository.chapters(entry.fiction.id, playableOnly = false)
+                        onScreenChange(AppScreen.Fiction(resp.fiction))
                     },
                 )
             }
