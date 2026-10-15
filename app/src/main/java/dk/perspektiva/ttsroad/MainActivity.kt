@@ -3531,6 +3531,21 @@ private fun PlayerScreen(
         val now = System.currentTimeMillis()
         var sleepTimeInput by remember { mutableStateOf("") }
         var sleepTimeError by remember { mutableStateOf<String?>(null) }
+        var confirmClearHistory by remember { mutableStateOf(false) }
+        if (confirmClearHistory) {
+            ConfirmDialog(
+                title = "CLEAR JUMP-BACK HISTORY?",
+                body = "The listening trail this phone recorded — up to the last eight hours — is " +
+                    "deleted, and cannot be brought back. Your progress on the server is not affected.",
+                confirmLabel = "CLEAR",
+                onDismiss = { confirmClearHistory = false },
+                onConfirm = {
+                    confirmClearHistory = false
+                    historyStore.clear()
+                    showJumpBack = false
+                },
+            )
+        }
         ModalBottomSheet(
             onDismissRequest = { showJumpBack = false },
             containerColor = AarisColor.BgRaise,
@@ -3543,10 +3558,11 @@ private fun PlayerScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 MetaText(text = "// Jump back to where you were", color = AarisColor.Accent)
-                TextButton(onClick = {
-                    historyStore.clear()
-                    showJumpBack = false
-                }) {
+                // Asks first (#339): it sits right by the title, and one stray tap wiped the night.
+                TextButton(
+                    onClick = { confirmClearHistory = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = AarisColor.Danger),
+                ) {
                     Text("CLEAR")
                 }
             }
@@ -4009,6 +4025,7 @@ internal fun SettingsScreen(
     // entry, for the same reason the feed list is: this screen is opened to read a version number
     // far more often than to do any of this, and the confirmation is the only thing that needs it.
     var confirmEmptyShelf by remember { mutableStateOf(false) }
+    var confirmSignOut by remember { mutableStateOf(false) }
     var shelfCount by remember { mutableStateOf<Int?>(null) }
     var shelfNote by remember { mutableStateOf<String?>(null) }
     var backupError by remember { mutableStateOf<String?>(null) }
@@ -4761,21 +4778,36 @@ internal fun SettingsScreen(
         }
 
         if (category == SettingsCategory.Profile) {
-        Button(
-            onClick = {
+        // A danger action behind a confirmation, not the page's primary button (#339): one stray
+        // tap used to sign out, and getting back in means retyping the server address and password.
+        OutlinedButton(
+            onClick = { confirmSignOut = true },
+            enabled = !isBusy,
+            shape = RectangleShape,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Danger),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
+        }
+        }
+    }
+
+    if (confirmSignOut) {
+        ConfirmDialog(
+            title = "SIGN OUT?",
+            body = "This phone stops playing and syncing until you sign in again, which needs the " +
+                "server address and your password. Your listening progress stays on the server.",
+            confirmLabel = "SIGN OUT",
+            onDismiss = { confirmSignOut = false },
+            onConfirm = {
+                confirmSignOut = false
                 scope.launch {
                     isBusy = true
                     repository.logout()
                     isBusy = false
                 }
             },
-            enabled = !isBusy,
-            shape = RectangleShape,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
-        }
-        }
+        )
     }
 
     if (confirmEmptyShelf) {

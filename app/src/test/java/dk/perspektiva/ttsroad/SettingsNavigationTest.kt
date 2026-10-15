@@ -190,6 +190,17 @@ class SettingsNavigationTest {
     }
 
     @Test
+    fun `sign out asks before signing out`() {
+        show(SettingsCategory.Profile)
+        compose.onNodeWithText("SIGN OUT").performScrollTo().performClick()
+        compose.onNodeWithText("SIGN OUT?").assertIsDisplayed()
+
+        compose.onNodeWithText("CANCEL").performClick()
+        compose.onNodeWithText("SIGN OUT?").assertDoesNotExist()
+        compose.onNodeWithText("SIGN OUT").assertIsDisplayed()
+    }
+
+    @Test
     fun `playback retains every baseline preference`() {
         show(SettingsCategory.Playback)
         controls("SKIP INTERVAL", "PLAYBACK SPEED", "SLEEP TIMER DEFAULT",
