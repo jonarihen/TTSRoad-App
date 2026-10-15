@@ -168,6 +168,45 @@ http://10.0.2.2:8000
 
 Cleartext HTTP is enabled in the **debug** build only. Release builds require HTTPS.
 
+### Connecting a release build: supported setups
+
+Release builds talk to the server only over **HTTPS with a certificate a stock Android phone
+already trusts**. Two setups are known to work:
+
+- **A public CA certificate on your reverse proxy** — Let's Encrypt via Caddy, Traefik, nginx +
+  certbot, or similar. Sign in with `https://ttsroad.example.com` (or a subpath such as
+  `https://home.example.com/ttsroad/`; audio and covers keep the prefix).
+- **Tailscale with `tailscale cert`** — enable MagicDNS and HTTPS certificates in the tailnet admin
+  console, run `tailscale cert <machine>.<tailnet>.ts.net` on the server (or let `tailscale serve`
+  do it), and sign in with `https://<machine>.<tailnet>.ts.net`. The certificate is a real
+  Let's Encrypt one, so the phone trusts it with no extra setup.
+
+What does **not** work in a release build, by design:
+
+| Setup | What the app says |
+| --- | --- |
+| `http://100.x.y.z:8000` over Tailscale, or any other plain `http://` address | *This app only connects with https:// - plain http:// addresses are blocked.* |
+| A self-signed certificate, or one from a private CA installed on the phone | *This phone doesn't trust the server's security certificate.* |
+
+The raw platform error (`CLEARTEXT communication … not permitted`, `Trust anchor for certification
+path not found`) is still available behind **DETAILS** under the message.
+
+**Decision (#366): no opt-in for cleartext or user-installed CAs.** It was considered and declined:
+
+- Android's network security config can only exempt cleartext per *domain name*, not per address
+  range, so "allow plain HTTP to the Tailscale CGNAT range `100.64.0.0/10`" cannot be expressed —
+  the only workable switch would be cleartext to *every* host. WireGuard does encrypt the tunnel,
+  but the same build would then also send the bearer token in the clear on any other network the
+  address happens to resolve on.
+- Trusting user-installed CAs means any CA on the phone — including one installed by an MDM
+  profile or a "VPN" app — can intercept the session token. `tailscale cert` and Let's Encrypt
+  remove the reason to need one.
+- The debug build (`app/src/debug/res/xml/debug_network_security_config.xml`) keeps both enabled for
+  local development against an emulator or a LAN backend.
+
+If a real deployment needs it later, the narrowest acceptable form is a `<domain-config>` for a
+named host baked in at build time (for example from `local.properties`), not a runtime toggle.
+
 ### Optional: crash reporting
 
 Off unless a DSN is configured, which is the normal state. To point it at a self-hosted Sentry,
