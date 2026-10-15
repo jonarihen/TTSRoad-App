@@ -270,6 +270,7 @@ import dk.perspektiva.ttsroad.data.formatSkipInterval
 import dk.perspektiva.ttsroad.data.readAlongAvailability
 import dk.perspektiva.ttsroad.data.readerAutoScrollOffsetPx
 import dk.perspektiva.ttsroad.data.readerFollowScrollDelta
+import dk.perspektiva.ttsroad.data.ReaderScreenOnGraceMs
 import dk.perspektiva.ttsroad.data.shouldKeepReaderScreenOn
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.allChapterIds
@@ -9532,10 +9533,22 @@ private fun ReaderScreen(
     }
 
     val view = LocalView.current
-    DisposableEffect(prefs.keepScreenOn, sleepTimerState.isFading) {
+    // True while playing and for a short grace after it stops; see shouldKeepReaderScreenOn.
+    // Seeded true so opening the reader on a paused chapter gets the same grace as a pause would.
+    var audioRecentlyActive by remember { mutableStateOf(true) }
+    LaunchedEffect(playerState.isPlaying) {
+        if (playerState.isPlaying) {
+            audioRecentlyActive = true
+        } else {
+            delay(ReaderScreenOnGraceMs)
+            audioRecentlyActive = false
+        }
+    }
+    DisposableEffect(prefs.keepScreenOn, sleepTimerState.isFading, audioRecentlyActive) {
         view.keepScreenOn = shouldKeepReaderScreenOn(
             preferenceEnabled = prefs.keepScreenOn,
             sleepTimerFading = sleepTimerState.isFading,
+            audioRecentlyActive = audioRecentlyActive,
         )
         onDispose { view.keepScreenOn = false }
     }
