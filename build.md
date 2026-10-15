@@ -228,6 +228,10 @@ Important fields:
 
 - `fictions[]`: all tracked fictions with counts and cover URLs.
 - `continue_listening[]`: resume/up-next items. Items may include `audio` with an authenticated stream URL.
+  **Ordered most recently listened first**: one item per fiction with listening history, sorted by
+  the `last_listened_at` of the chapter it resumes (or the fiction's latest listening activity when
+  nothing is mid-chapter), newest first. Clients may take the first item as "the book to resume" —
+  the media service's playback resumption does exactly that.
 - `recent_chapters[]`: recent backend chapters, including status.
 
 **`last_chapter_at` is the one clock on a fiction that means "this book gained a chapter."** It is

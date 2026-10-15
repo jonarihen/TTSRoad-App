@@ -1152,6 +1152,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
         val session = librarySessionGeneration
         val library = library() ?: return null
+        // First is the most recently heard: the server sorts continue_listening by last listening
+        // activity, newest first (build.md, "continue_listening[]"). The items carry no documented
+        // timestamp to re-sort on, so the server's order is the contract (#330).
         val chapter = library.continueListening.firstOrNull() ?: return null
         val fictionId = chapter.resolvedFictionId.takeIf { it > 0 } ?: return null
         return buildFictionQueue(fictionId, chapter.resolvedChapterId, session)
