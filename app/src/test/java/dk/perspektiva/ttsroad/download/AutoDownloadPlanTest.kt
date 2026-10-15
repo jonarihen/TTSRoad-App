@@ -216,4 +216,17 @@ class AutoDownloadPlanTest {
         assertTrue(plan.download.isEmpty())
         assertEquals(listOf(9), plan.release)
     }
+
+    @Test
+    fun `a release counts as sent only when its remove answered true`() {
+        val sent = sentReleases(listOf(1, 2, 3)) { chapterId ->
+            when (chapterId) {
+                1 -> true
+                2 -> false // retained migration state could not be written: nothing went out
+                else -> throw IllegalStateException("background start refused")
+            }
+        }
+
+        assertEquals(listOf(1), sent)
+    }
 }

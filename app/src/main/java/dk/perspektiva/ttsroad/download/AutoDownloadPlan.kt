@@ -101,3 +101,13 @@ fun keepAheadReleaseWhenOff(
         .mapNotNull { TtsRoadMediaIds.chapterId(it) }
         .sorted()
 }
+
+/**
+ * The chapters of [release] whose removal actually went out.
+ *
+ * Both ways a remove can fail count as unsent: a refused service start throws, and a delete whose
+ * retained migration state could not be written answers false having sent nothing. Counting the
+ * second as sent would mark the chapter released, and the keep-ahead window would never ask again.
+ */
+internal fun sentReleases(release: List<Int>, remove: (Int) -> Boolean): List<Int> =
+    release.filter { runCatching { remove(it) }.getOrDefault(false) }

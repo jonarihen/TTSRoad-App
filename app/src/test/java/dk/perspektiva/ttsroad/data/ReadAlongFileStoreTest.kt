@@ -172,10 +172,10 @@ class ReadAlongFileStoreTest {
 
     @Test
     fun `the cache is bounded, so a long series does not fill the phone`() {
-        // A ticking clock: writes inside one millisecond would otherwise tie on lastModified, and
-        // which of the tied files eviction kept then depended on directory listing order.
-        var now = 1_700_000_000_000L
-        val store = ReadAlongFileStore(folder.root, maxEntries = 3, clock = { now.also { now += 1_000 } })
+        // An advancing clock: six writes usually land in one wall-clock millisecond, and with every
+        // file sharing a timestamp eviction may legitimately pick the newest one.
+        var now = 1_000L
+        val store = ReadAlongFileStore(folder.root, maxEntries = 3, clock = { now++ * 1_000 })
 
         for (chapterId in 1..6) {
             store.write(chapterId = chapterId, entry = entry("Chapter $chapterId.", chapterId = chapterId))

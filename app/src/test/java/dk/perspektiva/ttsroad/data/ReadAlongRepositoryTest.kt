@@ -446,6 +446,45 @@ class ReadAlongRepositoryTest {
     }
 
     @Test
+    fun `memory holds only the most recently used documents, and an evicted one reloads from disk`() = runTest {
+        val disk = FakeReadAlongStore()
+        val repository = repository(readAlongStore = disk)
+        val chapters = (1..ReadAlongMemoryLimit + 1).toList()
+        for (chapterId in chapters) {
+            server.enqueue(MockResponse().setBody(bodyFor(chapterId)).setHeader("ETag", "\"e$chapterId\""))
+            repository.readAlong(chapterId)
+        }
+
+        assertNull("the least recently used document is evicted from memory", repository.loadedReadAlong(chapters.first()))
+        chapters.drop(1).forEach { assertNotNull(repository.loadedReadAlong(it)) }
+
+        // Still on disk, so reopening it revalidates against the stored ETag rather than refetching.
+        repeat(chapters.size) { server.takeRequest() }
+        server.enqueue(MockResponse().setResponseCode(304))
+        val reopened = repository.readAlong(chapters.first())
+
+        assertEquals("Chapter ${chapters.first()}.", reopened!!.text)
+        assertEquals("\"e${chapters.first()}\"", server.takeRequest().getHeader("If-None-Match"))
+        assertNotNull(repository.loadedReadAlong(chapters.first()))
+    }
+
+    @Test
+    fun `reading a document keeps it in memory ahead of ones read since`() = runTest {
+        val repository = repository()
+        server.enqueue(MockResponse().setBody(bodyFor(1)).setHeader("ETag", "\"e1\""))
+        repository.readAlong(1)
+        for (chapterId in 2..ReadAlongMemoryLimit + 1) {
+            // Touch chapter 1 between each new one, as the reader returning to it would.
+            assertNotNull(repository.loadedReadAlong(1))
+            server.enqueue(MockResponse().setBody(bodyFor(chapterId)).setHeader("ETag", "\"e$chapterId\""))
+            repository.readAlong(chapterId)
+        }
+
+        assertNotNull(repository.loadedReadAlong(1))
+        assertNull(repository.loadedReadAlong(2))
+    }
+
+    @Test
     fun `signing out drops every cached chapter, on disk and in memory`() = runTest {
         val disk = FakeReadAlongStore()
         val repository = repository(readAlongStore = disk)

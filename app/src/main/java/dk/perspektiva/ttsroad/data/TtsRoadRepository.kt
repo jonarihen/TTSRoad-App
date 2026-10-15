@@ -42,6 +42,9 @@ private val CapabilityTtlMillis = TimeUnit.HOURS.toMillis(6)
 private const val SlowUploadTimeoutMinutes = 5
 private const val ApiCacheServerLimit = 4
 
+/** Parsed read-along documents held in memory: the open chapter and the couple either side of it. */
+internal const val ReadAlongMemoryLimit = 3
+
 /**
  * Batch size to use when the server advertises `batch_progress` but names no limit.
  *
@@ -216,8 +219,19 @@ class TtsRoadRepository(
      * The parsed document is held, not the payload, because a chapter runs to tens of thousands of
      * cues: re-deriving spans and sentences on every 304 would put a visible pause on the way back
      * into a chapter the user just left.
+     *
+     * Access-ordered and capped at [ReadAlongMemoryLimit]: the reader follows the playing chapter, so
+     * an unbounded map grew by one document per chapter for the life of the process. An evicted
+     * document is promoted back from [readAlongStore] by [cachedReadAlong] when it is next opened.
      */
-    private val readAlongCache = HashMap<Int, CachedReadAlongDocument>()
+    private val readAlongCache = object : LinkedHashMap<Int, CachedReadAlongDocument>(
+        ReadAlongMemoryLimit + 1,
+        0.75f,
+        true,
+    ) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, CachedReadAlongDocument>?): Boolean =
+            size > ReadAlongMemoryLimit
+    }
 
     private data class CachedReadAlongDocument(
         val etag: String?,

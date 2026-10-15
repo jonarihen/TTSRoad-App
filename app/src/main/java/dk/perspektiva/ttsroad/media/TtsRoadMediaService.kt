@@ -25,6 +25,7 @@ import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
@@ -960,11 +961,19 @@ class TtsRoadMediaService : MediaLibraryService() {
         // and this client did not, marking past 96% regardless — and because the phone writes
         // is_played to the same rows the browser reads, unticking the box in a browser was being
         // overridden by the device doing most of the listening (#119).
-        val isPlayed = PlayedThreshold.reached(
-            positionMs = position,
-            durationMs = duration,
-            autoMarkEnabled = preferences.current().autoMarkPlayed,
-            queueEnded = queueEnded,
+        //
+        // And sticky, like the web player: the server stores is_played exactly as sent, so replaying
+        // a finished chapter would otherwise un-mark it on the first tick (#325).
+        val isPlayed = ServiceLocator.playedMarks.resolve(
+            chapterId = chapterId,
+            loadedAsPlayed = extras?.getInt(MediaConstants.EXTRAS_KEY_COMPLETION_STATUS, -1) ==
+                MediaConstants.EXTRAS_VALUE_COMPLETION_STATUS_FULLY_PLAYED,
+            thresholdReached = PlayedThreshold.reached(
+                positionMs = position,
+                durationMs = duration,
+                autoMarkEnabled = preferences.current().autoMarkPlayed,
+                queueEnded = queueEnded,
+            ),
         )
 
         // Queue first, then try to send. The write used to be a bare `runCatching` around the post,
@@ -1215,6 +1224,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
         val session = librarySessionGeneration
         val library = library() ?: return null
+        // First is the most recently heard: the server sorts continue_listening by last listening
+        // activity, newest first (build.md, "continue_listening[]"). The items carry no documented
+        // timestamp to re-sort on, so the server's order is the contract (#330).
         val chapter = library.continueListening.firstOrNull() ?: return null
         val fictionId = chapter.resolvedFictionId.takeIf { it > 0 } ?: return null
         return buildFictionQueue(fictionId, chapter.resolvedChapterId, session)
