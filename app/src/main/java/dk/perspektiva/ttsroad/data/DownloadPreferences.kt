@@ -66,11 +66,14 @@ val KeepAheadChoices: List<Int> = listOf(0, 3, 5, 10, 20)
  * number can exist: everything it governs was merely played, so losing it costs a re-buffer and
  * nothing else, while chapters asked for by name are in a store with no evictor at all.
  *
- * One gigabyte is a few dozen chapters of TTS audio — enough that replaying last night's listening
- * is free, and small enough that an install does not quietly grow without limit for a year. Anyone
- * who wants the old unbounded behaviour has [StreamingCacheUnlimited] one tap away.
+ * 512 MB is a couple of dozen chapters of TTS audio — enough that replaying last night's listening
+ * is free, and small enough that an install does not quietly grow without limit for a year. It was
+ * 1 GB before #373: the cache lives in `filesDir` (see `OfflineDownloads.streamingCache` for why),
+ * so the OS never reclaims it under storage pressure, and a default the system cannot shrink
+ * should be the modest one. Settings shows what it currently holds and offers bigger caps,
+ * including [StreamingCacheUnlimited], one tap away.
  */
-const val DefaultStreamingCacheBytes: Long = 1024L * 1024L * 1024L
+const val DefaultStreamingCacheBytes: Long = 512L * 1024L * 1024L
 
 /** The cap meaning "keep everything", which is what every build before 0.13.0 did. */
 const val StreamingCacheUnlimited: Long = Long.MAX_VALUE
