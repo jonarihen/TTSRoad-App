@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.data
 
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -542,6 +543,32 @@ class TtsRoadRepositoryAuthTest {
         assertEquals(authorization, request.getHeader("Authorization"))
         assertNull(request.getHeader(NoAuthHeader))
         assertNull(request.getHeader(SlowUploadHeader))
+    }
+
+    @Test
+    fun `a cancelled login propagates cancellation instead of reporting a failure`() = runTest {
+        val store = object : SessionStore by FakeSessionStore(SessionState()) {
+            override suspend fun saveLogin(baseUrl: String, response: LoginResponse) {
+                throw CancellationException("login scope cancelled")
+            }
+        }
+        val repository = TtsRoadRepository(store)
+        server.enqueue(
+            MockResponse().setBody(
+                """{"token":"fresh","token_type":"bearer","user":{"id":1,"username":"admin"}}""",
+            ),
+        )
+
+        val thrown = runCatching {
+            repository.login(
+                baseUrl = server.url("/").toString(),
+                username = "admin",
+                password = "correct",
+                deviceName = "Pixel",
+            )
+        }.exceptionOrNull()
+
+        assertTrue("expected cancellation, got $thrown", thrown is CancellationException)
     }
 
     @Test
