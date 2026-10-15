@@ -1,13 +1,18 @@
 package dk.perspektiva.ttsroad.widget
 
 import android.content.Context
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
 import androidx.test.core.app.ApplicationProvider
 import dk.perspektiva.ttsroad.player.FakePlayer
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -68,5 +73,51 @@ class AwaitPlaybackStartTest {
         controller.awaitPlaybackStart(timeoutMs = 5_000L)
 
         assertTrue(controller.isPlaying)
+    }
+
+    /** Hands the test the listener the awaiter registers, so it can fire events at will. */
+    private class ListenerCapturingPlayer : ForwardingPlayer(FakePlayer()) {
+        val listeners = mutableListOf<Player.Listener>()
+
+        override fun addListener(listener: Player.Listener) {
+            listeners += listener
+            super.addListener(listener)
+        }
+
+        override fun removeListener(listener: Player.Listener) {
+            listeners -= listener
+            super.removeListener(listener)
+        }
+    }
+
+    @Test
+    fun `a second start event after resuming does not resume again`() = runTest {
+        val player = ListenerCapturingPlayer()
+        val waiting = launch(start = CoroutineStart.UNDISPATCHED) {
+            player.awaitPlaybackStart(timeoutMs = 5_000L)
+        }
+        val listener = player.listeners.single()
+
+        // Both arrive before the resumed coroutine gets to run — the case that used to throw
+        // "Already resumed" from inside a Media3 listener (#320).
+        listener.onPlaybackStateChanged(Player.STATE_BUFFERING)
+        listener.onIsPlayingChanged(true)
+        waiting.join()
+
+        assertTrue(waiting.isCompleted)
+        assertEquals(emptyList<Player.Listener>(), player.listeners)
+    }
+
+    @Test
+    fun `the listener is detached once playback starts`() = runTest {
+        val player = ListenerCapturingPlayer()
+        val waiting = launch(start = CoroutineStart.UNDISPATCHED) {
+            player.awaitPlaybackStart(timeoutMs = 5_000L)
+        }
+
+        player.listeners.single().onIsPlayingChanged(true)
+        waiting.join()
+
+        assertTrue(player.listeners.isEmpty())
     }
 }
