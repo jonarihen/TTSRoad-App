@@ -457,6 +457,8 @@ private fun TtsRoadApp(
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
+    // The app explains first and the system asks second (#364); see NotificationRationale.kt.
+    var notificationRationaleOpen by remember { mutableStateOf(false) }
 
     val session = resolvedSession(
         sessionFlow = tokenStore.session,
@@ -470,9 +472,14 @@ private fun TtsRoadApp(
             // and this phone does not, and answers null rather than throwing on an older server.
             accountPreferenceSync.pull()
             playbackController.connect()
-            // Ask once playback becomes possible, so the rationale for the prompt is obvious.
-            if (needsNotificationPermission(context)) {
-                notificationPermissionLauncher.launch(PostNotificationsPermission)
+            // Offer once playback becomes possible, with the app's own explanation in front of the
+            // system prompt rather than the bare prompt on its own.
+            if (shouldOfferNotificationRationale(
+                    needsPermission = needsNotificationPermission(context),
+                    answeredBefore = NotificationRationalePrefs.answered(context),
+                )
+            ) {
+                notificationRationaleOpen = true
             }
         },
         onSignedOut = {
@@ -571,6 +578,19 @@ private fun TtsRoadApp(
         }
         if (session != null && recoveryCodesState.codes.isNotEmpty() && recoveryCodesOwner.owns(session)) {
             RecoveryCodesDialog(recoveryCodesOwner)
+        }
+        if (notificationRationaleOpen && session?.isLoggedIn == true) {
+            NotificationRationaleDialog(
+                onAllow = {
+                    notificationRationaleOpen = false
+                    NotificationRationalePrefs.markAnswered(context)
+                    notificationPermissionLauncher.launch(PostNotificationsPermission)
+                },
+                onNotNow = {
+                    notificationRationaleOpen = false
+                    NotificationRationalePrefs.markAnswered(context)
+                },
+            )
         }
     }
 
