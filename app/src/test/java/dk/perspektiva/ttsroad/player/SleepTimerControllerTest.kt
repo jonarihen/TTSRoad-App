@@ -135,6 +135,60 @@ class SleepTimerControllerTest {
     }
 
     @Test
+    fun `a short pause keeps the timer`() {
+        controller.armDuration(30 * 60_000L)
+        run(fromMs = 0L, forMs = 50 * 60_000L, stepMs = 60_000L, isPlaying = false)
+
+        assertTrue(controller.state.value.isArmed)
+        assertEquals(30 * 60_000L, controller.state.value.remainingMs)
+    }
+
+    @Test
+    fun `a timer paused for an hour is dropped`() {
+        controller.armDuration(30 * 60_000L)
+        run(fromMs = 0L, forMs = 10 * 60_000L)
+        run(fromMs = 10 * 60_000L, forMs = SleepTimerController.PausedExpiryMs, stepMs = 60_000L, isPlaying = false)
+
+        assertFalse(controller.state.value.isArmed)
+        assertEquals(SleepTimerMode.Off, controller.state.value.mode)
+    }
+
+    @Test
+    fun `a timer paused overnight is dropped even when the first tick after it sees playback`() {
+        controller.armDuration(10 * 60_000L)
+        controller.tick(0L, isPlaying = false, chapterRemainingMs = null)
+        // The device dozed through the night: no ticks until the listener presses play next day.
+        val action = controller.tick(14 * 60 * 60_000L, isPlaying = true, chapterRemainingMs = null)
+
+        assertEquals(SleepTimerAction.None, action)
+        assertFalse(controller.state.value.isArmed)
+    }
+
+    @Test
+    fun `playing again resets the pause clock`() {
+        controller.armDuration(30 * 60_000L)
+        run(fromMs = 0L, forMs = 40 * 60_000L, stepMs = 60_000L, isPlaying = false)
+        controller.tick(41 * 60_000L, isPlaying = true, chapterRemainingMs = null)
+        run(fromMs = 42 * 60_000L, forMs = 40 * 60_000L, stepMs = 60_000L, isPlaying = false)
+
+        assertTrue(controller.state.value.isArmed)
+    }
+
+    @Test
+    fun `an end of chapter timer paused for an hour is dropped`() {
+        controller.armEndOfChapter(chapterRemainingMs = 20 * 60_000L)
+        run(
+            fromMs = 0L,
+            forMs = SleepTimerController.PausedExpiryMs,
+            stepMs = 60_000L,
+            isPlaying = false,
+            chapterRemainingMs = 20 * 60_000L,
+        )
+
+        assertEquals(SleepTimerMode.Off, controller.state.value.mode)
+    }
+
+    @Test
     fun `the last 30 seconds fade proportionally`() {
         controller.armDuration(40_000L)
         // 25s in: 15s left, so roughly half volume.

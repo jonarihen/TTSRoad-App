@@ -63,6 +63,9 @@ class SleepTimerController {
     private var lastTickMs: Long? = null
     private var appliedVolume: Float = 1f
 
+    /** When the player was first seen paused with this timer armed, or null while it plays. */
+    private var pausedSinceMs: Long? = null
+
     // Arming, cancelling, and extending only move the state; [tick] is the single place that
     // decides what the player's volume should be, so the UI can call these without a player.
 
@@ -73,6 +76,7 @@ class SleepTimerController {
             return
         }
         lastTickMs = null
+        pausedSinceMs = null
         _state.value = SleepTimerState(mode = SleepTimerMode.Duration, remainingMs = durationMs)
     }
 
@@ -86,6 +90,7 @@ class SleepTimerController {
      */
     fun armEndOfChapter(chapterRemainingMs: Long, capMs: Long? = null) {
         lastTickMs = null
+        pausedSinceMs = null
         val cap = capMs?.coerceAtLeast(0L)
         val toChapterEnd = chapterRemainingMs.coerceAtLeast(0L)
         _state.value = SleepTimerState(
@@ -97,6 +102,7 @@ class SleepTimerController {
 
     fun cancel() {
         lastTickMs = null
+        pausedSinceMs = null
         _state.value = SleepTimerState()
     }
 
@@ -111,6 +117,7 @@ class SleepTimerController {
     fun extend(extraMs: Long) {
         val current = _state.value
         if (!current.isArmed) return
+        pausedSinceMs = null
         _state.value = SleepTimerState(
             mode = SleepTimerMode.Duration,
             remainingMs = current.remainingMs + extraMs,
@@ -137,11 +144,25 @@ class SleepTimerController {
         val atChapterEnd = current.mode == SleepTimerMode.EndOfChapter &&
             chapterRemainingMs != null && chapterRemainingMs <= 0L
 
-        if (!isPlaying && !atChapterEnd) {
-            // A manual pause freezes the countdown rather than spending it, and calls off any
-            // fade in progress — pressing play again should not be met with silence.
+        // A timer left paused for longer than PausedExpiryMs belongs to a night that is over.
+        // Checked on the playing branch too: the tick can stall while the device dozes, so the
+        // first tick after a long pause may already see the player running again.
+        val pausedSince = pausedSinceMs
+        if (pausedSince != null && nowMs - pausedSince >= PausedExpiryMs) {
+            lastTickMs = null
+            pausedSinceMs = null
+            _state.value = SleepTimerState()
             return restoreVolumeIfFaded()
         }
+
+        if (!isPlaying && !atChapterEnd) {
+            // A manual pause freezes the countdown rather than spending it, and calls off any
+            // fade in progress — pressing play again should not be met with silence. A short
+            // pause (the bathroom, a sip of water) keeps the timer; a long one drops it above.
+            if (pausedSinceMs == null) pausedSinceMs = nowMs
+            return restoreVolumeIfFaded()
+        }
+        pausedSinceMs = null
 
         val elapsedMs = previousTickMs?.let { (nowMs - it).coerceAtLeast(0L) } ?: 0L
         // The ceiling is wall-clock, like a plain countdown, so it is spent by playing rather than
@@ -158,6 +179,7 @@ class SleepTimerController {
 
         if (remainingMs <= 0L) {
             lastTickMs = null
+            pausedSinceMs = null
             appliedVolume = 1f
             _state.value = SleepTimerState()
             return SleepTimerAction.Expire
@@ -187,6 +209,14 @@ class SleepTimerController {
     companion object {
         /** Ramp the volume down over the last stretch, so audio doesn't cut mid-sentence. */
         const val FadeMs = 30_000L
+
+        /**
+         * How long a paused timer survives before it is dropped. A pause freezes the countdown
+         * so a short break does not spend it, but a timer paused at night must not wake up the
+         * next afternoon and fade out the chores. An hour is longer than any break a listener
+         * means to come back from, and shorter than a night.
+         */
+        const val PausedExpiryMs = 60 * 60_000L
 
         /** How much a shake during the fade buys you. */
         const val ExtendMs = 5 * 60_000L
