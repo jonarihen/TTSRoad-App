@@ -9,6 +9,11 @@ import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheKeyFactory
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.offline.DefaultDownloadIndex
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadCursor
+import androidx.media3.exoplayer.offline.DownloadIndex
+import androidx.media3.exoplayer.offline.DownloadRequest
 import android.net.Uri
 import dk.perspektiva.ttsroad.data.StreamingCacheUnlimited
 import java.io.File
@@ -45,6 +50,7 @@ class MediaCachesTest {
     private lateinit var downloadCache: Cache
     private lateinit var streamingCache: Cache
     private lateinit var streamingEvictor: ResizableLruCacheEvictor
+    private lateinit var downloadIndex: DefaultDownloadIndex
 
     /** Switched off to mean airplane mode: the only way to prove a read came off the disk. */
     private var serverReachable = true
@@ -56,6 +62,7 @@ class MediaCachesTest {
     fun setUp() {
         val context = RuntimeEnvironment.getApplication()
         val provider = StandaloneDatabaseProvider(context)
+        downloadIndex = DefaultDownloadIndex(provider)
         downloadCache = SimpleCache(
             File(context.filesDir, "test_downloads_${System.nanoTime()}"),
             NoOpCacheEvictor(),
@@ -207,14 +214,982 @@ class MediaCachesTest {
         assertEquals(5, streamingCache.keys.size)
     }
 
+    @Test
+    fun `an index open failure retains every cached span and download record`() {
+        assertFailedMigrationRetainsLibrary(object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                throw IOException("index unavailable")
+            }
+        })
+    }
+
+    @Test
+    fun `an index cursor failure after one record retains the entire library`() {
+        assertFailedMigrationRetainsLibrary(object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun moveToNext(): Boolean {
+                        if (cursor.position >= 0) throw IOException("cursor read failed")
+                        return cursor.moveToNext()
+                    }
+                }
+            }
+        })
+    }
+
+    @Test
+    fun `an index cursor close failure retains every cached span and record`() {
+        assertFailedMigrationRetainsLibrary(object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        throw IOException("cursor close failed")
+                    }
+                }
+            }
+        })
+    }
+
+    @Test
+    fun `a failed identity migration retries the same identity when the index recovers`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val incoming = DownloadCacheKeys.serverIdentity("https://ttsroad.example")!!
+        var unavailable = true
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                if (unavailable) throw IOException("index unavailable")
+                return downloadIndex.getDownloads(*states)
+            }
+        }
+        val rekeyed = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            rekeyed += request.id
+            downloadCache.removeResource(request.customCacheKey!!)
+            val replacement = DownloadRequest.Builder(request.id, request.uri)
+                .setCustomCacheKey(DownloadCacheKeys.forUrl(request.uri.toString(), incoming))
+                .setData(request.data)
+                .build()
+            downloadIndex.putDownload(
+                Download(replacement, Download.STATE_QUEUED, 0, 0, -1, 0, 0),
+            )
+        }
+
+        assertFalse(migration.migrate(incoming, index, downloadCache, rekey = rekey))
+        unavailable = false
+        assertTrue(migration.migrate(incoming, index, downloadCache, rekey = rekey))
+
+        assertEquals(incoming, migration.identity)
+        assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.toSet())
+        assertEquals(setOf("other.example /audio/chapter.mp3", "other.example /audio/orphan.mp3"), downloadCache.keys)
+        for (id in rekeyed) {
+            val download = downloadIndex.getDownload(id)!!
+            assertEquals(Download.STATE_QUEUED, download.state)
+            assertTrue(download.request.customCacheKey!!.startsWith("$incoming "))
+        }
+        assertEquals(Download.STATE_COMPLETED, downloadIndex.getDownload("chapter:3")!!.state)
+        assertTrue(migration.migrate(incoming, index, downloadCache, rekey = rekey))
+        assertEquals(2, rekeyed.size)
+    }
+
+    @Test
+    fun `a successful identity index read removes only genuine unscoped orphans`() {
+        seedMigrationLibrary()
+        val records = indexedRecords()
+        val migration = DownloadIdentityMigration()
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertTrue(
+            migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekeyed::add),
+        )
+
+        assertEquals(
+            setOf(DefaultKey, "/audio/second.mp3", "other.example /audio/chapter.mp3", "other.example /audio/orphan.mp3"),
+            downloadCache.keys,
+        )
+        assertTrue(downloadCache.isCached(DefaultKey, 0, body.size.toLong() * 2))
+        assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.map { it.id }.toSet())
+        assertEquals(records, indexedRecords())
+    }
+
+    @Test
+    fun `a successfully empty identity index removes unscoped orphans but keeps scoped spans`() {
+        writeInto(downloadCache)
+        writeInto(downloadCache, "other.example /audio/chapter.mp3")
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertTrue(
+            DownloadIdentityMigration().migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekeyed::add),
+        )
+
+        assertEquals(setOf("other.example /audio/chapter.mp3"), downloadCache.keys)
+        assertTrue(rekeyed.isEmpty())
+        assertTrue(indexedRecords().isEmpty())
+    }
+
+    @Test
+    fun `a session reset during the index read aborts cleanup and rekeying`() {
+        seedMigrationLibrary()
+        val records = indexedRecords()
+        val spans = cachedSpans()
+        val migration = DownloadIdentityMigration()
+        var current = true
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        current = false
+                    }
+                }
+            }
+        }
+
+        assertFalse(
+            migration.migrate("ttsroad.example", index, downloadCache, isCurrent = { current }) {
+                error("must not rekey a previous session")
+            },
+        )
+
+        assertEquals(null, migration.identity)
+        assertEquals(records, indexedRecords())
+        assertEquals(spans, cachedSpans())
+    }
+
+    @Test
+    fun `a download queued during the snapshot uses the selected identity and survives migration`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val incoming = "ttsroad.example"
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        val key = DownloadCacheKeys.forUrl(Url, incoming)
+                        writeInto(downloadCache, key)
+                        val request = DownloadRequest.Builder("chapter:4", Uri.parse(Url)).setCustomCacheKey(key).build()
+                        downloadIndex.putDownload(Download(request, Download.STATE_COMPLETED, 0, 0, body.size.toLong(), 0, 0))
+                    }
+                }
+            }
+        }
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertTrue(migration.migrate("ttsroad.example", index, downloadCache, rekey = rekeyed::add))
+
+        assertEquals("ttsroad.example $DefaultKey", downloadIndex.getDownload("chapter:4")!!.request.customCacheKey)
+        assertFalse(rekeyed.any { it.id == "chapter:4" })
+        serverReachable = false
+        assertArrayEquals(body, readThroughChain(cacheKeyFactory = CacheKeyFactory { DownloadCacheKeys.forUrl(it.uri.toString(), incoming) }))
+    }
+
+    @Test
+    fun `a refused rekey keeps migration incomplete and retries after foreground recovery`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val before = cachedSpans()
+        val records = indexedRecords()
+        var refused = true
+        val dispatched = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            if (refused) throw IllegalStateException("background service start refused")
+            dispatched += request.id
+        }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(null, migration.identity)
+        assertEquals(before, cachedSpans())
+        assertEquals(records, indexedRecords())
+        refused = false
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals("ttsroad.example", migration.identity)
+        assertEquals(setOf("chapter:1", "chapter:2"), dispatched.toSet())
+        assertFalse(downloadCache.keys.contains("/audio/orphan.mp3"))
+    }
+
+    @Test
+    fun `a rekey whose remove succeeded but add failed retains its request even without an index row`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        var refuseAdd = true
+        val replacementIds = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            downloadIndex.removeDownload(request.id)
+            downloadCache.removeResource(request.customCacheKey!!)
+            if (refuseAdd) throw IllegalStateException("add refused")
+            val replacement = DownloadRequest.Builder(request.id, request.uri)
+                .setCustomCacheKey(DownloadCacheKeys.forUrl(request.uri.toString(), "ttsroad.example"))
+                .setData(request.data)
+                .build()
+            downloadIndex.putDownload(Download(replacement, Download.STATE_QUEUED, 0, 0, -1, 0, 0))
+            replacementIds += request.id
+        }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(null, migration.identity)
+        assertEquals(null, downloadIndex.getDownload("chapter:1"))
+        assertTrue(downloadCache.keys.contains("/audio/orphan.mp3"))
+        refuseAdd = false
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(setOf("chapter:1", "chapter:2"), replacementIds.toSet())
+        for (id in replacementIds) assertEquals(Download.STATE_QUEUED, downloadIndex.getDownload(id)!!.state)
+        assertFalse(downloadCache.keys.contains("/audio/orphan.mp3"))
+    }
+
+    @Test
+    fun `a user removal drops a retained failed rekey so a retry never re-queues it`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        // The migration's own remove went through; only the replacement add was refused.
+        val deleted = attempted.single()
+        assertEquals(null, downloadIndex.getDownload(deleted))
+        // The user deletes that chapter before the foreground retry: OfflineDownloads.remove().
+        migration.forget(deleted, "ttsroad.example")
+        downloadIndex.removeDownload(deleted)
+        refuseAdd = false
+        attempted.clear()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertEquals("ttsroad.example", migration.identity)
+        assertFalse("$deleted was resurrected", deleted in attempted)
+        assertEquals(setOf("chapter:1", "chapter:2") - deleted, replacementIds.toSet())
+        assertEquals(null, downloadIndex.getDownload(deleted))
+    }
+
+    @Test
+    fun `a user removal of a different chapter keeps the migration's own retained rekey`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        val retained = attempted.single()
+        val other = (setOf("chapter:1", "chapter:2") - retained).single()
+        migration.forget(other, "ttsroad.example")
+        downloadIndex.removeDownload(other)
+        refuseAdd = false
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        // Removed by the migration itself, not by the user: still owed its replacement.
+        assertEquals(listOf(retained), replacementIds)
+        assertEquals(Download.STATE_QUEUED, downloadIndex.getDownload(retained)!!.state)
+        assertEquals(null, downloadIndex.getDownload(other))
+    }
+
+    @Test
+    fun `removing every download drops all retained failed rekeys`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(1, attempted.size)
+        // OfflineDownloads.removeAll(): every record goes, including the ones never attempted.
+        migration.forgetAll()
+        indexedRecords().forEach { (request, _) -> downloadIndex.removeDownload(request.id) }
+        refuseAdd = false
+        attempted.clear()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertEquals("ttsroad.example", migration.identity)
+        assertTrue("resurrected $attempted", attempted.isEmpty())
+        assertTrue(replacementIds.isEmpty())
+        assertTrue(indexedRecords().isEmpty())
+    }
+
+    @Test
+    fun `a removal while the index snapshot is open is not rekeyed from that snapshot`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        migration.forget("chapter:1", "ttsroad.example")
+                        downloadIndex.removeDownload("chapter:1")
+                    }
+                }
+            }
+        }
+        val rekeyed = mutableListOf<String>()
+
+        assertTrue(migration.migrate("ttsroad.example", index, downloadCache) { rekeyed += it.id })
+
+        assertEquals(listOf("chapter:2"), rekeyed)
+    }
+
+    @Test
+    fun `removing every download while the index snapshot is open rekeys nothing from it`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                val cursor = downloadIndex.getDownloads(*states)
+                return object : DownloadCursor by cursor {
+                    override fun close() {
+                        cursor.close()
+                        migration.forgetAll()
+                    }
+                }
+            }
+        }
+        val rekeyed = mutableListOf<String>()
+
+        assertTrue(migration.migrate("ttsroad.example", index, downloadCache) { rekeyed += it.id })
+
+        assertTrue("rekeyed $rekeyed", rekeyed.isEmpty())
+    }
+
+    @Test
+    fun `a deletion before any migration starts keeps its still-standing row from being rekeyed`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        // OfflineDownloads.remove() with the migration only scheduled: the service has not yet
+        // processed the remove, so the index row is still there when the migration reads it.
+        migration.forget("chapter:1", "ttsroad.example")
+        val rekeyed = mutableListOf<String>()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache) { rekeyed += it.id })
+
+        assertEquals(listOf("chapter:2"), rekeyed)
+    }
+
+    @Test
+    fun `removing everything before any migration starts rekeys none of the still-standing rows`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        migration.forgetAll()
+        val rekeyed = mutableListOf<String>()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache) { rekeyed += it.id })
+
+        assertTrue("rekeyed $rekeyed", rekeyed.isEmpty())
+    }
+
+    @Test
+    fun `a chapter downloaded again after its deletion is migrated like any other`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        migration.forget("chapter:1", "ttsroad.example")
+        migration.forgetAll()
+        migration.restore("chapter:1", "ttsroad.example")
+        migration.restore("chapter:2", "ttsroad.example")
+        val rekeyed = mutableListOf<String>()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache) { rekeyed += it.id })
+
+        assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.toSet())
+    }
+
+    @Test
+    fun `a deletion mark lapses once an index read shows the remove has landed`() {
+        seedMigrationLibrary()
+        val migration = DownloadIdentityMigration()
+        migration.forget("chapter:1", "ttsroad.example")
+        downloadIndex.removeDownload("chapter:1")
+        var refuse = true
+        val rekeyed = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            if (refuse) throw IllegalStateException("service start refused")
+            rekeyed += request.id
+        }
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        // A legacy row for the same id appears afterwards; the old deletion says nothing about it.
+        val request = DownloadRequest.Builder("chapter:1", Uri.parse("https://ttsroad.example$DefaultKey"))
+            .setCustomCacheKey(DefaultKey).build()
+        downloadIndex.putDownload(Download(request, Download.STATE_COMPLETED, 0, 0, body.size.toLong(), 0, 0))
+        refuse = false
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertEquals(setOf("chapter:1", "chapter:2"), rekeyed.toSet())
+    }
+
+    @Test
+    fun `a removed record whose add was refused survives the process being reaped`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val removeFirst = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            // Durable before the dispatch that can strand it, not merely after the run.
+            assertTrue(RetainedRekeyFile(file).load()!!["ttsroad.example"]!!.containsKey(request.id))
+            removeFirst(request)
+        }
+
+        assertFalse(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        val stranded = attempted.single()
+        assertEquals(null, downloadIndex.getDownload(stranded))
+        refuseAdd = false
+
+        // A new process: nothing in memory, and the index no longer names the chapter.
+        val restarted = DownloadIdentityMigration(RetainedRekeyFile(file))
+        assertTrue(restarted.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertEquals(setOf("chapter:1", "chapter:2"), replacementIds.toSet())
+        assertEquals(Download.STATE_QUEUED, downloadIndex.getDownload(stranded)!!.state)
+        assertFalse("nothing is left retained", file.exists())
+    }
+
+    @Test
+    fun `a deletion after the process was reaped drops the persisted rekey too`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+
+        assertFalse(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        val stranded = attempted.single()
+        DownloadIdentityMigration(RetainedRekeyFile(file)).forget(stranded, "ttsroad.example")
+        refuseAdd = false
+        attempted.clear()
+
+        assertTrue(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertFalse("$stranded was resurrected", stranded in attempted)
+        assertEquals(null, downloadIndex.getDownload(stranded))
+    }
+
+    @Test
+    fun `removing everything after the process was reaped clears the persisted rekeys`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        val attempted = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, mutableListOf()) { true }
+
+        assertFalse(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertTrue(file.exists())
+        DownloadIdentityMigration(RetainedRekeyFile(file)).forgetAll()
+
+        assertFalse(file.exists())
+        assertTrue(RetainedRekeyFile(file).load()!!.isEmpty())
+    }
+
+    @Test
+    fun `downloading a chapter again drops its retained rekey so the retry cannot overwrite it`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        val migration = DownloadIdentityMigration(RetainedRekeyFile(file))
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        val stranded = attempted.single()
+        // OfflineDownloads.download(): restore first, then the fresh request lands in the index.
+        migration.restore(stranded, "ttsroad.example")
+        val fresh = DownloadRequest.Builder(stranded, Uri.parse("https://ttsroad.example/audio/fresh.mp3"))
+            .setCustomCacheKey("ttsroad.example /audio/fresh.mp3")
+            .setData(byteArrayOf(42))
+            .build()
+        downloadIndex.putDownload(Download(fresh, Download.STATE_QUEUED, 0, 0, -1, 0, 0))
+        assertFalse(
+            "the persisted copy must go too",
+            RetainedRekeyFile(file).load()!!["ttsroad.example"].orEmpty().containsKey(stranded),
+        )
+        refuseAdd = false
+        attempted.clear()
+
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertFalse("$stranded was overwritten by its retained rekey", stranded in attempted)
+        assertEquals(fresh, downloadIndex.getDownload(stranded)!!.request)
+    }
+
+    @Test
+    fun `a deletion on another server never erases this server's retained rekey`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        var refuseAdd = true
+        val attempted = mutableListOf<String>()
+        val replacementIds = mutableListOf<String>()
+        val rekey = rekeyRemovingFirst(attempted, replacementIds) { refuseAdd }
+        assertFalse(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        val stranded = attempted.single()
+
+        // Signed in to server B, whose chapter shares the id; then B's "delete all" and re-download.
+        val onB = DownloadIdentityMigration(RetainedRekeyFile(file))
+        onB.forget(stranded, "b.example")
+        onB.restore(stranded, "b.example")
+        onB.forget(stranded, null)
+        assertTrue(RetainedRekeyFile(file).load()!!["ttsroad.example"]!!.containsKey(stranded))
+        refuseAdd = false
+
+        assertTrue(DownloadIdentityMigration(RetainedRekeyFile(file)).migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+
+        assertTrue("$stranded was lost", stranded in replacementIds)
+        assertEquals(Download.STATE_QUEUED, downloadIndex.getDownload(stranded)!!.state)
+    }
+
+    @Test
+    fun `dispatching retained rekeys touches only that identity and adopts nothing`() {
+        seedMigrationLibrary()
+        val records = indexedRecords()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        val mine = DownloadRequest.Builder("chapter:5", Uri.parse("https://ttsroad.example/audio/5.mp3"))
+            .setCustomCacheKey("/audio/5.mp3").build()
+        val theirs = DownloadRequest.Builder("chapter:5", Uri.parse("https://other.example/audio/5.mp3"))
+            .setCustomCacheKey("/audio/5.mp3").build()
+        RetainedRekeyFile(file).save(
+            mapOf("ttsroad.example" to mapOf(mine.id to mine), "other.example" to mapOf(theirs.id to theirs)),
+        )
+        val migration = DownloadIdentityMigration(RetainedRekeyFile(file))
+        val dispatched = mutableListOf<DownloadRequest>()
+
+        assertTrue(migration.dispatchRetained("ttsroad.example", downloadIndex) { dispatched += it })
+
+        assertEquals(listOf(mine), dispatched)
+        assertEquals(null, migration.identity)
+        assertEquals(records, indexedRecords())
+        assertTrue("no cleanup", downloadCache.keys.contains("/audio/orphan.mp3"))
+        assertEquals(mapOf("other.example" to mapOf(theirs.id to theirs)), RetainedRekeyFile(file).load())
+        assertFalse(migration.hasRetained("ttsroad.example"))
+        assertTrue(migration.hasRetained("other.example"))
+    }
+
+    // --- retained-rekey faults: a failed write, a refused service start ----------------------
+
+    /** The retained-rekey file, with a switch that makes every write fail as a full disk would. */
+    private class FlakyStore(val file: File) : RetainedRekeyStore {
+        private val delegate = RetainedRekeyFile(file)
+        var failing = false
+
+        override fun load() = delegate.load()
+
+        override fun save(retained: Map<String, Map<String, DownloadRequest>>): Boolean =
+            !failing && delegate.save(retained)
+
+        fun onDisk(): Set<String> = delegate.load()!!["ttsroad.example"].orEmpty().keys
+    }
+
+    private fun flakyStore() =
+        FlakyStore(File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json"))
+
+    /** Leave one chapter stranded: its old row removed by the migration, its add refused. */
+    private fun strand(migration: DownloadIdentityMigration): String {
+        val attempted = mutableListOf<String>()
+        assertFalse(
+            migration.migrate(
+                "ttsroad.example",
+                downloadIndex,
+                downloadCache,
+                rekey = rekeyRemovingFirst(attempted, mutableListOf()) { true },
+            ),
+        )
+        return attempted.single()
+    }
+
+    @Test
+    fun `a re-download whose retained copy stays on disk is superseded after a restart`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val migration = DownloadIdentityMigration(store)
+        val stranded = strand(migration)
+        store.failing = true
+        val fresh = DownloadRequest.Builder(stranded, Uri.parse("https://ttsroad.example/audio/fresh.mp3"))
+            .setCustomCacheKey("ttsroad.example /audio/fresh.mp3")
+            .setData(byteArrayOf(42))
+            .build()
+
+        // The add goes out; the write that would drop the retained copy does not land.
+        migration.restore(stranded, "ttsroad.example") {
+            downloadIndex.putDownload(Download(fresh, Download.STATE_QUEUED, 0, 0, -1, 0, 0))
+        }
+        assertTrue(stranded in store.onDisk())
+        store.failing = false
+
+        // A new process loads the stale entry, and the live row tells it the chapter is taken care of.
+        val dispatched = mutableListOf<String>()
+        val restarted = DownloadIdentityMigration(store)
+        assertTrue(restarted.dispatchRetained("ttsroad.example", downloadIndex) { dispatched += it.id })
+        assertTrue(
+            restarted.migrate("ttsroad.example", downloadIndex, downloadCache) { if (it.id == stranded) dispatched += it.id },
+        )
+
+        assertFalse("$stranded was overwritten", stranded in dispatched)
+        assertEquals(fresh, downloadIndex.getDownload(stranded)!!.request)
+        assertFalse(stranded in store.onDisk())
+    }
+
+    @Test
+    fun `a refused re-download loses nothing even when the disk cannot be written`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val stranded = strand(DownloadIdentityMigration(store))
+        store.failing = true
+
+        assertTrue(
+            runCatching {
+                DownloadIdentityMigration(store).restore(stranded, "ttsroad.example") { error("background start refused") }
+            }.isFailure,
+        )
+
+        // Process death: whatever was in memory is gone, and the disk still owes the chapter.
+        store.failing = false
+        val replacementIds = mutableListOf<String>()
+        assertTrue(
+            DownloadIdentityMigration(store).dispatchRetained(
+                "ttsroad.example",
+                downloadIndex,
+                rekey = rekeyRemovingFirst(mutableListOf(), replacementIds) { false },
+            ),
+        )
+        assertTrue("$stranded was lost", stranded in replacementIds)
+    }
+
+    @Test
+    fun `a retained rekey behind another server's row is held, neither dispatched nor dropped`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val migration = DownloadIdentityMigration(store)
+        val stranded = strand(migration)
+        val theirs = DownloadRequest.Builder(stranded, Uri.parse("https://b.example/audio/x.mp3"))
+            .setCustomCacheKey("b.example /audio/x.mp3").build()
+        downloadIndex.putDownload(Download(theirs, Download.STATE_COMPLETED, 0, 0, 1, 0, 0))
+        val dispatched = mutableListOf<String>()
+
+        assertTrue(migration.dispatchRetained("ttsroad.example", downloadIndex) { dispatched += it.id })
+
+        assertFalse("$stranded overwrote another server's download", stranded in dispatched)
+        assertEquals(theirs, downloadIndex.getDownload(stranded)!!.request)
+        assertTrue(migration.hasRetained("ttsroad.example"))
+        assertTrue(stranded in store.onDisk())
+    }
+
+    @Test
+    fun `a deletion whose retained copy cannot be dropped durably deletes nothing`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val migration = DownloadIdentityMigration(store)
+        val stranded = strand(migration)
+        store.failing = true
+        var removes = 0
+
+        assertFalse(migration.forget(stranded, "ttsroad.example") { removes++ })
+        assertFalse(migration.forgetAll { removes++ })
+
+        assertEquals(0, removes)
+        assertTrue(stranded in store.onDisk())
+        // The deletion did not happen, so the stranded chapter is still owed its download.
+        store.failing = false
+        val replacementIds = mutableListOf<String>()
+        assertTrue(
+            migration.migrate(
+                "ttsroad.example",
+                downloadIndex,
+                downloadCache,
+                rekey = rekeyRemovingFirst(mutableListOf(), replacementIds) { false },
+            ),
+        )
+        assertTrue(stranded in replacementIds)
+    }
+
+    @Test
+    fun `a failed pre-dispatch write is retried before any rekey, even with nothing new to add`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val migration = DownloadIdentityMigration(store)
+        store.failing = true
+        val dispatched = mutableListOf<String>()
+        val rekey: (DownloadRequest) -> Unit = { request ->
+            assertTrue("dispatched before it was on disk", request.id in store.onDisk())
+            dispatched += request.id
+        }
+
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        // Same index, same requests: they are already pending in memory and nothing is "added".
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertFalse(migration.dispatchRetained("ttsroad.example", downloadIndex, rekey = rekey))
+        assertTrue(dispatched.isEmpty())
+
+        store.failing = false
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(setOf("chapter:1", "chapter:2"), dispatched.toSet())
+    }
+
+    @Test
+    fun `a refused fresh add puts the retained request back`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val migration = DownloadIdentityMigration(store)
+        val stranded = strand(migration)
+
+        val refused = runCatching {
+            migration.restore(stranded, "ttsroad.example") { throw IllegalStateException("background start refused") }
+        }
+
+        assertTrue(refused.isFailure)
+        assertTrue(stranded in store.onDisk())
+        assertTrue(migration.hasRetained("ttsroad.example"))
+        // And it survives a restart, still owed its download.
+        val replacementIds = mutableListOf<String>()
+        assertTrue(
+            DownloadIdentityMigration(store).migrate(
+                "ttsroad.example",
+                downloadIndex,
+                downloadCache,
+                rekey = rekeyRemovingFirst(mutableListOf(), replacementIds) { false },
+            ),
+        )
+        assertTrue(stranded in replacementIds)
+    }
+
+    @Test
+    fun `a refused remove puts the retained request back`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val migration = DownloadIdentityMigration(store)
+        val stranded = strand(migration)
+
+        assertTrue(runCatching { migration.forget(stranded, "ttsroad.example") { error("refused") } }.isFailure)
+        assertTrue(runCatching { migration.forgetAll { error("refused") } }.isFailure)
+
+        assertTrue(stranded in store.onDisk())
+        assertTrue(migration.hasRetained("ttsroad.example"))
+    }
+
+    @Test
+    fun `a deletion after an unrecorded dispatch writes the disk before it can resurrect`() {
+        seedMigrationLibrary()
+        val store = flakyStore()
+        val migration = DownloadIdentityMigration(store)
+        // Every rekey goes out, but the disk fills up straight after the pre-dispatch write, so the
+        // end-of-run write that would drop them never lands.
+        val rekey: (DownloadRequest) -> Unit = { store.failing = true }
+        assertTrue(migration.migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekey))
+        assertEquals(setOf("chapter:1", "chapter:2"), store.onDisk())
+        store.failing = false
+
+        // Nothing for chapter:1 in memory any more, but the disk still names it.
+        assertTrue(migration.forget("chapter:1", "ttsroad.example"))
+
+        assertTrue(store.onDisk().isEmpty())
+        val redispatched = mutableListOf<String>()
+        assertTrue(DownloadIdentityMigration(store).dispatchRetained("ttsroad.example", downloadIndex) { redispatched += it.id })
+        assertTrue("resurrected $redispatched", redispatched.isEmpty())
+    }
+
+    @Test
+    fun `a retained rekey round-trips every field a download sets`() {
+        val request = DownloadRequest.Builder("chapter:7", Uri.parse("https://ttsroad.example/audio/7.mp3"))
+            .setCustomCacheKey("/audio/7.mp3")
+            .setMimeType("audio/mpeg")
+            .setData(byteArrayOf(0, 1, 127, -128, -1))
+            .build()
+        val bare = DownloadRequest.Builder("chapter:8", Uri.parse("https://ttsroad.example/audio/8.mp3")).build()
+        val retained = mapOf("ttsroad.example" to mapOf(request.id to request, bare.id to bare))
+
+        assertEquals(retained, decodeRetainedRekeys(encodeRetainedRekeys(retained)))
+    }
+
+    @Test
+    fun `an undecodable retained-rekey file is set aside, not overwritten, and reads as nothing retained`() {
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        file.writeText("{not json")
+
+        assertTrue(RetainedRekeyFile(file).load()!!.isEmpty())
+        assertFalse(file.exists())
+        assertEquals("{not json", File(file.parentFile, "${file.name}.corrupt").readText())
+    }
+
+    @Test
+    fun `a retained-rekey file that cannot be read loads as unknown, not as empty`() {
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        file.writeText("{}")
+
+        assertEquals(null, RetainedRekeyFile(file, readFile = { throw java.io.IOException("EIO") }).load())
+        assertTrue(file.exists())
+    }
+
+    @Test
+    fun `a failed read blocks migration and deletion and never overwrites the journal`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        val attempted = mutableListOf<String>()
+        assertFalse(
+            DownloadIdentityMigration(RetainedRekeyFile(file))
+                .migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekeyRemovingFirst(attempted, mutableListOf()) { true }),
+        )
+        val stranded = attempted.single()
+        val journal = file.readText()
+
+        // A new process whose first reads fail: it knows nothing, and must not act as if it knew.
+        var unreadable = true
+        val migration = DownloadIdentityMigration(
+            RetainedRekeyFile(file, readFile = { if (unreadable) throw java.io.IOException("EIO") else it.readText() }),
+        )
+        val dispatched = mutableListOf<String>()
+        val removes = mutableListOf<String>()
+        assertTrue("unknown must count as retained", migration.hasRetained("ttsroad.example"))
+        assertFalse(migration.migrate("ttsroad.example", downloadIndex, downloadCache) { dispatched += it.id })
+        assertFalse(migration.dispatchRetained("ttsroad.example", downloadIndex) { dispatched += it.id })
+        assertFalse(migration.forget(stranded, "ttsroad.example") { removes += "one" })
+        assertFalse(migration.forgetAll { removes += "all" })
+        migration.restore("chapter:99", "ttsroad.example")
+
+        assertTrue(dispatched.isEmpty())
+        assertTrue(removes.isEmpty())
+        assertEquals(null, migration.identity)
+        assertEquals("the journal was written over", journal, file.readText())
+
+        // The read recovers: the stranded chapter is still owed, and now gets, its download.
+        unreadable = false
+        val replacementIds = mutableListOf<String>()
+        assertTrue(
+            migration.migrate(
+                "ttsroad.example",
+                downloadIndex,
+                downloadCache,
+                rekey = rekeyRemovingFirst(mutableListOf(), replacementIds) { false },
+            ),
+        )
+        assertTrue("$stranded was lost", stranded in replacementIds)
+    }
+
+    @Test
+    fun `a failed replace keeps the previous retained-rekey snapshot`() {
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        val first = DownloadRequest.Builder("chapter:1", Uri.parse("https://ttsroad.example/audio/1.mp3")).build()
+        val second = DownloadRequest.Builder("chapter:2", Uri.parse("https://ttsroad.example/audio/2.mp3")).build()
+        assertTrue(RetainedRekeyFile(file).save(mapOf("ttsroad.example" to mapOf(first.id to first))))
+
+        val failing = RetainedRekeyFile(file, replaceFile = { _, _ -> throw java.io.IOException("EXDEV") })
+        assertFalse(failing.save(mapOf("ttsroad.example" to mapOf(first.id to first, second.id to second))))
+
+        assertEquals(mapOf("ttsroad.example" to mapOf(first.id to first)), RetainedRekeyFile(file).load())
+    }
+
+    @Test
+    fun `deleting every download clears every server's retained rekeys`() {
+        seedMigrationLibrary()
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        val attempted = mutableListOf<String>()
+        assertFalse(
+            DownloadIdentityMigration(RetainedRekeyFile(file))
+                .migrate("ttsroad.example", downloadIndex, downloadCache, rekey = rekeyRemovingFirst(attempted, mutableListOf()) { true }),
+        )
+        val stranded = attempted.single()
+        val other = DownloadRequest.Builder("chapter:5", Uri.parse("https://b.example/audio/5.mp3")).build()
+        val retained = RetainedRekeyFile(file).load()!!.toMutableMap()
+        retained["b.example"] = mapOf(other.id to other)
+        assertTrue(RetainedRekeyFile(file).save(retained))
+
+        // Signed in to b.example: the remove-all command and the cache sweep are global.
+        val onB = DownloadIdentityMigration(RetainedRekeyFile(file))
+        var removeAlls = 0
+        assertTrue(onB.forgetAll { removeAlls++ })
+
+        assertEquals(1, removeAlls)
+        assertFalse(file.exists())
+        assertFalse(onB.hasRetained("ttsroad.example"))
+        assertFalse(onB.hasRetained("b.example"))
+        val dispatched = mutableListOf<String>()
+        assertTrue(DownloadIdentityMigration(RetainedRekeyFile(file)).dispatchRetained("ttsroad.example", downloadIndex) { dispatched += it.id })
+        assertFalse("$stranded came back after delete all", stranded in dispatched)
+    }
+
+    /**
+     * A rekey shaped like [OfflineDownloads]'s: the old record goes first, and the replacement add
+     * is refused while [refuseAdd] — leaving a request only the migration still remembers.
+     */
+    private fun rekeyRemovingFirst(
+        attempted: MutableList<String>,
+        replacementIds: MutableList<String>,
+        refuseAdd: () -> Boolean,
+    ): (DownloadRequest) -> Unit = { request ->
+        attempted += request.id
+        downloadIndex.removeDownload(request.id)
+        if (refuseAdd()) throw IllegalStateException("add refused")
+        val replacement = DownloadRequest.Builder(request.id, request.uri)
+            .setCustomCacheKey(DownloadCacheKeys.forUrl(request.uri.toString(), "ttsroad.example"))
+            .setData(request.data)
+            .build()
+        downloadIndex.putDownload(Download(replacement, Download.STATE_QUEUED, 0, 0, -1, 0, 0))
+        replacementIds += request.id
+    }
+
+    private fun assertFailedMigrationRetainsLibrary(index: DownloadIndex) {
+        seedMigrationLibrary()
+        val records = indexedRecords()
+        val spans = cachedSpans()
+        val bytes = downloadCache.cacheSpace
+        val migration = DownloadIdentityMigration()
+        val rekeyed = mutableListOf<DownloadRequest>()
+
+        assertFalse(migration.migrate("ttsroad.example", index, downloadCache, rekey = rekeyed::add))
+
+        assertEquals(null, migration.identity)
+        assertTrue(rekeyed.isEmpty())
+        assertEquals(records, indexedRecords())
+        assertEquals(spans, cachedSpans())
+        assertEquals(bytes, downloadCache.cacheSpace)
+        serverReachable = false
+        assertArrayEquals(body, readThroughChain())
+    }
+
+    private fun seedMigrationLibrary() {
+        listOf(DefaultKey, "/audio/second.mp3", "other.example /audio/chapter.mp3").forEachIndexed { i, key ->
+            writeInto(downloadCache, key)
+            val request = DownloadRequest.Builder("chapter:${i + 1}", Uri.parse("https://ttsroad.example${key.substringAfter(' ')}"))
+                .setCustomCacheKey(key)
+                .setData(byteArrayOf(i.toByte()))
+                .build()
+            downloadIndex.putDownload(
+                Download(request, Download.STATE_COMPLETED, 0, 0, body.size.toLong(), 0, 0),
+            )
+        }
+        writeInto(downloadCache, DefaultKey, body.size.toLong())
+        writeInto(downloadCache, "/audio/orphan.mp3")
+        writeInto(downloadCache, "other.example /audio/orphan.mp3")
+    }
+
+    private fun indexedRecords(): List<Pair<DownloadRequest, Int>> =
+        downloadIndex.getDownloads().use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.download.request to cursor.download.state)
+            }
+        }
+
+    private fun cachedSpans(): Map<String, List<Pair<Long, List<Byte>>>> =
+        downloadCache.keys.associateWith { key ->
+            downloadCache.getCachedSpans(key).map { span -> span.position to span.file!!.readBytes().toList() }
+        }
+
     // --- helpers ---------------------------------------------------------------------------
 
-    private fun readThroughChain(url: String = Url): ByteArray {
+    private fun readThroughChain(url: String = Url, cacheKeyFactory: CacheKeyFactory = KeyFactory): ByteArray {
         val source = readThroughFactory(
             downloadCache = downloadCache,
             streamingCache = streamingCache,
             upstream = FakeUpstreamFactory(),
-            cacheKeyFactory = KeyFactory,
+            cacheKeyFactory = cacheKeyFactory,
         ).createDataSource()
 
         val spec = DataSpec.Builder().setUri(Uri.parse(url)).build()
@@ -234,9 +1209,9 @@ class MediaCachesTest {
     }
 
     /** Put [body] into [cache] the way a download does: written directly, not through the chain. */
-    private fun writeInto(cache: Cache, key: String = DefaultKey) {
-        val hole = cache.startReadWrite(key, 0, body.size.toLong())
-        val file = cache.startFile(key, 0, body.size.toLong())
+    private fun writeInto(cache: Cache, key: String = DefaultKey, position: Long = 0) {
+        val hole = cache.startReadWrite(key, position, body.size.toLong())
+        val file = cache.startFile(key, position, body.size.toLong())
         file.writeBytes(body)
         cache.commitFile(file, body.size.toLong())
         cache.releaseHoleSpan(hole)

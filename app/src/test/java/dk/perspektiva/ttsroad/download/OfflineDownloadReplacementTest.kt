@@ -14,6 +14,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
 import java.io.IOException
 import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadIndex
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.scheduler.Requirements
@@ -68,6 +69,12 @@ class OfflineDownloadReplacementTest {
     @Volatile private var responseGate: CountDownLatch? = null
     private val session = MutableStateFlow(SessionState())
     private val capabilities = MutableStateFlow(ServerCapabilities.Baseline)
+    @Volatile private var migrationReadable = false
+
+    private fun migrationSource(): DownloadIndex {
+        if (!migrationReadable) throw IOException("migration index not opted in")
+        return downloads.downloadManager.downloadIndex
+    }
 
     @Before
     fun setUp() {
@@ -101,6 +108,14 @@ class OfflineDownloadReplacementTest {
             initializeManager = false,
             replacementHash = scanner::replacementHash,
             replacementCompleted = scanner::replacementCompleted,
+            // The manager is never initialised here, so the identity migration only runs against an
+            // index handed in explicitly. It forwards to the manager's own once a test opts in, and
+            // until then reads as unavailable — a failed read leaves every record untouched, so the
+            // replacement tests see only the requests they make themselves.
+            migrationIndex = object : DownloadIndex {
+                override fun getDownload(id: String) = migrationSource().getDownload(id)
+                override fun getDownloads(vararg states: Int) = migrationSource().getDownloads(*states)
+            },
         )
         downloads.downloadManager.apply {
             requirements = Requirements(0)
@@ -395,6 +410,7 @@ class OfflineDownloadReplacementTest {
                 .setCustomCacheKey(spec.cacheKey).setData(spec.encodedIds()).build(),
         )
         awaitCompleted(setOf(1))
+        migrationReadable = true
         discoverIdentity()
         OfflineDownloads::class.java.getDeclaredMethod("adoptServerIdentity", String::class.java)
             .apply { isAccessible = true }.invoke(downloads, "canonical.example")

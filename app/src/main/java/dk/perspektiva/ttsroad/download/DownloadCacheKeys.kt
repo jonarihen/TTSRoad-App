@@ -102,6 +102,11 @@ internal class SessionCacheIdentity(
         return identities[address] ?: fallbackForServer(address)
     }
 
+    /** The identity [serverUrl] has advertised before, without a fresh discovery or the fallback. */
+    @Synchronized
+    fun rememberedForServer(serverUrl: String): String? =
+        canonicalAddress(serverUrl)?.let { identities[it] }
+
     fun fallbackForServer(serverUrl: String): String? =
         canonicalAddress(serverUrl)?.let { "address:$it" }
 
