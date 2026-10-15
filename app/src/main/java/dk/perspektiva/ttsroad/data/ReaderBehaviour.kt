@@ -9,12 +9,26 @@ import kotlin.math.roundToInt
 /**
  * Whether the reader should hold the screen awake.
  *
- * The sleep timer's fade wins over the preference. Reading is why the screen is held bright in the
- * first place, but the fade means the listener is on their way out, and a reader left open would
- * otherwise keep the screen lit long after the audio has stopped.
+ * Only while audio is (or very recently was) playing. Read-along is why the screen is held bright
+ * in the first place, but a listener who falls asleep with the reader open and no timer armed
+ * would otherwise have a lit screen all night, long after the queue ran out. [audioRecentlyActive]
+ * is true while playing and for [ReaderScreenOnGraceMs] after playback pauses or ends, so a
+ * buffering stall or a quick pause does not drop the screen mid-sentence.
+ *
+ * The sleep timer's fade wins over both: the fade means the listener is on their way out.
  */
-fun shouldKeepReaderScreenOn(preferenceEnabled: Boolean, sleepTimerFading: Boolean): Boolean =
-    preferenceEnabled && !sleepTimerFading
+fun shouldKeepReaderScreenOn(
+    preferenceEnabled: Boolean,
+    sleepTimerFading: Boolean,
+    audioRecentlyActive: Boolean,
+): Boolean = preferenceEnabled && !sleepTimerFading && audioRecentlyActive
+
+/**
+ * How long the reader keeps holding the screen after playback stops. Past this the system's own
+ * screen timeout applies again, which still counts from the last touch, so someone reading
+ * silently keeps the screen as long as they keep scrolling.
+ */
+const val ReaderScreenOnGraceMs = 2 * 60_000L
 
 /**
  * Where auto-scroll puts the active paragraph, as a lazy-list scroll offset in pixels.

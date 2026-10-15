@@ -14,7 +14,7 @@ class ReaderBehaviourTest {
 
     @Test
     fun `the reader holds the screen awake while reading`() {
-        assertTrue(shouldKeepReaderScreenOn(preferenceEnabled = true, sleepTimerFading = false))
+        assertTrue(shouldKeepReaderScreenOn(preferenceEnabled = true, sleepTimerFading = false, audioRecentlyActive = true))
     }
 
     @Test
@@ -22,13 +22,22 @@ class ReaderBehaviourTest {
         // The fade is the user on their way out. Holding a bright screen over someone falling
         // asleep is the exact opposite of what arming the timer asked for, and it outlasts the
         // audio because the reader has no reason of its own to stop.
-        assertFalse(shouldKeepReaderScreenOn(preferenceEnabled = true, sleepTimerFading = true))
+        assertFalse(shouldKeepReaderScreenOn(preferenceEnabled = true, sleepTimerFading = true, audioRecentlyActive = true))
     }
 
     @Test
     fun `turning the preference off releases the screen regardless of the timer`() {
-        assertFalse(shouldKeepReaderScreenOn(preferenceEnabled = false, sleepTimerFading = false))
-        assertFalse(shouldKeepReaderScreenOn(preferenceEnabled = false, sleepTimerFading = true))
+        assertFalse(shouldKeepReaderScreenOn(preferenceEnabled = false, sleepTimerFading = false, audioRecentlyActive = true))
+        assertFalse(shouldKeepReaderScreenOn(preferenceEnabled = false, sleepTimerFading = true, audioRecentlyActive = true))
+    }
+
+    @Test
+    fun `stopped audio releases the screen once the grace has passed`() {
+        // Falling asleep with the reader open and no timer: the queue runs out, the grace passes,
+        // and the screen must be allowed to go dark rather than stay lit all night.
+        assertFalse(
+            shouldKeepReaderScreenOn(preferenceEnabled = true, sleepTimerFading = false, audioRecentlyActive = false),
+        )
     }
 
     @Test
