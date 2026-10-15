@@ -337,6 +337,7 @@ import dk.perspektiva.ttsroad.ui.AarisActionRow
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisChoiceRow
 import dk.perspektiva.ttsroad.ui.AarisColor
+import dk.perspektiva.ttsroad.ui.AarisPalette
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
@@ -381,7 +382,15 @@ class MainActivity : ComponentActivity() {
             sessions = tokenStore.session,
             currentSession = tokenStore::current,
         )
+        val playbackPreferences = ServiceLocator.playbackPreferences(this)
         setContent {
+            val nightMode by remember { playbackPreferences.prefs.map { it.nightMode }.distinctUntilChanged() }
+                .collectAsStateWithLifecycle(initialValue = AarisColor.palette == AarisPalette.Night)
+            // Set from an effect, not during composition: the palette is snapshot state every token
+            // read observes, and flipping it is what recomposes the whole UI into the night colours.
+            LaunchedEffect(nightMode) {
+                AarisColor.palette = if (nightMode) AarisPalette.Night else AarisPalette.Standard
+            }
             TtsRoadTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -4341,6 +4350,37 @@ internal fun SettingsScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Switch(
                         checked = prefs.skipSilence,
+                        onCheckedChange = null,
+                    )
+                }
+
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = MinTouchTargetSize)
+                        .toggleable(
+                            value = prefs.nightMode,
+                            role = Role.Switch,
+                            onValueChange = { scope.launch { preferences.setNightMode(it) } },
+                        )
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        MetaText(text = "Night mode")
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(
+                            text = "Pure black background and dimmer text, for the player and " +
+                                "reader in a dark room. " + PreferenceScope.DevicePlayer,
+                            color = AarisColor.Dim,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = prefs.nightMode,
                         onCheckedChange = null,
                     )
                 }

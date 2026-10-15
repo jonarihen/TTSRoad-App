@@ -22,7 +22,7 @@ import org.junit.Test
 class TtsRoadThemeContrastTest {
 
     /** Every background a foreground can land on. Lighter surfaces are the hard cases. */
-    private val surfaces = mapOf(
+    private val surfaces get() = mapOf(
         "Bg" to AarisColor.Bg,
         "BgRaise" to AarisColor.BgRaise,
         "BgHover" to AarisColor.BgHover,
@@ -35,7 +35,7 @@ class TtsRoadThemeContrastTest {
      * `Disabled` is deliberately absent: a disabled control is exempt, and looking unavailable is
      * the whole message. `Line` and `LineSoft` are absent because they are borders, not text.
      */
-    private val textForegrounds = mapOf(
+    private val textForegrounds get() = mapOf(
         "Ink" to AarisColor.Ink,
         "Muted" to AarisColor.Muted,
         "Dim" to AarisColor.Dim,
@@ -48,74 +48,84 @@ class TtsRoadThemeContrastTest {
 
     @Test
     fun `every text colour clears AA on every surface`() {
-        val failures = mutableListOf<String>()
-        textForegrounds.forEach { (fgName, fg) ->
-            surfaces.forEach { (bgName, bg) ->
-                val ratio = contrastRatio(fg, bg)
-                if (ratio < 4.5) failures += "$fgName on $bgName is ${"%.2f".format(ratio)}:1"
+        forEachPalette {
+            val failures = mutableListOf<String>()
+            textForegrounds.forEach { (fgName, fg) ->
+                surfaces.forEach { (bgName, bg) ->
+                    val ratio = contrastRatio(fg, bg)
+                    if (ratio < 4.5) failures += "$fgName on $bgName is ${"%.2f".format(ratio)}:1"
+                }
             }
+            assertTrue("below WCAG AA 4.5:1 — ${failures.joinToString("; ")}", failures.isEmpty())
         }
-        assertTrue("below WCAG AA 4.5:1 — ${failures.joinToString("; ")}", failures.isEmpty())
     }
 
     @Test
     fun `control outlines clear non-text contrast while separators remain subtle`() {
-        surfaces.forEach { (name, surface) ->
+        forEachPalette {
+            surfaces.forEach { (name, surface) ->
+                assertTrue(
+                    "ControlOutline on $name must clear 3:1",
+                    contrastRatio(AarisColor.ControlOutline, surface) >= 3.0,
+                )
+            }
             assertTrue(
-                "ControlOutline on $name must clear 3:1",
-                contrastRatio(AarisColor.ControlOutline, surface) >= 3.0,
+                "Line is a separator, not a control outline",
+                contrastRatio(AarisColor.Line, AarisColor.BgRaise) < 3.0,
             )
         }
-        assertTrue(
-            "Line is a separator, not a control outline",
-            contrastRatio(AarisColor.Line, AarisColor.BgRaise) < 3.0,
-        )
     }
 
     @Test
     fun `the two tokens that had regressed are held above the floor`() {
-        // Named individually so a future change to either fails with the reason attached rather
-        // than as one line of a list.
-        assertTrue(
-            "Dim was 2.19:1 on the hover surface and made metadata decorative",
-            contrastRatio(AarisColor.Dim, AarisColor.BgHover) >= 4.5,
-        )
-        assertTrue(
-            "Danger is error text, and was 4.27:1 on the hover surface",
-            contrastRatio(AarisColor.Danger, AarisColor.BgHover) >= 4.5,
-        )
+        forEachPalette {
+            // Named individually so a future change to either fails with the reason attached rather
+            // than as one line of a list.
+            assertTrue(
+                "Dim was 2.19:1 on the hover surface and made metadata decorative",
+                contrastRatio(AarisColor.Dim, AarisColor.BgHover) >= 4.5,
+            )
+            assertTrue(
+                "Danger is error text, and was 4.27:1 on the hover surface",
+                contrastRatio(AarisColor.Danger, AarisColor.BgHover) >= 4.5,
+            )
+        }
     }
 
     @Test
     fun `the three text ranks stay distinguishable from each other`() {
-        // Readability must not be bought by collapsing the hierarchy into one grey. These are not
-        // AA thresholds — they are "you can see which is which".
-        assertTrue(
-            "Ink and Muted have merged",
-            contrastRatio(AarisColor.Ink, AarisColor.Muted) >= 1.5,
-        )
-        assertTrue(
-            "Muted and Dim have merged",
-            contrastRatio(AarisColor.Muted, AarisColor.Dim) > 1.0,
-        )
-        assertTrue(
-            "Dim is no longer dimmer than Muted",
-            relativeLuminance(AarisColor.Dim) < relativeLuminance(AarisColor.Muted),
-        )
+        forEachPalette {
+            // Readability must not be bought by collapsing the hierarchy into one grey. These are not
+            // AA thresholds — they are "you can see which is which".
+            assertTrue(
+                "Ink and Muted have merged",
+                contrastRatio(AarisColor.Ink, AarisColor.Muted) >= 1.5,
+            )
+            assertTrue(
+                "Muted and Dim have merged",
+                contrastRatio(AarisColor.Muted, AarisColor.Dim) > 1.0,
+            )
+            assertTrue(
+                "Dim is no longer dimmer than Muted",
+                relativeLuminance(AarisColor.Dim) < relativeLuminance(AarisColor.Muted),
+            )
+        }
     }
 
     @Test
     fun `the disabled token is not one of the text colours`() {
-        // Its whole job is to be below the floor, so it must never be reachable as body text by
-        // being the same value as something that is.
-        assertTrue(
-            "Disabled has become a text colour",
-            AarisColor.Disabled !in textForegrounds.values,
-        )
-        assertTrue(
-            "Disabled should read as unavailable, not as text",
-            contrastRatio(AarisColor.Disabled, AarisColor.BgHover) < 4.5,
-        )
+        forEachPalette {
+            // Its whole job is to be below the floor, so it must never be reachable as body text by
+            // being the same value as something that is.
+            assertTrue(
+                "Disabled has become a text colour",
+                AarisColor.Disabled !in textForegrounds.values,
+            )
+            assertTrue(
+                "Disabled should read as unavailable, not as text",
+                contrastRatio(AarisColor.Disabled, AarisColor.BgHover) < 4.5,
+            )
+        }
     }
 
     @Test
@@ -124,6 +134,28 @@ class TtsRoadThemeContrastTest {
         // broken formula cannot quietly pass everything above.
         assertTrue(contrastRatio(Color.White, Color.Black) > 20.9)
         assertTrue(contrastRatio(AarisColor.Ink, AarisColor.Ink) < 1.01)
+    }
+
+    /**
+     * Run [check] against every palette — the night palette (#343) is held to the same floor as the
+     * standard one, since it is the one read half-asleep in the dark.
+     */
+    private fun forEachPalette(check: () -> Unit) {
+        val original = AarisColor.palette
+        try {
+            AarisPalette.all.forEach { palette ->
+                AarisColor.palette = palette
+                check()
+            }
+        } finally {
+            AarisColor.palette = original
+        }
+    }
+
+    @Test
+    fun `the night palette is black and dimmer than the standard one`() {
+        assertTrue(AarisPalette.Night.bg == Color.Black)
+        assertTrue(relativeLuminance(AarisPalette.Night.ink) < relativeLuminance(AarisPalette.Standard.ink))
     }
 
     /** WCAG 2.1 relative luminance. */

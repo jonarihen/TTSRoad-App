@@ -30,6 +30,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -44,17 +48,96 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
+ * Every AARIS colour token, as one value — so a second palette is a second value rather than a
+ * second set of call sites. [AarisColor] resolves its tokens against the active one.
+ */
+data class AarisPalette(
+    val bg: Color,
+    val bgRaise: Color,
+    val bgHover: Color,
+    val bgInput: Color,
+    val ink: Color,
+    val muted: Color,
+    val dim: Color,
+    val disabled: Color,
+    val controlOutline: Color,
+    val line: Color,
+    val lineSoft: Color,
+    val accent: Color,
+    val accentHover: Color,
+    val ok: Color,
+    val warning: Color,
+    val danger: Color,
+) {
+    companion object {
+        /** The web console's tokens. */
+        val Standard = AarisPalette(
+            bg = Color(0xFF0E1014),
+            bgRaise = Color(0xFF12151A),
+            bgHover = Color(0xFF1A1E25),
+            bgInput = Color(0xFF0B0D11),
+            ink = Color(0xFFE9ECEF),
+            muted = Color(0xFF8B939E),
+            dim = Color(0xFF808995),
+            disabled = Color(0xFF4D545E),
+            controlOutline = Color(0xFF687075),
+            line = Color(0xFF232830),
+            lineSoft = Color(0xFF1A1E25),
+            accent = Color(0xFFFF5A1F),
+            accentHover = Color(0xFFFF7A44),
+            ok = Color(0xFF3FD97F),
+            warning = Color(0xFFFFB224),
+            danger = Color(0xFFEC555A),
+        )
+
+        /**
+         * For listening in a dark bedroom (#343): pure black surfaces, which an OLED panel does not
+         * light at all, and ink pulled down from near-white so the page is not the brightest thing in
+         * the room. Accent and status colours stay — they are rare, and already clear AA on black.
+         * Held to the same contrast floor as [Standard] by `TtsRoadThemeContrastTest`.
+         */
+        val Night = AarisPalette(
+            bg = Color(0xFF000000),
+            bgRaise = Color(0xFF08090B),
+            bgHover = Color(0xFF101216),
+            bgInput = Color(0xFF000000),
+            ink = Color(0xFFC2C7CD),
+            muted = Color(0xFF8B939E),
+            dim = Color(0xFF7C8591),
+            disabled = Color(0xFF4D545E),
+            controlOutline = Color(0xFF687075),
+            line = Color(0xFF181B20),
+            lineSoft = Color(0xFF101216),
+            accent = Color(0xFFFF5A1F),
+            accentHover = Color(0xFFFF7A44),
+            ok = Color(0xFF3FD97F),
+            warning = Color(0xFFFFB224),
+            danger = Color(0xFFEC555A),
+        )
+
+        val all: List<AarisPalette> = listOf(Standard, Night)
+    }
+}
+
+/**
  * AARIS design language — dark, square, thin-bordered, orange-accent, mono-labelled
  * "operator console". Mirrors the canonical tokens from the web app's aaris.css so the
  * Android client reads as the same product.
  */
 object AarisColor {
-    val Bg = Color(0xFF0E1014)
-    val BgRaise = Color(0xFF12151A)
-    val BgHover = Color(0xFF1A1E25)
-    val BgInput = Color(0xFF0B0D11)
-    val Ink = Color(0xFFE9ECEF)
-    val Muted = Color(0xFF8B939E)
+    /**
+     * Which palette the tokens below resolve to. Snapshot state, so flipping it (night mode, #343)
+     * recomposes every reader of a token — the whole UI — without threading a palette through ~80
+     * composables that already say `AarisColor.Bg`.
+     */
+    var palette: AarisPalette by mutableStateOf(AarisPalette.Standard)
+
+    val Bg: Color get() = palette.bg
+    val BgRaise: Color get() = palette.bgRaise
+    val BgHover: Color get() = palette.bgHover
+    val BgInput: Color get() = palette.bgInput
+    val Ink: Color get() = palette.ink
+    val Muted: Color get() = palette.muted
 
     /**
      * Third-rank text — durations, status hints, the line under a setting explaining it.
@@ -71,7 +154,7 @@ object AarisColor {
      *
      * **Not for disabled controls.** [Disabled] is that, and is deliberately below AA.
      */
-    val Dim = Color(0xFF808995)
+    val Dim: Color get() = palette.dim
 
     /**
      * A control that cannot be used right now.
@@ -80,24 +163,24 @@ object AarisColor {
      * from the contrast floor precisely because looking unavailable is the message, so this stays
      * out of the contrast test — and out of anything a user is meant to read.
      */
-    val Disabled = Color(0xFF4D545E)
+    val Disabled: Color get() = palette.disabled
 
-    val ControlOutline = Color(0xFF687075)
-    val Line = Color(0xFF232830)
-    val LineSoft = Color(0xFF1A1E25)
-    val Accent = Color(0xFFFF5A1F)
-    val AccentHover = Color(0xFFFF7A44)
-    val Ok = Color(0xFF3FD97F)
-    val Warning = Color(0xFFFFB224)
+    val ControlOutline: Color get() = palette.controlOutline
+    val Line: Color get() = palette.line
+    val LineSoft: Color get() = palette.lineSoft
+    val Accent: Color get() = palette.accent
+    val AccentHover: Color get() = palette.accentHover
+    val Ok: Color get() = palette.ok
+    val Warning: Color get() = palette.warning
     // 4.27:1 on the hover surface as #E5484D, and error text is the last thing that should be hard
     // to read. Raised to the desktop client's corrected value, which clears AA on every surface.
-    val Danger = Color(0xFFEC555A)
+    val Danger: Color get() = palette.danger
 }
 
 /** IBM Plex Mono carries the design's labels; the system monospace stands in on-device. */
 val MonoFamily: FontFamily = FontFamily.Monospace
 
-private val AarisColorScheme = darkColorScheme(
+private fun aarisColorScheme() = darkColorScheme(
     primary = AarisColor.Accent,
     onPrimary = AarisColor.Bg,
     secondary = AarisColor.Accent,
@@ -180,8 +263,9 @@ private val AarisTypography = Typography(
 
 @Composable
 fun TtsRoadTheme(content: @Composable () -> Unit) {
+    val palette = AarisColor.palette
     MaterialTheme(
-        colorScheme = AarisColorScheme,
+        colorScheme = remember(palette) { aarisColorScheme() },
         shapes = AarisShapes,
         typography = AarisTypography,
         content = content,
