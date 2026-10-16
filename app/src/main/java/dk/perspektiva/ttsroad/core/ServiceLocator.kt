@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.core
 import android.content.Context
 import androidx.glance.appwidget.updateAll
 import dk.perspektiva.ttsroad.data.AccountPreferenceSync
+import dk.perspektiva.ttsroad.data.UnsyncedPreferenceKeys
 import dk.perspektiva.ttsroad.data.BrowsePreferences
 import dk.perspektiva.ttsroad.data.ChapterListPreferences
 import dk.perspektiva.ttsroad.data.DownloadPreferences
@@ -248,6 +249,7 @@ object ServiceLocator {
                 playbackPreferences = playbackPreferences(context),
                 readerPreferences = readerPreferences(context),
                 chapterListPreferences = chapterListPreferences(context),
+                unsynced = UnsyncedPreferenceKeys(context.applicationContext),
             ).also { accountPreferenceSync = it }
         }
 
