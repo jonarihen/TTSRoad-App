@@ -4597,6 +4597,36 @@ internal fun SettingsScreen(
                     color = AarisColor.Dim,
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = MinTouchTargetSize)
+                        .toggleable(
+                            value = prefs.headsetButtonsSeek,
+                            role = Role.Switch,
+                            onValueChange = { scope.launch { preferences.setHeadsetButtonsSeek(it) } },
+                        )
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        MetaText(text = "Headset next/previous skips")
+                        Spacer(modifier = Modifier.height(2.dp))
+                        MetaText(
+                            text = "A headset's or car's next and previous buttons — a double " +
+                                "or triple tap on most earbuds — skip by the interval above " +
+                                "instead of changing chapter. " + PreferenceScope.DevicePlayer,
+                            color = AarisColor.Dim,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = prefs.headsetButtonsSeek,
+                        onCheckedChange = null,
+                    )
+                }
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 SettingsItem(label = "Playback speed", value = formatSpeed(prefs.speed))
                 MetaText(
                     text = "Change it from the player; it is kept across restarts and reboots. " +
