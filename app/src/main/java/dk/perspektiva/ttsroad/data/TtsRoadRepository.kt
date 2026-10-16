@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.data
 
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import dk.perspektiva.ttsroad.core.CrashReporter
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.plainLanguageForStatus
 import dk.perspektiva.ttsroad.core.toUserFacingError
@@ -329,6 +330,7 @@ class TtsRoadRepository(
             // Inside the try: normalizeBaseUrl throws on a missing http:// or https://
             // scheme, and that is a user-correctable typo, not a crash.
             val normalized = normalizeBaseUrl(baseUrl)
+            CrashReporter.rememberServer(normalized)
             val response = api(normalized).login(
                 LoginRequest(
                     username = username.trim(),

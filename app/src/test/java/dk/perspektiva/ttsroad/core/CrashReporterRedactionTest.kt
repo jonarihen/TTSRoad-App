@@ -52,4 +52,20 @@ class CrashReporterRedactionTest {
         assertEquals("home.example.com", redacted.data["host"])
         assertNull(redacted.data["url"])
     }
+
+    @Test
+    fun `with nothing persisted, the first event is redacted for the current session's servers`() {
+        val startup = startupServers(emptyList()) { listOf("https://home.example.com/", "http://192.168.1.20:8000") }
+        val event = SentryEvent().apply {
+            message = Message().apply { formatted = "failed https://home.example.com/api/mobile/library" }
+        }
+
+        assertEquals("failed $RedactedServer/api/mobile/library", redactEvent(event, startup).message?.formatted)
+        assertEquals(servers, startup)
+    }
+
+    @Test
+    fun `a persisted list is used as it is, without reading the session`() {
+        assertEquals(servers, startupServers(servers) { error("session read on startup") })
+    }
 }
