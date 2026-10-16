@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.Forward5
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -6765,6 +6766,9 @@ internal fun ChapterRow(
                 .combinedClickable(
                     enabled = playable || onLongPress != null,
                     onClick = { if (playable) onPlay() },
+                    // Named, so TalkBack says what holding the row opens instead of a generic
+                    // "double tap and hold to long press" (#356).
+                    onLongClickLabel = onLongPress?.let { ChapterActionsLabel },
                     onLongClick = onLongPress,
                 )
                 .padding(horizontal = 4.dp, vertical = 10.dp),
@@ -6859,10 +6863,39 @@ internal fun ChapterRow(
                     size = 36.dp,
                 ) { onPlay() }
             }
+            // The same sheet the long press opens, as something that can be seen and tapped (#356):
+            // "Play next", "Add to queue", "Mark all previous" and "Convert again" were reachable
+            // only by a gesture nothing on the row advertised. Unbordered, because it is secondary
+            // to Play. Not on a phone narrower than 360 dp: a fourth 48 dp target there leaves the
+            // title 36 dp, about three letters. The named long press above still reaches the sheet
+            // from TalkBack's actions menu, which is where a narrow phone's screen reader user is.
+            val roomForOverflow = LocalConfiguration.current.screenWidthDp >= ChapterOverflowMinScreenWidthDp
+            onLongPress?.takeIf { roomForOverflow }?.let { openActions ->
+                Box(
+                    modifier = Modifier
+                        .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
+                        .clickable(role = Role.Button, onClick = openActions)
+                        .semantics { contentDescription = ChapterActionsLabel },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = null,
+                        tint = AarisColor.Muted,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
         }
         HorizontalDivider(thickness = 1.dp, color = AarisColor.LineSoft)
     }
 }
+
+/** What the chapter row's long press and its ⋮ button both open. */
+private const val ChapterActionsLabel = "Chapter actions"
+
+/** The narrowest screen on which the chapter row's ⋮ still leaves the title readable. */
+private const val ChapterOverflowMinScreenWidthDp = 360
 
 private fun chapterNumberLabel(chapter: ChapterSummary): String =
     chapter.displayNumber?.let(::chapterNumberLabel) ?: "—"
