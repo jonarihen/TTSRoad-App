@@ -321,6 +321,7 @@ import dk.perspektiva.ttsroad.player.chaptersPlayedAfter
 import dk.perspektiva.ttsroad.player.jumpBackOptions
 import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
+import dk.perspektiva.ttsroad.player.jumpBackTo
 import dk.perspektiva.ttsroad.player.breadcrumbSnapshot
 import dk.perspektiva.ttsroad.player.mergeBreadcrumbs
 import dk.perspektiva.ttsroad.player.lastHeardSnapshot
@@ -1294,6 +1295,8 @@ internal fun LibraryScreen(
     val playerState by playbackController.state.collectAsStateWithLifecycle()
     // Survives the screen swap, so leaving and returning does not resurrect a dismissed banner.
     var dismissedLastHeard by rememberSaveable { mutableStateOf(0L) }
+    var lastHeardError by remember { mutableStateOf<String?>(null) }
+    var lastHeardBusy by remember { mutableStateOf(false) }
     val lastHeard = remember(history, playerState.isPlaying, dismissedLastHeard) {
         if (playerState.isPlaying) {
             null
@@ -1369,10 +1372,18 @@ internal fun LibraryScreen(
                         item {
                             LastHeardBanner(
                                 snapshot = lastHeard,
+                                error = lastHeardError,
+                                busy = lastHeardBusy,
                                 onResume = {
-                                    scope.launch {
-                                        jumpToSnapshot(lastHeard, playbackController, repository)
-                                        onOpenPlayer()
+                                    if (!lastHeardBusy) {
+                                        lastHeardBusy = true
+                                        lastHeardError = null
+                                        scope.launch {
+                                            val failure = jumpToSnapshot(lastHeard, playbackController, repository)
+                                            lastHeardBusy = false
+                                            // Only open the player once there is something in it.
+                                            if (failure == null) onOpenPlayer() else lastHeardError = failure
+                                        }
                                     }
                                 },
                                 onDismiss = { dismissedLastHeard = lastHeard.timestamp },
@@ -3652,6 +3663,27 @@ private fun PlayerScreen(
                 },
             )
         }
+        // The sheet stays open until the jump has landed, so a failed reload is reported here with a
+        // retry rather than leaving the listener in front of an empty player (#341).
+        var jumpError by remember { mutableStateOf<String?>(null) }
+        var failedJump by remember { mutableStateOf<HistorySnapshot?>(null) }
+        var jumping by remember { mutableStateOf(false) }
+        fun jump(snap: HistorySnapshot) {
+            if (jumping) return
+            jumping = true
+            jumpError = null
+            scope.launch {
+                val failure = jumpToSnapshot(snap, playbackController, repository)
+                jumping = false
+                if (failure == null) {
+                    playedAfterJump = chaptersPlayedAfter(history, snap)
+                    showJumpBack = false
+                } else {
+                    jumpError = failure
+                    failedJump = snap
+                }
+            }
+        }
         ModalBottomSheet(
             onDismissRequest = { showJumpBack = false },
             containerColor = AarisColor.BgRaise,
@@ -3698,13 +3730,7 @@ private fun PlayerScreen(
                             when {
                                 parsed == null -> sleepTimeError = "Use 24h time, e.g. 2349 or 23:49"
                                 nearest == null -> sleepTimeError = "No playback history to match"
-                                else -> {
-                                    scope.launch {
-                                        jumpToSnapshot(nearest, playbackController, repository)
-                                    }
-                                    playedAfterJump = chaptersPlayedAfter(history, nearest)
-                                    showJumpBack = false
-                                }
+                                else -> jump(nearest)
                             }
                         },
                         shape = RectangleShape,
@@ -3714,6 +3740,21 @@ private fun PlayerScreen(
                 }
                 sleepTimeError?.let {
                     MetaText(text = it, color = AarisColor.Danger, modifier = Modifier.padding(top = 4.dp))
+                }
+                if (jumping) {
+                    LinearProgressIndicator(
+                        color = AarisColor.Accent,
+                        trackColor = AarisColor.Line,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                }
+                jumpError?.let { message ->
+                    MetaText(text = message, color = AarisColor.Danger, modifier = Modifier.padding(top = 8.dp))
+                    failedJump?.let { snap ->
+                        TextButton(onClick = { jump(snap) }, enabled = !jumping) {
+                            Text("RETRY")
+                        }
+                    }
                 }
                 MetaText(
                     text = "// Or pick a moment",
@@ -3731,13 +3772,7 @@ private fun PlayerScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = canJump) {
-                                scope.launch {
-                                    jumpToSnapshot(snap, playbackController, repository)
-                                }
-                                playedAfterJump = chaptersPlayedAfter(history, snap)
-                                showJumpBack = false
-                            }
+                            .clickable(enabled = canJump && !jumping) { jump(snap) }
                             .padding(horizontal = 20.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -3804,6 +3839,8 @@ private fun SleepTimerOption(
 @Composable
 private fun LastHeardBanner(
     snapshot: HistorySnapshot,
+    error: String?,
+    busy: Boolean,
     onResume: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -3828,9 +3865,17 @@ private fun LastHeardBanner(
                 ).joinToString(" · "),
                 color = AarisColor.Muted,
             )
+            if (busy) {
+                LinearProgressIndicator(
+                    color = AarisColor.Accent,
+                    trackColor = AarisColor.Line,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            error?.let { MetaText(text = it, color = AarisColor.Danger) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onResume, shape = RectangleShape) {
-                    Text("RESUME THERE")
+                Button(onClick = onResume, enabled = !busy, shape = RectangleShape) {
+                    Text(if (error != null) "RETRY" else "RESUME THERE")
                 }
                 TextButton(onClick = onDismiss) {
                     Text("DISMISS")
@@ -3849,19 +3894,19 @@ private suspend fun jumpToSnapshot(
     snap: HistorySnapshot,
     playbackController: PlaybackController,
     repository: TtsRoadRepository,
-) {
-    if (!playbackController.seekToMediaId(snap.mediaId, snap.positionMs)) {
-        runCatching {
-            val resp = repository.chapters(snap.fictionId, playableOnly = false)
-            playbackController.playQueue(
-                chapters = resp.chapters,
-                startChapterId = snap.chapterId,
-                fiction = resp.fiction,
-                startPositionMsOverride = snap.positionMs,
-            )
-        }
-    }
-}
+): String? = jumpBackTo(
+    snap,
+    seekInQueue = playbackController::seekToMediaId,
+    reload = { target ->
+        val resp = repository.chapters(target.fictionId, playableOnly = false)
+        playbackController.playQueue(
+            chapters = resp.chapters,
+            startChapterId = target.chapterId,
+            fiction = resp.fiction,
+            startPositionMsOverride = target.positionMs,
+        )
+    },
+)
 
 /**
  * Put back the played marks made while the listener was asleep (#342), in one request.
