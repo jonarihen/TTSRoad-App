@@ -1,9 +1,13 @@
 package dk.perspektiva.ttsroad.download
 
 import android.content.Context
+import androidx.core.util.AtomicFile
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
+import dk.perspektiva.ttsroad.core.deleteUnderLock
+import dk.perspektiva.ttsroad.core.readUtf8OrNull
+import dk.perspektiva.ttsroad.core.writeUtf8
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,7 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * a mobile connection.
  */
 class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) {
-    private val file = File(context.filesDir, FileName)
+    private val file = AtomicFile(File(context.filesDir, FileName))
     private val adapter: JsonAdapter<Map<String, String>> = moshi.adapter(
         Types.newParameterizedType(Map::class.java, String::class.java, String::class.java),
     )
@@ -72,7 +76,7 @@ class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) 
     fun clear() {
         synchronized(lock) {
             _hashes.value = emptyMap()
-            runCatching { file.delete() }
+            runCatching { file.deleteUnderLock() }
         }
     }
 
@@ -88,8 +92,8 @@ class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) 
     }
 
     private fun read(): Map<Int, String> = runCatching {
-        if (!file.exists()) return@runCatching emptyMap()
-        adapter.fromJson(file.readText())
+        val json = file.readUtf8OrNull() ?: return@runCatching emptyMap()
+        adapter.fromJson(json)
             ?.mapNotNull { (key, value) -> key.toIntOrNull()?.let { it to value } }
             ?.toMap()
             .orEmpty()
@@ -97,7 +101,7 @@ class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) 
 
     private fun write(hashes: Map<Int, String>) {
         runCatching {
-            file.writeText(adapter.toJson(hashes.mapKeys { it.key.toString() }))
+            file.writeUtf8(adapter.toJson(hashes.mapKeys { it.key.toString() }))
         }
     }
 
