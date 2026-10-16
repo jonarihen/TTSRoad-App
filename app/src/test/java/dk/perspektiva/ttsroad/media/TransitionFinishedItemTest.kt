@@ -379,6 +379,42 @@ class TransitionFinishedItemTest {
         assertEquals(2, restarted.snapshots.value.size)
     }
 
+    @Test
+    fun `teardown while playing records the last position for the pending queue`() = runTest {
+        val player = TransitionPlayer()
+        player.elapse(10_000L)
+        val recorded = mutableListOf<Triple<String, Long, Long?>>()
+
+        recordProgressForTeardown(player, pauseSaveInFlight = false) { item, position, duration ->
+            recorded += Triple(item.mediaId, position, duration)
+        }
+
+        assertEquals(listOf(Triple("chapter:1", 111_000L, 120_000L)), recorded)
+    }
+
+    @Test
+    fun `teardown right after a pause records the position its cancelled save would have`() = runTest {
+        val player = TransitionPlayer()
+        player.pause()
+        val recorded = mutableListOf<Long>()
+
+        recordProgressForTeardown(player, pauseSaveInFlight = true) { _, position, _ -> recorded += position }
+
+        assertEquals(listOf(91_000L), recorded)
+    }
+
+    @Test
+    fun `teardown long after a finished pause save records nothing`() = runTest {
+        // Re-recording it now would stamp an old position newer than a browser's later write.
+        val player = TransitionPlayer()
+        player.pause()
+        var called = false
+
+        recordProgressForTeardown(player, pauseSaveInFlight = false) { _, _, _ -> called = true }
+
+        assertFalse(called)
+    }
+
     private fun recordHistory(history: PlaybackHistoryStore, item: MediaItem, position: Long, timestamp: Long) {
         history.record(timestamp, item.mediaId, 10, item.mediaId.substringAfter(":").toInt(), "C", "F", position)
     }

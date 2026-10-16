@@ -167,6 +167,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
     // outage later in the night gets a fresh set of attempts rather than giving up immediately.
     private var retryJob: Job? = null
+
+    // The save launched by a pause. Teardown cancels the scope, so if this is still running then,
+    // onDestroy records the position itself (#449).
+    private var pauseSave: Job? = null
     private var retryAttempt = 0
 
     // Whether the last player error was one a returning network can heal; see NetworkRecovery.kt.
@@ -361,7 +365,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (!isPlaying) {
-                        serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
+                        pauseSave = serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
                     } else {
                         // Do not wait for the first 15-second progress tick to turn Play into Pause.
                         serviceScope.launch { publishNowPlaying(forcePlaying = true) }
@@ -486,8 +490,14 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     override fun onDestroy() {
         networkWatcher?.stop()
+        val pauseSaveInFlight = pauseSave?.isActive == true
         serviceScope.cancel()
         runBlocking {
+            // The cancel above kills any save still in flight. Queue the position locally; the next
+            // start's flush sends it.
+            recordProgressForTeardown(player, pauseSaveInFlight) { item, position, duration ->
+                recordPendingProgress(item, position, duration, queueEnded = false)
+            }
             flushHistoryForTeardown(player, ServiceLocator.playbackHistory(this@TtsRoadMediaService), ::recordHistory)
         }
         shakeDetector?.stop()
@@ -1075,11 +1085,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         queueEnded: Boolean,
         flushHistory: Boolean = queueEnded,
     ) {
-        val itemSession = mediaItem.mediaMetadata.extras?.getString("queue_session_key")
-        fun ownsProgress(current: SessionState): Boolean =
-            audioItemBelongsToSession(mediaItem, current) &&
-                (itemSession == null || notificationSessionKey(current) == itemSession)
-        suspend fun ownsProgress(): Boolean = ownsProgress(tokenStore.current())
+        suspend fun ownsProgress(): Boolean = ownsProgress(mediaItem, tokenStore.current())
         if (!ownsProgress()) return
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 }
@@ -1097,6 +1103,33 @@ class TtsRoadMediaService : MediaLibraryService() {
         publishNowPlaying(forcePlaying = null)
 
         if (fictionId == null || chapterId == null) return
+        if (!recordPendingProgress(mediaItem, position, duration, queueEnded)) return
+        if (!ownsProgress()) return
+        progressSync.flush()
+
+        writeBreadcrumb(chapterId = chapterId, positionMs = position)
+        moveKeepAheadWindow(fictionId = fictionId, chapterId = chapterId)
+    }
+
+    private fun ownsProgress(mediaItem: MediaItem, current: SessionState): Boolean {
+        val itemSession = mediaItem.mediaMetadata.extras?.getString("queue_session_key")
+        return audioItemBelongsToSession(mediaItem, current) &&
+            (itemSession == null || notificationSessionKey(current) == itemSession)
+    }
+
+    /**
+     * Queue [mediaItem]'s position in [pendingProgress] for the current account, if it owns the
+     * item. Returns false when nothing was queued.
+     */
+    private suspend fun recordPendingProgress(
+        mediaItem: MediaItem,
+        position: Long,
+        duration: Long?,
+        queueEnded: Boolean,
+    ): Boolean {
+        val extras = mediaItem.mediaMetadata.extras
+        val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 } ?: return false
+        val chapterId = extras.getInt("chapter_id").takeIf { it > 0 } ?: return false
         // The account's `auto_mark_played`. The web player has honoured it since it was introduced
         // and this client did not, marking past 96% regardless — and because the phone writes
         // is_played to the same rows the browser reads, unticking the box in a browser was being
@@ -1121,12 +1154,11 @@ class TtsRoadMediaService : MediaLibraryService() {
         // carried an unstamped position the server could not order against one reached in the
         // browser meanwhile, and so overwrote it. The queue is what makes the position survive
         // being offline, and the stamp is what lets the server decide who is actually newer.
-        if (!ownsProgress()) return
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             // The owner is the session the check passed against, so the entry can only ever be
             // sent as that account (see PendingProgress.ownedBy).
             val owner = tokenStore.current()
-            if (!ownsProgress(owner)) return@withContext
+            if (!ownsProgress(mediaItem, owner)) return@withContext false
             pendingProgress.record(
                 fictionId = fictionId,
                 chapterId = chapterId,
@@ -1134,12 +1166,8 @@ class TtsRoadMediaService : MediaLibraryService() {
                 isPlayed = isPlayed,
                 owner = owner,
             )
+            true
         }
-        if (!ownsProgress()) return
-        progressSync.flush()
-
-        writeBreadcrumb(chapterId = chapterId, positionMs = position)
-        moveKeepAheadWindow(fictionId = fictionId, chapterId = chapterId)
     }
 
     /**
@@ -1897,6 +1925,21 @@ internal fun idleHistoryFlushListener(history: PlaybackHistoryStore, scope: Coro
     }
 
 @OptIn(UnstableApi::class)
+/**
+ * The last position at teardown, handed to [record] when there is one the scope's cancellation
+ * would lose: still playing, or paused with that pause's save not yet finished. A position paused
+ * long ago is left alone — re-recording it now would stamp it newer than a browser's later write.
+ */
+internal suspend fun recordProgressForTeardown(
+    player: Player,
+    pauseSaveInFlight: Boolean,
+    record: suspend (MediaItem, Long, Long?) -> Unit,
+) {
+    if (!player.isPlaying && !pauseSaveInFlight) return
+    val item = player.currentMediaItem ?: return
+    record(item, player.currentPosition.coerceAtLeast(0L), player.duration.takeIf { it != C.TIME_UNSET && it > 0 })
+}
+
 internal suspend fun flushHistoryForTeardown(
     player: Player,
     history: PlaybackHistoryStore,
