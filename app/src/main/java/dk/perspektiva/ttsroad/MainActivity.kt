@@ -4031,14 +4031,14 @@ internal fun JumpBackSleepTimeField(
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            label = { Text("FELL ASLEEP AT") },
+            label = { Text(labelCase("Fell asleep at")) },
             placeholder = { Text("2349") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.weight(1f),
         )
         Button(onClick = onJump, shape = RectangleShape) {
-            Text("JUMP")
+            Text(labelCase("Jump"))
         }
     }
     error?.let { AnnouncedError(text = it, modifier = Modifier.padding(top = 4.dp)) }
