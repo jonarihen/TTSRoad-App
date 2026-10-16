@@ -15,11 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Alarm
-import androidx.compose.material.icons.outlined.NotificationsActive
-import androidx.compose.material.icons.outlined.NotificationsNone
-import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +37,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.testTag
@@ -382,10 +379,10 @@ internal fun FictionNotificationStatusButton(
         else -> AarisColor.Muted
     }
     val icon = when (settings?.mode) {
-        NotificationModeBacklog -> Icons.Outlined.Alarm
-        NotificationModeEvery -> Icons.Outlined.NotificationsActive
-        NotificationModeOff -> Icons.Outlined.NotificationsOff
-        else -> Icons.Outlined.NotificationsNone
+        NotificationModeBacklog -> ImageVector.vectorResource(R.drawable.ic_alarm_outlined)
+        NotificationModeEvery -> ImageVector.vectorResource(R.drawable.ic_notifications_active_outlined)
+        NotificationModeOff -> ImageVector.vectorResource(R.drawable.ic_notifications_off_outlined)
+        else -> ImageVector.vectorResource(R.drawable.ic_notifications_none_outlined)
     }
     OutlinedButton(
         onClick = onClick,
