@@ -198,4 +198,70 @@ class ServerUrlsTest {
         assertNull(ServerUrls.rewriteAudioUrlOrNull(null, serverUrl = "https://ttsroad.example.com/"))
         assertNull(ServerUrls.rewriteAudioUrlOrNull("", serverUrl = "https://ttsroad.example.com/"))
     }
+
+    @Test
+    fun `audio keeps a reverse-proxy path prefix from the login url`() {
+        val server = "https://home.example.dk/ttsroad/"
+        // BASE_URL pointing at the backend's internal address knows nothing of /ttsroad.
+        assertEquals(
+            "https://home.example.dk/ttsroad/audio/12.mp3",
+            ServerUrls.rewriteAudioUrlOrNull("http://127.0.0.1:8000/audio/12.mp3", server),
+        )
+        // Unset BASE_URL: a root-relative path.
+        assertEquals(
+            "https://home.example.dk/ttsroad/audio/12.mp3?v=3",
+            ServerUrls.rewriteAudioUrlOrNull("/audio/12.mp3?v=3", server),
+        )
+        // BASE_URL already configured with the public subpath is not prefixed twice.
+        assertEquals(
+            "https://home.example.dk/ttsroad/audio/12.mp3",
+            ServerUrls.rewriteAudioUrlOrNull("https://public.example.dk/ttsroad/audio/12.mp3", server),
+        )
+    }
+
+    @Test
+    fun `rewriteHost keeps the prefix for relative and absolute urls`() {
+        val server = "https://home.example.dk/apps/ttsroad/"
+        assertEquals(
+            "https://home.example.dk/apps/ttsroad/feeds/abc.xml",
+            ServerUrls.rewriteHost("feeds/abc.xml", server),
+        )
+        assertEquals(
+            "https://home.example.dk/apps/ttsroad/feeds/abc.xml#top",
+            ServerUrls.rewriteHost("http://10.0.0.2:8000/feeds/abc.xml#top", server),
+        )
+        // A path that merely starts with the same letters is not already prefixed.
+        assertEquals(
+            "https://home.example.dk/apps/ttsroad/apps/ttsroadx/a",
+            ServerUrls.rewriteHost("/apps/ttsroadx/a", server),
+        )
+    }
+
+    @Test
+    fun `server covers under a subpath are recognised and keep the prefix`() {
+        val server = "https://home.example.dk/ttsroad/"
+        assertEquals(
+            "https://home.example.dk/ttsroad/cover/7.jpg",
+            ServerUrls.resolveCoverOrNull("/cover/7.jpg", server),
+        )
+        assertEquals(
+            "https://home.example.dk/ttsroad/cover/7.jpg",
+            ServerUrls.resolveCoverOrNull("http://127.0.0.1:8000/cover/7.jpg", server),
+        )
+        assertEquals(
+            "https://home.example.dk/ttsroad/cover/7.jpg",
+            ServerUrls.resolveCoverOrNull("https://public.example.dk/ttsroad/cover/7.jpg", server),
+        )
+        // Third-party artwork stays on its own host, so it never receives the bearer token.
+        val external = "https://www.royalroadcdn.com/public/covers-large/1.jpg"
+        assertEquals(external, ServerUrls.resolveCoverOrNull(external, server))
+    }
+
+    @Test
+    fun `origin checks ignore the path prefix and stay strict`() {
+        val server = "https://home.example.dk/ttsroad/"
+        assertTrue(ServerUrls.isSameOrigin("https://home.example.dk/ttsroad/audio/1.mp3", server))
+        assertFalse(ServerUrls.isSameOrigin("https://home.example.dk:8443/ttsroad/audio/1.mp3", server))
+        assertFalse(ServerUrls.isSameOrigin("http://home.example.dk/ttsroad/audio/1.mp3", server))
+    }
 }
