@@ -2,12 +2,15 @@ package dk.perspektiva.ttsroad.media
 
 import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.media.audiofx.LoudnessEnhancer
 import android.os.Bundle
 import android.os.Handler
+import android.view.KeyEvent
 import androidx.annotation.OptIn
+import androidx.core.content.IntentCompat
 import androidx.glance.appwidget.updateAll
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -47,6 +50,7 @@ import dk.perspektiva.ttsroad.data.ChapterSkips
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
+import dk.perspektiva.ttsroad.data.DefaultHeadsetButtonsSeek
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSleepTimerMinutes
 import dk.perspektiva.ttsroad.data.DownloadPreferences
@@ -202,6 +206,10 @@ class TtsRoadMediaService : MediaLibraryService() {
     @Volatile
     private var sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes
 
+    // Read by onMediaButtonEvent, which is not suspending either (#336).
+    @Volatile
+    private var headsetButtonsSeek: Boolean = DefaultHeadsetButtonsSeek
+
     @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
@@ -301,6 +309,12 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .map { it.sleepTimerDefaultMinutes }
                 .distinctUntilChanged()
                 .collect { sleepTimerDefaultMinutes = it }
+        }
+        serviceScope.launch {
+            preferences.prefs
+                .map { it.headsetButtonsSeek }
+                .distinctUntilChanged()
+                .collect { headsetButtonsSeek = it }
         }
         player.addListener(
             departingChapterProgressListener(player, serviceScope) { item, position, duration, completed, flushHistory ->
@@ -1412,6 +1426,36 @@ class TtsRoadMediaService : MediaLibraryService() {
             val player = session.player
             player.seekTo(skipTargetMs(player.currentPosition, player.duration, delta))
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        /**
+         * Headset and car keys: next/previous seek by the skip interval instead of changing
+         * chapter, unless the user turned that off (#336). See [headsetButtonAction].
+         */
+        override fun onMediaButtonEvent(
+            session: MediaSession,
+            controllerInfo: MediaSession.ControllerInfo,
+            intent: Intent,
+        ): Boolean {
+            val keyEvent = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+            return when (
+                val action = headsetButtonAction(
+                    keyEvent = keyEvent,
+                    fromOwnPendingIntent = intent.data != null,
+                    nextPreviousSeek = service.headsetButtonsSeek,
+                )
+            ) {
+                HeadsetButtonAction.PassThrough -> false
+                HeadsetButtonAction.Consume -> true
+                is HeadsetButtonAction.Seek -> {
+                    val player = session.player
+                    if (player.currentMediaItem != null) {
+                        val delta = action.direction * service.skipIntervalMs
+                        player.seekTo(skipTargetMs(player.currentPosition, player.duration, delta))
+                    }
+                    true
+                }
+            }
         }
 
         override fun onGetLibraryRoot(
