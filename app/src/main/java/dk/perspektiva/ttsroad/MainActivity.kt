@@ -7722,7 +7722,7 @@ internal fun BrowseScopeTabs(
 }
 
 /**
- * The row that opens the tag filter and says whether one is on.
+ * The row that opens a filter (tags, sources) and says whether one is on.
  *
  * The count on the button is the whole reason this is not just an entry in the sort sheet. A
  * filter that is hiding rows has to be visible *while* it hides them — the web puts the same
@@ -7732,142 +7732,13 @@ internal fun BrowseScopeTabs(
  * CLEAR appears only when something is selected, and is a separate control rather than a
  * "deselect all" buried in the sheet: undoing a filter should not cost the two taps of opening the
  * thing that caused it.
- */
-@Composable
-internal fun TagFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        TextButton(
-            onClick = onOpen,
-            modifier = Modifier.heightIn(min = MinTouchTargetSize),
-        ) {
-            Text(
-                text = if (active.isEmpty()) "TAGS" else "TAGS ${active.size}",
-                color = if (active.isEmpty()) AarisColor.Muted else AarisColor.Accent,
-                maxLines = 1,
-                softWrap = false,
-            )
-        }
-        if (active.isNotEmpty()) {
-            // The selection itself, not just its size: with two tags on, which two is the question
-            // the number cannot answer, and scrolling is cheaper than reopening the sheet to look.
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                active.sorted().forEach { tag ->
-                    AarisTag(text = tag, color = AarisColor.Accent)
-                }
-            }
-            TextButton(
-                onClick = onClear,
-                modifier = Modifier.heightIn(min = MinTouchTargetSize),
-            ) {
-                Text(text = "CLEAR", color = AarisColor.Muted, maxLines = 1, softWrap = false)
-            }
-        } else {
-            Spacer(modifier = Modifier.weight(1f))
-        }
-    }
-}
-
-/**
- * Pick the tags the grid is narrowed to (multi-select, ANDed).
  *
- * A sheet for the same reason the sort is one: the list is as long as the server's vocabulary —
- * a Royal Road shelf runs to dozens of genres — and a row of chips that wraps to six lines above
- * the grid is worse than a control that opens.
- *
- * Every row is a checkbox rather than a toggle chip because AND-ing is the behaviour, and a
- * checkbox is the one control everybody already reads as "all of the ticked ones".
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun TagFilterSheet(
-    tags: List<String>,
-    selected: Set<String>,
-    onToggle: (String) -> Unit,
-    onClear: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = AarisColor.BgRaise) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MetaText(
-                text = "// Filter by tag",
-                color = AarisColor.Accent,
-                modifier = Modifier.weight(1f),
-            )
-            if (selected.isNotEmpty()) {
-                TextButton(
-                    onClick = onClear,
-                    modifier = Modifier.heightIn(min = MinTouchTargetSize),
-                ) {
-                    Text(text = "CLEAR", color = AarisColor.Muted)
-                }
-            }
-        }
-        MetaText(
-            text = "// A book has to carry every tag you tick",
-            color = AarisColor.Muted,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
-        )
-        LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-            items(tags, key = { it }) { tag ->
-                val isChecked = tag in selected
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = MinTouchTargetSize)
-                        // One toggleable node for the whole row, so TalkBack announces the tag and
-                        // its state together and the target is the row rather than the 20 dp box.
-                        .toggleable(
-                            value = isChecked,
-                            role = Role.Checkbox,
-                            onValueChange = { onToggle(tag) },
-                        )
-                        .padding(horizontal = 20.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(checked = isChecked, onCheckedChange = null)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = tag.uppercase(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isChecked) AarisColor.Accent else AarisColor.Ink,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-            }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-    }
-}
-
-/**
- * The row that opens the source filter and says whether one is on.
- *
- * Deliberately a near-twin of [TagFilterBar] rather than a merged "filters" control: the two answer
+ * Tags and sources each get their own bar rather than one merged "filters" control: the two answer
  * different questions — what a book is *about* against where it came *from* — and a reader narrowing
  * by one is rarely narrowing by the other. Sharing the shape means the second one needs no learning.
- *
- * It is drawn only when the shelf has more than one source, so on the ordinary all-Royal-Road
- * library this row does not exist at all.
  */
 @Composable
-internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) {
+private fun FilterBar(label: String, active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -7877,17 +7748,19 @@ internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: (
             onClick = onOpen,
             modifier = Modifier
                 .heightIn(min = MinTouchTargetSize)
-                .testTag("source-filter-open"),
+                .testTag("${label.lowercase()}-filter-open"),
             shape = RectangleShape,
         ) {
             Text(
-                text = if (active.isEmpty()) "SOURCE" else "SOURCE ${active.size}",
+                text = if (active.isEmpty()) label else "$label ${active.size}",
                 color = if (active.isEmpty()) AarisColor.Muted else AarisColor.Accent,
                 maxLines = 1,
                 softWrap = false,
             )
         }
         if (active.isNotEmpty()) {
+            // The selection itself, not just its size: with two on, which two is the question the
+            // number cannot answer, and scrolling is cheaper than reopening the sheet to look.
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -7895,8 +7768,8 @@ internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: (
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                active.sorted().forEach { source ->
-                    AarisTag(text = source, color = AarisColor.Accent)
+                active.sorted().forEach { value ->
+                    AarisTag(text = value, color = AarisColor.Accent)
                 }
             }
             TextButton(
@@ -7913,19 +7786,26 @@ internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: (
 }
 
 /**
- * Pick the sources the grid is narrowed to (multi-select, ORed).
+ * Pick the options the grid is narrowed to (multi-select).
  *
- * The one place this deliberately differs from [TagFilterSheet] is the sentence under the title. A
- * book carries many tags but exactly one source, so ticking two tags means "both" and ticking two
- * sources has to mean "either" — ANDing them would always answer with nothing. The subtitle says so
- * rather than leaving the user to discover it by emptying their grid.
+ * A sheet for the same reason the sort is one: the list can be as long as the server's vocabulary —
+ * a Royal Road shelf runs to dozens of genres — and a row of chips that wraps to six lines above
+ * the grid is worse than a control that opens.
+ *
+ * Every row is a checkbox rather than a toggle chip. [subtitle] says whether ticking two means
+ * "both" (tags) or "either" (sources), rather than leaving the user to discover it by emptying
+ * their grid.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun SourceFilterSheet(
-    sources: List<SourceOption>,
+private fun <T> FilterSheet(
+    title: String,
+    subtitle: String,
+    options: List<T>,
+    key: (T) -> String,
+    label: (T) -> String,
     selected: Set<String>,
-    onToggle: (SourceOption) -> Unit,
+    onToggle: (T) -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -7937,7 +7817,7 @@ internal fun SourceFilterSheet(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             MetaText(
-                text = "// Filter by source",
+                text = title,
                 color = AarisColor.Accent,
                 modifier = Modifier.weight(1f),
             )
@@ -7952,21 +7832,23 @@ internal fun SourceFilterSheet(
             }
         }
         MetaText(
-            text = "// A book comes from one place, so ticking two shows either",
+            text = subtitle,
             color = AarisColor.Muted,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
         )
         LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-            items(sources, key = { it.key }) { source ->
-                val isChecked = source.key in selected
+            items(options, key = key) { option ->
+                val isChecked = key(option) in selected
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = MinTouchTargetSize)
+                        // One toggleable node for the whole row, so TalkBack announces the option and
+                        // its state together and the target is the row rather than the 20 dp box.
                         .toggleable(
                             value = isChecked,
                             role = Role.Checkbox,
-                            onValueChange = { onToggle(source) },
+                            onValueChange = { onToggle(option) },
                         )
                         .padding(horizontal = 20.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -7974,7 +7856,7 @@ internal fun SourceFilterSheet(
                     Checkbox(checked = isChecked, onCheckedChange = null)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = source.label.uppercase(),
+                        text = label(option).uppercase(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isChecked) AarisColor.Accent else AarisColor.Ink,
                         maxLines = 1,
@@ -7987,6 +7869,55 @@ internal fun SourceFilterSheet(
         Spacer(modifier = Modifier.height(16.dp))
     }
 }
+
+@Composable
+internal fun TagFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) =
+    FilterBar(label = "TAGS", active = active, onOpen = onOpen, onClear = onClear)
+
+/** Tags are ANDed: a book carries many, and ticking two means "both". */
+@Composable
+internal fun TagFilterSheet(
+    tags: List<String>,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) = FilterSheet(
+    title = "// Filter by tag",
+    subtitle = "// A book has to carry every tag you tick",
+    options = tags,
+    key = { it },
+    label = { it },
+    selected = selected,
+    onToggle = onToggle,
+    onClear = onClear,
+    onDismiss = onDismiss,
+)
+
+/** Drawn only when the shelf has more than one source, so the all-Royal-Road library never sees it. */
+@Composable
+internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) =
+    FilterBar(label = "SOURCE", active = active, onOpen = onOpen, onClear = onClear)
+
+/** Sources are ORed: a book has exactly one, so ANDing two would always answer with nothing. */
+@Composable
+internal fun SourceFilterSheet(
+    sources: List<SourceOption>,
+    selected: Set<String>,
+    onToggle: (SourceOption) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) = FilterSheet(
+    title = "// Filter by source",
+    subtitle = "// A book comes from one place, so ticking two shows either",
+    options = sources,
+    key = { it.key },
+    label = { it.label },
+    selected = selected,
+    onToggle = onToggle,
+    onClear = onClear,
+    onDismiss = onDismiss,
+)
 
 /** The half of an order that its two-word label cannot carry. Null where the label is the whole. */
 private fun fictionSortNote(sort: FictionSort): String? = when (sort) {
