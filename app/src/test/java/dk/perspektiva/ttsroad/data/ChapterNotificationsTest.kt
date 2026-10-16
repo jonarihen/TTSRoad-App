@@ -100,6 +100,21 @@ class ChapterNotificationsTest {
     }
 
     @Test
+    fun `an older snapshot landing after a newer one does not re-announce`() {
+        // #452: the job saw X ready and announced it; the in-app poll fetched earlier (X pulled)
+        // and writes afterwards. X must stay remembered, or the next poll announces it again.
+        val seeded = newlyReady(emptyList(), alreadySeen = null).second
+        val newer = newlyReady(listOf(notice(1, "ready")), alreadySeen = seeded)
+        assertEquals(listOf(1), newer.first.map { it.id })
+
+        val stale = newlyReady(listOf(notice(1, "pulled")), alreadySeen = newer.second)
+        assertTrue(stale.first.isEmpty())
+        assertEquals(setOf(1), stale.second)
+
+        assertTrue(newlyReady(listOf(notice(1, "ready")), alreadySeen = stale.second).first.isEmpty())
+    }
+
+    @Test
     fun `an unknown state reads as still converting, never as ready`() {
         // Guessing Ready would offer Play for audio that may not exist.
         assertEquals(ChapterNotificationState.Pulled, ChapterNotificationState.fromWire("something-new"))
