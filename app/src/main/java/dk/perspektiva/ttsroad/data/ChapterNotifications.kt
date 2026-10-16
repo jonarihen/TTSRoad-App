@@ -34,6 +34,15 @@ enum class ChapterNotificationState(val wire: String) {
 val ChapterNotificationEntry.presentation: ChapterNotificationState
     get() = ChapterNotificationState.fromWire(state)
 
+/**
+ * Whether "Convert again" can help this row (#350): stalled *because the conversion failed*.
+ *
+ * The server also reports an excluded chapter as stalled, and answers a retry of one with a 409,
+ * so the chapter's own status is what decides — not the presentation state alone.
+ */
+val ChapterNotificationEntry.canRetryConversion: Boolean
+    get() = presentation == ChapterNotificationState.Stalled && chapter.status == "error"
+
 fun ChapterNotificationEntry.notificationBody(): String =
     message?.takeIf { it.isNotBlank() } ?: chapter.title
 

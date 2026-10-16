@@ -24,9 +24,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dk.perspektiva.ttsroad.core.userMessage
 import dk.perspektiva.ttsroad.data.ChapterNotificationEntry
 import dk.perspektiva.ttsroad.data.ChapterNotificationState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
+import dk.perspektiva.ttsroad.data.canRetryConversion
 import dk.perspektiva.ttsroad.data.chapterNotificationsEmptyNote
 import dk.perspektiva.ttsroad.data.detailLabel
 import dk.perspektiva.ttsroad.data.notificationBody
@@ -40,6 +42,7 @@ import dk.perspektiva.ttsroad.ui.SectionHeader
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 
 /**
  * New chapters on the serials you follow, from pulled to playable (#175).
@@ -173,6 +176,36 @@ internal fun NewChaptersScreen(
                                     }
                             }
                         },
+                        // The same route as "Convert again" on the fiction screen (#350), offered
+                        // only on a row whose chapter actually failed: a stalled row can also be an
+                        // excluded chapter, which the server answers with a 409.
+                        onRetry = if (library.chapterMaintenance && entry.canRetryConversion) {
+                            {
+                                scope.launch {
+                                    busyId = entry.id
+                                    actionError = null
+                                    runCatching { repository.retryChapter(entry.chapter.id) }
+                                        .onSuccess { result ->
+                                            if (result == null) {
+                                                actionError = "This server cannot retry conversions"
+                                            } else {
+                                                refresh()
+                                            }
+                                        }
+                                        .onFailure {
+                                            if (it is CancellationException) throw it
+                                            actionError = if ((it as? HttpException)?.code() == 409) {
+                                                "That chapter is already converting, or is excluded"
+                                            } else {
+                                                it.userMessage("Could not retry that chapter")
+                                            }
+                                        }
+                                    busyId = null
+                                }
+                            }
+                        } else {
+                            null
+                        },
                         onDismiss = {
                             scope.launch {
                                 busyId = entry.id
@@ -202,6 +235,7 @@ private fun NewChapterRow(
     onOpen: () -> Unit,
     onDismiss: () -> Unit,
     busy: Boolean = false,
+    onRetry: (() -> Unit)? = null,
 ) {
     AarisCard(modifier = Modifier.fillMaxWidth(), onClick = onOpen) {
         Column(
@@ -239,8 +273,16 @@ private fun NewChapterRow(
             )
             // Only a chapter with audio offers Play, and only the server's own `dismissible` offers
             // Dismiss. Neither is inferred from the state name.
-            if (entry.playable || entry.dismissible) {
+            if (entry.playable || entry.dismissible || onRetry != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (onRetry != null) {
+                        OutlinedButton(
+                            onClick = onRetry,
+                            enabled = !busy,
+                            shape = RectangleShape,
+                            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                        ) { Text(if (busy) "WORKING" else "CONVERT AGAIN") }
+                    }
                     if (entry.playable) {
                         OutlinedButton(
                             onClick = onPlay,
