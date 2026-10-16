@@ -268,6 +268,7 @@ import dk.perspektiva.ttsroad.data.DownloadPrefs
 import dk.perspektiva.ttsroad.data.StreamingCacheChoices
 import dk.perspektiva.ttsroad.data.StreamingCacheUnlimited
 import dk.perspektiva.ttsroad.data.KeepAheadChoices
+import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.PreferenceScope
 import dk.perspektiva.ttsroad.data.SessionState
@@ -421,7 +422,7 @@ class MainActivity : ComponentActivity() {
             }
             val readableText by remember {
                 playbackPreferences.prefs.map { it.readableText }.distinctUntilChanged()
-            }.collectAsStateWithLifecycle(initialValue = false)
+            }.collectAsStateWithLifecycle(initialValue = PlaybackPreferences.lastKnownReadableText)
             TtsRoadTheme(readableText = readableText) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -10510,6 +10511,8 @@ internal fun PlaybackSkipsSetting(
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
 ) {
+    // Spoken as it is shown, capitals or not under readable text (#359).
+    val skipAdsLabel = labelCase("Skip adverts and disclaimers")
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -10518,7 +10521,7 @@ internal fun PlaybackSkipsSetting(
                 role = Role.Switch,
                 onValueChange = onEnabledChange,
             )
-            .semantics { contentDescription = "SKIP ADVERTS AND DISCLAIMERS" }
+            .semantics { contentDescription = skipAdsLabel }
             .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,

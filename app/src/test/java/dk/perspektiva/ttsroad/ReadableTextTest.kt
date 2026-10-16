@@ -10,7 +10,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
+import androidx.test.core.app.ApplicationProvider
+import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
+import kotlinx.coroutines.runBlocking
 import dk.perspektiva.ttsroad.nav.AppRoot
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
@@ -37,6 +40,22 @@ class ReadableTextTest {
     @Test
     fun `the setting is off until asked for`() {
         assertFalse(PlaybackPrefs().readableText)
+    }
+
+    /** The cache is what the activity's first frame is drawn from; it must follow the store. */
+    @Test
+    fun `the remembered setting follows writes and reads, for the first frame`() {
+        val preferences = PlaybackPreferences(ApplicationProvider.getApplicationContext())
+        runBlocking {
+            preferences.setReadableText(true)
+            assertTrue(PlaybackPreferences.lastKnownReadableText)
+            preferences.setReadableText(false)
+            assertFalse(PlaybackPreferences.lastKnownReadableText)
+            preferences.setReadableText(true)
+            assertTrue(preferences.current().readableText)
+            assertTrue(PlaybackPreferences.lastKnownReadableText)
+            preferences.setReadableText(false)
+        }
     }
 
     @Test

@@ -212,7 +212,7 @@ class PlaybackPreferences(private val context: Context) {
                 nightMode = stored[Keys.NightMode] ?: false,
                 readableText = stored[Keys.ReadableText] ?: false,
                 headsetButtonsSeek = stored[Keys.HeadsetButtonsSeek] ?: DefaultHeadsetButtonsSeek,
-            )
+            ).also { lastKnownReadableText = it.readableText }
         }
 
     suspend fun current(): PlaybackPrefs = prefs.first()
@@ -255,6 +255,19 @@ class PlaybackPreferences(private val context: Context) {
 
     suspend fun setReadableText(enabled: Boolean) {
         context.playbackDataStore.edit { it[Keys.ReadableText] = enabled }
+        lastKnownReadableText = enabled
+    }
+
+    companion object {
+        /**
+         * The readable-text setting as this process last read or wrote it, so the activity's
+         * first frame is drawn in the right style (#359). Without it every cold start and every
+         * recreation showed a frame of mono capitals before DataStore answered.
+         * [dk.perspektiva.ttsroad.core.ServiceLocator.init] warms it at process start.
+         */
+        @Volatile
+        var lastKnownReadableText: Boolean = false
+            private set
     }
 
     suspend fun setHeadsetButtonsSeek(enabled: Boolean) {

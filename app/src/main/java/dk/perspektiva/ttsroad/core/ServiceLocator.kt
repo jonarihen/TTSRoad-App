@@ -114,7 +114,8 @@ object ServiceLocator {
         playbackController(context)
         playbackHistory(context)
         sleepTimer()
-        playbackPreferences(context)
+        // Read once now, so the activity's first frame knows the readable-text setting (#359).
+        initScope.launch { playbackPreferences(context).current() }
         readerPreferences(context)
         libraryCache(context)
     }
