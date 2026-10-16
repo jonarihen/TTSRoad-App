@@ -29,8 +29,37 @@ class StaleDownloadScanner(
     private val completedReplacements = mutableSetOf<Int>()
     private var generation = 0L
 
+    /**
+     * The server whose downloads this is about, as the identity its downloads are filed under
+     * (#316). Chapter ids are only unique per server, so nothing found under one may be reported or
+     * recorded under another. Null until told, which reads and writes the unscoped legacy record.
+     */
+    @Volatile
+    private var scope: String? = null
+
+    /**
+     * Chapters whose bare `chapter:<id>` download [scope]'s server owns: the evidence that a hash
+     * recorded before scoping is this server's. See [AudioHashRecord].
+     */
+    @Volatile
+    private var legacyOwned: Set<Int> = emptySet()
+
     /** Chapter ids whose downloaded audio is provably not what the server has now. */
     val staleChapters: StateFlow<Set<Int>> = _staleChapters.asStateFlow()
+
+    /**
+     * Switch to the server filed under [scope]. Everything held in memory was about the previous
+     * one, so it goes, and a scan still in flight for it is discarded when it lands.
+     */
+    fun useScope(scope: String?, legacyOwned: Set<Int> = emptySet()) {
+        this.legacyOwned = legacyOwned
+        if (scope == this.scope) return
+        this.scope = scope
+        generation++
+        serverHashes.clear()
+        completedReplacements.clear()
+        _staleChapters.value = emptySet()
+    }
 
     /**
      * Check one fiction's downloads against the server.
@@ -43,33 +72,38 @@ class StaleDownloadScanner(
     suspend fun scan(fictionId: Int, downloaded: Set<Int>, retained: Set<Int> = downloaded) {
         val present = retained + _staleChapters.value + completedReplacements
         if (present.isEmpty()) return
+        val scope = scope
+        val legacyOwned = legacyOwned
         val scanGeneration = generation
         val response = fetchHashes(fictionId) ?: return
         if (scanGeneration != generation) return
         val check = staleDownloadCheck(
             downloaded = present,
-            recorded = record.current(),
+            recorded = record.current(scope, legacyOwned),
             server = response.chapters,
         )
         response.chapters.forEach { entry ->
             entry.audioSha256?.takeIf { it.isNotBlank() }?.let { serverHashes[entry.chapterId] = it }
         }
-        record.merge(check.adopt.filterKeys { it in downloaded })
+        record.merge(check.adopt.filterKeys { it in downloaded }, scope, legacyOwned)
         // Every ordinary delete already forgets its hash through OfflineDownloads.remove, but a
         // download can also leave the index without passing through it — a cache upgrade, a row
         // the store drops, an install restored onto a phone whose files did not come with it. The
         // scan is the one place that sees the download store and the record side by side, so it is
         // where a record for bytes that are not there gets dropped.
-        record.prune(present)
+        record.prune(present, scope, legacyOwned)
         _staleChapters.value = _staleChapters.value + check.stale
     }
 
     fun replacementHash(chapterId: Int): String? = serverHashes[chapterId]?.takeIf { chapterId in _staleChapters.value }
 
-    fun replacementCompleted(chapterId: Int, hash: String) {
+    /** A replacement of [chapterId] on the server filed under [scope] finished with [hash]. */
+    fun replacementCompleted(chapterId: Int, hash: String, scope: String? = this.scope) {
+        // Another server's row claims no legacy hash: there is no evidence here for whose it is.
+        record.merge(mapOf(chapterId to hash), scope, if (scope == this.scope) legacyOwned else emptySet())
+        if (scope != this.scope) return
         generation++
         completedReplacements += chapterId
-        record.merge(mapOf(chapterId to hash))
         _staleChapters.value = if (serverHashes[chapterId]?.let { it != hash } == true) {
             _staleChapters.value + chapterId
         } else {
@@ -78,11 +112,12 @@ class StaleDownloadScanner(
     }
 
     /** A download that is gone cannot be stale, and its hash describes bytes no longer on disk. */
-    fun forget(chapterId: Int) {
+    fun forget(chapterId: Int, scope: String? = this.scope) {
+        record.forget(chapterId, scope, if (scope == this.scope) legacyOwned else emptySet())
+        if (scope != this.scope) return
         generation++
         serverHashes.remove(chapterId)
         completedReplacements -= chapterId
-        record.forget(chapterId)
         _staleChapters.value = _staleChapters.value - chapterId
     }
 

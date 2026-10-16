@@ -179,6 +179,16 @@ internal class DownloadIdentityMigration(
         }
     }
 
+    /**
+     * Whether a rekey retained for a server other than [identity] still owes [requestId] its row —
+     * in which case a fresh download on [identity]'s server must not take that id (#316). Answers
+     * false while the file cannot be read: the bare id is then the one downloads used before.
+     */
+    fun isRetainedElsewhere(requestId: String, identity: String?): Boolean =
+        synchronized(pendingLock) {
+            ensureLoaded() && undispatched.any { (owner, requests) -> owner != identity && requestId in requests }
+        }
+
     /** Whether rekeys retained for [identity] are still waiting to be dispatched. */
     fun hasRetained(identity: String): Boolean =
         synchronized(pendingLock) {
