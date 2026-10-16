@@ -1162,8 +1162,9 @@ private fun MainScaffold(
             AppBottomBar(
                 selected = selectedRoot,
                 onSelect = onRootChange,
-                // Playable only: a converting chapter is a promise, not something to go and hear.
-                badges = mapOf(AppRoot.Listening to newChapters.playable),
+                // Ready only: a converting chapter is a promise, not something to go and hear. The
+                // server's count, over every open notice — the rows are one capped page.
+                badges = mapOf(AppRoot.Listening to newChapters.ready),
                 miniPlayer = if (playerState.hasMedia && screen != AppScreen.Player) {
                     {
                         MiniPlayerBar(
@@ -1214,7 +1215,7 @@ private fun MainScaffold(
                     onOpenLogs = { onScreenChange(AppScreen.Logs) },
                     onOpenNewChapters = { onScreenChange(AppScreen.NewChapters) },
                     unreadNewChapters = newChapters.unread,
-                    playableNewChapters = newChapters.playable,
+                    readyNewChapters = newChapters.ready,
                 )
 
                 is AppScreen.Fiction -> FictionScreen(
@@ -4128,7 +4129,7 @@ private fun ListeningScreen(
     onOpenLogs: () -> Unit,
     onOpenNewChapters: () -> Unit,
     unreadNewChapters: Int,
-    playableNewChapters: Int,
+    readyNewChapters: Int,
 ) {
     val context = LocalContext.current
     val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
@@ -4148,7 +4149,7 @@ private fun ListeningScreen(
         canOpenLogs = canReadServerLogs(capabilities, session.isAdmin),
         canOpenNewChapters = canUseChapterNotifications(capabilities, session, capabilitiesResolved),
         unreadNewChapters = unreadNewChapters,
-        playableNewChapters = playableNewChapters,
+        readyNewChapters = readyNewChapters,
         onOpenPlayer = onOpenPlayer,
         onOpenBookmarks = onOpenBookmarks,
         onOpenPronunciationReports = onOpenPronunciationReports,
@@ -4173,7 +4174,7 @@ internal fun ListeningScreenBody(
     /** Everything unresolved, converting chapters included. Zero draws no count at all. */
     unreadNewChapters: Int = 0,
     /** Of those, how many can be played now — the part of the count worth going to the list for. */
-    playableNewChapters: Int = 0,
+    readyNewChapters: Int = 0,
     onOpenPlayer: () -> Unit = {},
     onOpenBookmarks: () -> Unit = {},
     onOpenPronunciationReports: () -> Unit = {},
@@ -4243,7 +4244,7 @@ internal fun ListeningScreenBody(
                         // The count is in the title rather than a badge: this is a list of rows,
                         // and one of them wearing a badge the others cannot is a shape the screen
                         // does not otherwise have.
-                        title = newChaptersRowTitle(unread = unreadNewChapters, playable = playableNewChapters),
+                        title = newChaptersRowTitle(unread = unreadNewChapters, ready = readyNewChapters),
                         subtitle = "Chapters pulled on serials you follow, until they can be played",
                         enabled = true,
                         onClick = onOpenNewChapters,
