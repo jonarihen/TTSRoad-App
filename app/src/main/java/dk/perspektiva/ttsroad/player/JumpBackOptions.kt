@@ -63,3 +63,43 @@ fun jumpBackOptions(
     }
     return out
 }
+
+/** What a typed "fell asleep at" time found in the trail. */
+sealed interface SleepTimeMatch {
+    /** Nothing recorded at all, locally or on the server. */
+    data object NoHistory : SleepTimeMatch
+
+    /** A recorded moment close enough to the typed time to jump to without asking. */
+    data class Near(val snapshot: HistorySnapshot) : SleepTimeMatch
+
+    /**
+     * The closest recorded moment is [distanceMs] away — far enough that jumping there silently
+     * would land the listener somewhere unrelated to what they typed (#340). The sheet says so and
+     * asks first.
+     */
+    data class Far(val snapshot: HistorySnapshot, val distanceMs: Long) : SleepTimeMatch
+}
+
+/**
+ * How far the closest recorded moment may be from a typed time and still count as "that time".
+ *
+ * Comfortably wider than the server's five-minute breadcrumb spacing, so a phone holding only
+ * server history (new install, or after CLEAR) still matches without a prompt; narrow enough that
+ * an evening session is never mistaken for a time typed in the middle of the night.
+ */
+const val SleepTimeMatchWindowMs: Long = 30 * 60_000L
+
+/**
+ * The recorded moment nearest [targetMs] in [trail] — the same merged local + server trail the
+ * sheet lists (#319), so a time the list visibly covers can always be matched.
+ */
+fun matchSleepTime(
+    trail: List<HistorySnapshot>,
+    targetMs: Long,
+    windowMs: Long = SleepTimeMatchWindowMs,
+): SleepTimeMatch {
+    val nearest = trail.minByOrNull { kotlin.math.abs(it.timestamp - targetMs) }
+        ?: return SleepTimeMatch.NoHistory
+    val distance = kotlin.math.abs(nearest.timestamp - targetMs)
+    return if (distance <= windowMs) SleepTimeMatch.Near(nearest) else SleepTimeMatch.Far(nearest, distance)
+}

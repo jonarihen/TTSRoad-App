@@ -324,6 +324,8 @@ import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.jumpBackTo
 import dk.perspektiva.ttsroad.player.breadcrumbSnapshot
 import dk.perspektiva.ttsroad.player.mergeBreadcrumbs
+import dk.perspektiva.ttsroad.player.SleepTimeMatch
+import dk.perspektiva.ttsroad.player.matchSleepTime
 import dk.perspektiva.ttsroad.player.lastHeardSnapshot
 import dk.perspektiva.ttsroad.player.listeningSpanAtSpeed
 import dk.perspektiva.ttsroad.player.remainingMs
@@ -3668,6 +3670,14 @@ private fun PlayerScreen(
         var jumpError by remember { mutableStateOf<String?>(null) }
         var failedJump by remember { mutableStateOf<HistorySnapshot?>(null) }
         var jumping by remember { mutableStateOf(false) }
+        // A typed time whose closest recorded moment is far off: shown with a confirm, not jumped to.
+        var farSleepMatch by remember { mutableStateOf<SleepTimeMatch.Far?>(null) }
+        // The same merged trail the list below is built from (#319), limited to rows it could jump to.
+        val sleepMatchTrail = remember(history, remoteBreadcrumbs, playerState.queue) {
+            mergeBreadcrumbs(history, remoteBreadcrumbs).filter { snap ->
+                playerState.queue.any { it.mediaId == snap.mediaId } || (snap.fictionId > 0 && snap.chapterId > 0)
+            }
+        }
         fun jump(snap: HistorySnapshot) {
             if (jumping) return
             jumping = true
@@ -3716,6 +3726,7 @@ private fun PlayerScreen(
                         onValueChange = {
                             sleepTimeInput = it
                             sleepTimeError = null
+                            farSleepMatch = null
                         },
                         placeholder = { Text("2349") },
                         singleLine = true,
@@ -3726,11 +3737,12 @@ private fun PlayerScreen(
                         onClick = {
                             val parsed = parseClockTime(sleepTimeInput)
                             val target = parsed?.let { (h, m) -> resolveSleepTimestamp(h, m, now) }
-                            val nearest = target?.let { t -> history.minByOrNull { kotlin.math.abs(it.timestamp - t) } }
-                            when {
-                                parsed == null -> sleepTimeError = "Use 24h time, e.g. 2349 or 23:49"
-                                nearest == null -> sleepTimeError = "No playback history to match"
-                                else -> jump(nearest)
+                            farSleepMatch = null
+                            when (val match = target?.let { matchSleepTime(sleepMatchTrail, it) }) {
+                                null -> sleepTimeError = "Use 24h time, e.g. 2349 or 23:49"
+                                SleepTimeMatch.NoHistory -> sleepTimeError = "No playback history to match"
+                                is SleepTimeMatch.Far -> farSleepMatch = match
+                                is SleepTimeMatch.Near -> jump(match.snapshot)
                             }
                         },
                         shape = RectangleShape,
@@ -3740,6 +3752,20 @@ private fun PlayerScreen(
                 }
                 sleepTimeError?.let {
                     MetaText(text = it, color = AarisColor.Danger, modifier = Modifier.padding(top = 4.dp))
+                }
+                farSleepMatch?.let { far ->
+                    val typed = parseClockTime(sleepTimeInput)
+                        ?.let { (h, m) -> "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}" } ?: sleepTimeInput.trim()
+                    val closest = formatClockTime(context, far.snapshot.timestamp)
+                    MetaText(
+                        text = "Nothing recorded near $typed — closest is $closest " +
+                            "(${relativeAgo(now - far.snapshot.timestamp)})",
+                        color = AarisColor.Warning,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    TextButton(onClick = { jump(far.snapshot) }, enabled = !jumping) {
+                        Text("JUMP TO $closest")
+                    }
                 }
                 if (jumping) {
                     LinearProgressIndicator(
