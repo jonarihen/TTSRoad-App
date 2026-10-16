@@ -20,12 +20,12 @@ grep -n "^@Composable" -A3 app/src/main/java/dk/perspektiva/ttsroad/MainActivity
 
 Screens that already live in their own file are **not** listed here: `NewChaptersScreen.kt`,
 `ListeningStatsScreen.kt`, `ServerLogsScreen.kt`, `AccountSecuritySettings.kt`,
-`ServerStorageSettings.kt`, `RecentListeningSettings.kt`, `NotificationPermission.kt`.
+`ServerStorageSettings.kt`, `RecentListeningSettings.kt`, `NotificationPermission.kt`,
+`UpdateDialogs.kt`, `UpdateSettings.kt`.
 
 | Composable | Line |
 | --- | --- |
 | `TtsRoadApp` | 421 |
-| `UpdateOverlay` | 521 |
 | `LoginScreen` | 579 |
 | `AppTopBar` | 722 |
 | `PrimaryNavigationBar` | 752 |
