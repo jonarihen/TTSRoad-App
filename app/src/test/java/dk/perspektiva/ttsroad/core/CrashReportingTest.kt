@@ -206,6 +206,20 @@ class CrashReportingTest {
     }
 
     @Test
+    fun `every address of the signed-in server is remembered, the one in use first`() {
+        val known = rememberServers(
+            listOf("https://old.example"),
+            listOf("https://ts.example/", "http://192.168.1.10:8000/"),
+        )
+
+        assertEquals(listOf("https://ts.example", "http://192.168.1.10:8000", "https://old.example"), known)
+        assertEquals(
+            "$RedactedServer/a $RedactedServer/b",
+            redactServerUrls("https://ts.example/a http://192.168.1.10:8000/b", known),
+        )
+    }
+
+    @Test
     fun `string values in a map are redacted and others kept`() {
         val redacted = redactStringValues(mapOf("url" to "https://a.example/x", "n" to 2, "none" to null)) {
             redactServerUrl(it, "https://a.example")

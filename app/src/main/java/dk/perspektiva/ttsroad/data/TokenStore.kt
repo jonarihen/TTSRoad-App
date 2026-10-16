@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.data
 import android.content.Context
 import android.util.Log
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import dk.perspektiva.ttsroad.download.DownloadCacheKeys
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 private val Context.sessionDataStore: DataStore<Preferences> by preferencesDataStore(
@@ -39,7 +41,26 @@ data class SessionState(
      * right.
      */
     val expiresAt: String? = null,
+    /**
+     * Other addresses of this same server, each checked before it was saved (#372). Never sent the
+     * token while they sit here: [serverUrl] is the one origin requests are authenticated on, and a
+     * saved address is checked again before it can become that. See `ServerAddresses.kt`.
+     */
+    val alternateUrls: List<String> = emptyList(),
+    /**
+     * The identity the server reports about itself — its configured `base_url`, in the form
+     * `DownloadCacheKeys.serverIdentity` gives it — recorded at sign-in or at the last address check.
+     * What another address has to match before the token goes there. Null for a session signed in
+     * before this existed, or on a server that does not report one.
+     */
+    val serverIdentity: String? = null,
+    /** The account's id as the server numbered it at sign-in, when known. */
+    val userId: Int? = null,
 ) {
+    /** Every address this session may be reached on: the one in use first, then the saved ones. */
+    val knownAddresses: List<String>
+        get() = listOf(serverUrl).filter { it.isNotBlank() } + alternateUrls
+
     val isLoggedIn: Boolean
         get() = !serverUrl.isBlank() && !token.isNullOrBlank()
 
@@ -55,6 +76,22 @@ interface SessionStore {
     suspend fun current(): SessionState
     suspend fun saveLogin(baseUrl: String, response: LoginResponse)
     suspend fun clearToken()
+
+    /**
+     * Put [address] in use for [owner]'s session, keeping its token, and record [serverIdentity].
+     * The address being left joins [SessionState.alternateUrls].
+     *
+     * Returns false and changes nothing unless [owner] is still the live session — a sign-out or a
+     * different sign-in while the address was being checked must not have its address replaced.
+     * The caller has already checked [address]; this only stores the result.
+     */
+    suspend fun useAddress(owner: SessionState, address: String, serverIdentity: String): Boolean = false
+
+    /** As [useAddress], but only saves [address] among the alternates; the address in use stays. */
+    suspend fun rememberAddress(owner: SessionState, address: String, serverIdentity: String): Boolean = false
+
+    /** Drop [address] from the saved alternates. Never touches the address in use. */
+    suspend fun forgetAddress(address: String) = Unit
 }
 
 class TokenStore(
@@ -79,6 +116,9 @@ class TokenStore(
         val ServerName = stringPreferencesKey("server_name")
         val DeviceId = intPreferencesKey("device_id")
         val ExpiresAt = stringPreferencesKey("expires_at")
+        val AlternateUrls = stringPreferencesKey("alternate_urls")
+        val ServerIdentity = stringPreferencesKey("server_identity")
+        val UserId = intPreferencesKey("user_id")
     }
 
     val session: Flow<SessionState> = context.sessionDataStore.data
@@ -102,6 +142,9 @@ class TokenStore(
                 serverName = prefs[Keys.ServerName] ?: "TTSRoad",
                 deviceId = prefs[Keys.DeviceId],
                 expiresAt = prefs[Keys.ExpiresAt],
+                alternateUrls = decodeAlternates(prefs[Keys.AlternateUrls]),
+                serverIdentity = prefs[Keys.ServerIdentity],
+                userId = prefs[Keys.UserId],
             )
         }
 
@@ -109,7 +152,21 @@ class TokenStore(
 
     override suspend fun saveLogin(baseUrl: String, response: LoginResponse): Unit = sessionMutation.withLock {
         context.sessionDataStore.edit { prefs ->
-            prefs[Keys.ServerUrl] = normalizeBaseUrl(baseUrl)
+            val address = normalizeBaseUrl(baseUrl)
+            val reported = DownloadCacheKeys.serverIdentity(response.server?.baseUrl)
+            val previousIdentity = prefs[Keys.ServerIdentity]
+            // Saved addresses were confirmed to be this server. They survive signing in again at
+            // the same address (an expired token, a password change) unless the server now names
+            // itself differently; signing in anywhere else starts the list over, so another
+            // server's addresses are never offered here. The account is not part of it: no saved
+            // address is sent a token without being checked again, as whoever is signed in then.
+            val keepAddresses = sameServerAddress(prefs[Keys.ServerUrl], address) &&
+                (reported == null || previousIdentity == null || reported == previousIdentity)
+            if (!keepAddresses) prefs.remove(Keys.AlternateUrls)
+            val identity = reported ?: previousIdentity?.takeIf { keepAddresses }
+            identity?.let { prefs[Keys.ServerIdentity] = it } ?: prefs.remove(Keys.ServerIdentity)
+            prefs[Keys.UserId] = response.user.id
+            prefs[Keys.ServerUrl] = address
             prefs[Keys.Token] = sealForStorage(response.token)
             prefs[Keys.Username] = response.user.username
             prefs[Keys.IsAdmin] = response.user.isAdmin
@@ -149,7 +206,41 @@ class TokenStore(
             prefs.remove(Keys.IsAdmin)
             prefs.remove(Keys.DeviceId)
             prefs.remove(Keys.ExpiresAt)
+            prefs.remove(Keys.UserId)
         }
+    }
+
+    override suspend fun useAddress(owner: SessionState, address: String, serverIdentity: String): Boolean =
+        editOwnedSession(owner) { prefs, live ->
+            val next = normalizeBaseUrl(address)
+            prefs[Keys.AlternateUrls] = encodeAlternates(alternatesAfterSwitch(live.serverUrl, live.alternateUrls, next))
+            prefs[Keys.ServerUrl] = next
+            prefs[Keys.ServerIdentity] = serverIdentity
+        }
+
+    override suspend fun rememberAddress(owner: SessionState, address: String, serverIdentity: String): Boolean =
+        editOwnedSession(owner) { prefs, live ->
+            val added = normalizeBaseUrl(address)
+            prefs[Keys.AlternateUrls] = encodeAlternates(alternatesAfterRemember(live.serverUrl, live.alternateUrls, added))
+            prefs[Keys.ServerIdentity] = serverIdentity
+        }
+
+    override suspend fun forgetAddress(address: String): Unit = sessionMutation.withLock {
+        context.sessionDataStore.edit { prefs ->
+            val remaining = alternatesAfterForget(decodeAlternates(prefs[Keys.AlternateUrls]), address)
+            if (remaining.isEmpty()) prefs.remove(Keys.AlternateUrls) else prefs[Keys.AlternateUrls] = encodeAlternates(remaining)
+        }
+    }
+
+    /** Runs [change] only while [owner] is still the live session, under the same lock as sign-in. */
+    private suspend fun editOwnedSession(
+        owner: SessionState,
+        change: (MutablePreferences, SessionState) -> Unit,
+    ): Boolean = sessionMutation.withLock {
+        val live = current()
+        if (!live.isLoggedIn || live.serverUrl != owner.serverUrl || live.token != owner.token) return@withLock false
+        context.sessionDataStore.edit { change(it, live) }
+        true
     }
 
     suspend fun clearAll(): Unit = sessionMutation.withLock {

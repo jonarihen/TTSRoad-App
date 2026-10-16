@@ -5,6 +5,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dk.perspektiva.ttsroad.core.ServerUrls
 import dk.perspektiva.ttsroad.core.plainLanguageForStatus
 import dk.perspektiva.ttsroad.core.toUserFacingError
+import dk.perspektiva.ttsroad.download.DownloadCacheKeys
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -531,6 +532,145 @@ class TtsRoadRepository(
     fun forgetCapabilities(baseUrl: String) {
         val normalized = runCatching { normalizeBaseUrl(baseUrl) }.getOrNull() ?: return
         synchronized(capabilityCache) { capabilityCache.remove(normalized) }
+    }
+
+    /**
+     * Check [address] as another address of the signed-in server and, if it passes, save it or put
+     * it in use according to [action] — without signing out (#372).
+     *
+     * The order of the checks is the security property, so it is spelled out:
+     *
+     * 1. **Identity, without the token.** `/api/mobile/capabilities` at [address] is unauthenticated;
+     *    the `base_url` it reports must name the same server as the session's recorded identity
+     *    (or, for a session signed in before that was recorded, what the address in use reports
+     *    now). A different server, a server that does not say, a 404 or no answer all stop here,
+     *    and the token has gone nowhere.
+     * 2. **Account, with the token.** Only then is `/api/mobile/me` called at [address] with the
+     *    session's credential — sent by the same per-origin interceptor as every other call, tagged
+     *    for that one origin, so a redirect elsewhere still carries nothing. It must answer as the
+     *    same account. A 401 here is not the session ending: the address in use never refused it.
+     * 3. **Commit, if nothing moved.** The address is stored only if the session is still the one
+     *    that was checked; a sign-out or another sign-in during the check wins.
+     *
+     * Nothing about the address in use changes on any refusal.
+     */
+    suspend fun verifyServerAddress(
+        address: String,
+        action: ServerAddressAction,
+    ): ServerAddressResult = withContext(Dispatchers.IO) {
+        val session = tokenStore.current()
+        if (!session.isLoggedIn) return@withContext ServerAddressResult.Refused("Sign in first.")
+        val candidate = try {
+            normalizeBaseUrl(address)
+        } catch (e: IllegalArgumentException) {
+            return@withContext ServerAddressResult.Refused(e.message ?: "That is not a server address.")
+        }
+        if (sameServerAddress(candidate, session.serverUrl)) {
+            return@withContext ServerAddressResult.Refused("That is the address already in use.")
+        }
+
+        val expected = session.serverIdentity ?: try {
+            DownloadCacheKeys.serverIdentity(api(session.serverUrl).capabilities().server?.baseUrl)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        } ?: return@withContext ServerAddressResult.Refused(
+            "The server in use did not say which server it is, so another address cannot be " +
+                "checked against it. Connect over the current address and try again; if this keeps " +
+                "happening, the server is too old to support more than one address.",
+        )
+        if (isPlaceholderIdentity(expected)) {
+            // The backend's default BASE_URL is http://localhost:8787, and every instance left on
+            // it reports the same identity: matching it would prove nothing, so the token stays.
+            return@withContext ServerAddressResult.Refused(
+                "This server identifies itself as $expected, which every server left on default " +
+                    "settings shares, so another address cannot be confirmed as this one. Set BASE_URL " +
+                    "on the server to its real address, then try again. Your sign-in was not sent anywhere.",
+            )
+        }
+
+        val reported = try {
+            DownloadCacheKeys.serverIdentity(api(candidate).capabilities().server?.baseUrl)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            return@withContext ServerAddressResult.Refused(
+                if (e.code() == 404) {
+                    "That address does not answer as a TTSRoad server new enough to identify itself. " +
+                        "Your sign-in was not sent there."
+                } else {
+                    "${plainLanguageForStatus(e.code())} Your sign-in was not sent there."
+                },
+            )
+        } catch (e: Exception) {
+            val described = e.toUserFacingError("Could not reach that address")
+            return@withContext ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.")
+        }
+        if (reported != expected) {
+            return@withContext ServerAddressResult.Refused(
+                if (reported == null) {
+                    "That address does not say which server it is, so it cannot be confirmed as this " +
+                        "one. Your sign-in was not sent there."
+                } else {
+                    "That address is a different server. Your sign-in was not sent there."
+                },
+            )
+        }
+
+        val me = try {
+            api(candidate, session.copy(serverUrl = candidate)).me()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            return@withContext ServerAddressResult.Refused(
+                if (e.code() == 401 || e.code() == 403) {
+                    "That address answered as this server but did not accept this sign-in. " +
+                        "Nothing was changed."
+                } else {
+                    plainLanguageForStatus(e.code())
+                },
+                tokenSent = true,
+            )
+        } catch (e: Exception) {
+            return@withContext ServerAddressResult.Refused(
+                e.toUserFacingError("Could not reach that address").message,
+                tokenSent = true,
+            )
+        }
+        if (me.user.username != session.username || (session.userId != null && me.user.id != session.userId)) {
+            return@withContext ServerAddressResult.Refused(
+                "That address knows this sign-in as a different account. Nothing was changed.",
+                tokenSent = true,
+            )
+        }
+
+        val stored = sessionMutation.withLock {
+            when (action) {
+                ServerAddressAction.Remember -> tokenStore.rememberAddress(session, candidate, expected)
+                ServerAddressAction.Use -> tokenStore.useAddress(session, candidate, expected).also { switched ->
+                    if (switched) {
+                        // Per-address caches: the stats and read-along owners include the address,
+                        // and discovery is per address. The next refresh re-asks the new one.
+                        invalidateListeningStats()
+                        _currentCapabilitiesResolved.value = false
+                    }
+                }
+            }
+        }
+        if (!stored) {
+            return@withContext ServerAddressResult.Refused(
+                "You signed out or in while the address was being checked. Nothing was changed.",
+                tokenSent = true,
+            )
+        }
+        if (action == ServerAddressAction.Use) refreshCurrentCapabilities(forceRefresh = true)
+        ServerAddressResult.Done
+    }
+
+    /** Forget a saved address of this server. The address in use cannot be forgotten this way. */
+    suspend fun forgetServerAddress(address: String) = withContext(Dispatchers.IO) {
+        tokenStore.forgetAddress(address)
     }
 
     /**
@@ -1269,9 +1409,13 @@ class TtsRoadRepository(
                         // The password response intentionally carries credentials, not server
                         // discovery metadata. Preserve the name already shown in Settings instead of
                         // letting saveLogin replace a branded server name with its default.
+                        //
+                        // No base_url: the server did not report one here, and the address in use
+                        // is not the server's identity. Passing it would read as a different server
+                        // and wipe the saved addresses (#372); null keeps the recorded identity.
                         server = ServerInfo(
                             name = currentSession.serverName,
-                            baseUrl = currentSession.serverUrl,
+                            baseUrl = null,
                         ),
                     ),
                 )

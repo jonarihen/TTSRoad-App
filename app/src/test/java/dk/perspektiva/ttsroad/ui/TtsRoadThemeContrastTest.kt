@@ -40,7 +40,6 @@ class TtsRoadThemeContrastTest {
         "Muted" to AarisColor.Muted,
         "Dim" to AarisColor.Dim,
         "Accent" to AarisColor.Accent,
-        "AccentHover" to AarisColor.AccentHover,
         "Ok" to AarisColor.Ok,
         "Warning" to AarisColor.Warning,
         "Danger" to AarisColor.Danger,

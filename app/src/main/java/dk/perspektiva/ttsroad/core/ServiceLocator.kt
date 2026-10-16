@@ -284,12 +284,6 @@ object ServiceLocator {
         }
 
     /**
-     * Deliberately not created in [init]: opening the media cache scans its directory, and 0.7.0
-     * taught this app what putting extra work into application startup costs. The playback service,
-     * the download service and the UI all reach it through here, so there is still exactly one
-     * cache and one download index per process — [OfflineDownloads] depends on that.
-     */
-    /**
      * Whether each downloaded chapter still holds the audio the server has (#109).
      *
      * Wired to the repository here rather than inside the scanner so the comparison itself stays a
@@ -303,6 +297,12 @@ object ServiceLocator {
             ).also { staleDownloads = it }
         }
 
+    /**
+     * Deliberately not created in [init]: opening the media cache scans its directory, and 0.7.0
+     * taught this app what putting extra work into application startup costs. The playback service,
+     * the download service and the UI all reach it through here, so there is still exactly one
+     * cache and one download index per process — [OfflineDownloads] depends on that.
+     */
     fun offlineDownloads(context: Context): OfflineDownloads =
         offlineDownloads ?: synchronized(this) {
             offlineDownloads ?: OfflineDownloads(

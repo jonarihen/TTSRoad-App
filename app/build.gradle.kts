@@ -167,7 +167,6 @@ dependencies {
     implementation(libs.androidx.media3.datasource)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
-    implementation(libs.androidx.navigation.compose)
     implementation(libs.coil.compose)
     implementation(libs.commonmark)
     implementation(libs.coroutines.android)
