@@ -212,4 +212,49 @@ class WidgetPresentationTest {
         assertEquals(SkipButtonLabels("\u221210", "+10"), skipButtonLabels(10_000L))
         assertEquals(SkipButtonLabels("\u221260", "+60"), skipButtonLabels(60_000L))
     }
+
+    // #338: the launcher used to redraw on every 15-second tick.
+    private val playing = base.copy(isPlaying = true, positionMs = 0L, durationMs = 40 * 60_000L)
+
+    @Test
+    fun `a tick that moves nothing visible keeps the same redraw key`() {
+        assertEquals(
+            widgetRedrawKey(playing.copy(positionMs = 15_000L)),
+            widgetRedrawKey(playing.copy(positionMs = 30_000L)),
+        )
+    }
+
+    @Test
+    fun `an eight hour night of ticks asks for far fewer redraws`() {
+        var last: WidgetRedrawKey? = null
+        var redraws = 0
+        var position = 0L
+        repeat(8 * 60 * 4) {
+            position = (position + 15_000L) % playing.durationMs
+            val key = widgetRedrawKey(playing.copy(positionMs = position))
+            if (key != last) redraws++
+            last = key
+        }
+        assertTrue("redraws=$redraws", redraws < 400)
+    }
+
+    @Test
+    fun `visible changes change the redraw key`() {
+        val key = widgetRedrawKey(playing)
+        assertFalse(key == widgetRedrawKey(playing.copy(isPlaying = false)))
+        assertFalse(key == widgetRedrawKey(playing.copy(mediaId = "chapter:11", chapterTitle = "Next")))
+        assertFalse(key == widgetRedrawKey(playing.copy(speed = 1.5f)))
+        assertFalse(key == widgetRedrawKey(playing.copy(positionMs = playing.durationMs / 10)))
+    }
+
+    @Test
+    fun `nothing playing has no redraw key`() {
+        assertNull(widgetRedrawKey(null))
+    }
+
+    @Test
+    fun `an unknown duration still redraws on item and state changes only`() {
+        val unknown = playing.copy(durationMs = 0L)
+        assertEquals(widgetRedrawKey(unknown), widgetRedrawKey(unknown.copy(positionMs = 600_000L)))
+    }
 }

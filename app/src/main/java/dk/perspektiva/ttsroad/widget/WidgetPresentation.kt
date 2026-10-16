@@ -139,3 +139,54 @@ fun skipButtonLabels(skipIntervalMs: Long): SkipButtonLabels {
     val seconds = (skipIntervalMs / 1000).coerceAtLeast(1L)
     return SkipButtonLabels(back = "\u2212$seconds", forward = "+$seconds")
 }
+
+/**
+ * How far the progress bar moves before a playing chapter is worth redrawing (#338).
+ *
+ * The service writes its note every fifteen seconds, and used to have the launcher redraw on every
+ * one — about 1900 redraws, each decoding a cover, over an eight-hour night. A few percent is the
+ * smallest step a widget-sized bar visibly shows.
+ */
+const val ProgressRedrawStepPercent: Int = 5
+
+/** The same for the "12m left" text, which would otherwise ask for a redraw every minute. */
+const val RemainingRedrawStepMs: Long = 5 * 60_000L
+
+/**
+ * Everything about [snapshot] the launcher can see, at the granularity worth a redraw (#338).
+ *
+ * The service compares this to the last one it drew and only asks the launcher to redraw when it
+ * differs: a new chapter, play/pause, a speed change, or the bar or the remaining time crossing a
+ * step. The note itself is still written on every tick — staleness is judged against
+ * [NowPlayingSnapshot.updatedAt], so a launcher that redraws on its own still sees a fresh note.
+ *
+ * Null when there is nothing playing, which the caller should always redraw.
+ */
+fun widgetRedrawKey(snapshot: NowPlayingSnapshot?): WidgetRedrawKey? {
+    if (snapshot == null) return null
+    val duration = snapshot.durationMs.takeIf { it > 0L }
+    val position = snapshot.positionMs.coerceAtLeast(0L)
+    return WidgetRedrawKey(
+        mediaId = snapshot.mediaId,
+        chapterTitle = snapshot.chapterTitle,
+        fictionTitle = snapshot.fictionTitle,
+        coverUrl = snapshot.coverUrl,
+        isPlaying = snapshot.isPlaying,
+        speed = snapshot.speed,
+        progressStep = duration?.let {
+            (position.coerceAtMost(it) * 100 / it).toInt() / ProgressRedrawStepPercent
+        },
+        remainingStep = duration?.let { (it - position).coerceAtLeast(0L) / RemainingRedrawStepMs },
+    )
+}
+
+data class WidgetRedrawKey(
+    val mediaId: String,
+    val chapterTitle: String,
+    val fictionTitle: String?,
+    val coverUrl: String?,
+    val isPlaying: Boolean,
+    val speed: Float,
+    val progressStep: Int?,
+    val remainingStep: Long?,
+)
