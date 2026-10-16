@@ -148,7 +148,7 @@ and Android Auto all act on the same session and queue.
   artwork; `rewriteHost` is only for known server-owned media such as audio.
 
 **The token is encrypted at rest** (`data/TokenCipher`, `data/TokenEnvelope`). AES-256-GCM under a
-non-extractable Android Keystore key, stored as `enc1:<base64 nonce‖ciphertext>`. Three rules:
+non-extractable Android Keystore key, stored as `enc1:<base64 nonce‖ciphertext>`. Four rules:
 - A stored value without the prefix is a plaintext token from a build before 0.9.0. It must keep
   working — rejecting it would sign out every existing install on upgrade. `ServiceLocator.init`
   re-seals it in the background via `TokenStore.encryptStoredTokenIfNeeded`.
@@ -156,6 +156,9 @@ non-extractable Android Keystore key, stored as `enc1:<base64 nonce‖ciphertext
   media notification with the phone locked, and the service needs the token to stream.
 - An envelope that cannot be opened yields null, i.e. "signed out", never an exception. This runs
   while restoring a session at startup, where a throw is a crash on every launch.
+- A seal that fails is retried once; if it fails again the token is stored in plaintext and a
+  warning (never the token) is logged. Memory-only would break playback started from Android Auto
+  in a reaped process; the next launch's `encryptStoredTokenIfNeeded` re-seals it.
 
 **MediaItem contract** (`media/TtsRoadMediaItems`) — the glue between screens, the car, and the service:
 - media id `chapter:<chapter_id>` / `fiction:<fiction_id>`; browse roots `root`, `continue`,

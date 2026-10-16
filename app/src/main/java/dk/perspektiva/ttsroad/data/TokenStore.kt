@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -58,6 +59,8 @@ interface SessionStore {
 class TokenStore(
     private val context: Context,
     private val cipher: TokenCipher = KeystoreTokenCipher(),
+    /** Where a sealing failure is reported. Never handed the token. A parameter so tests can see it. */
+    private val warn: (String) -> Unit = { Log.w(LogTag, it) },
 ) : SessionStore {
     private val sessionMutation = Mutex()
 
@@ -106,10 +109,7 @@ class TokenStore(
     override suspend fun saveLogin(baseUrl: String, response: LoginResponse): Unit = sessionMutation.withLock {
         context.sessionDataStore.edit { prefs ->
             prefs[Keys.ServerUrl] = normalizeBaseUrl(baseUrl)
-            // Sealing can fail on a device whose keystore refuses to generate a key. Storing the
-            // raw token then is the lesser evil: the alternative is an app that cannot sign in at
-            // all, and this is exactly what every build before 0.9.0 did anyway.
-            prefs[Keys.Token] = cipher.seal(response.token) ?: response.token
+            prefs[Keys.Token] = sealForStorage(response.token)
             prefs[Keys.Username] = response.user.username
             prefs[Keys.IsAdmin] = response.user.isAdmin
             prefs[Keys.ServerName] = response.server?.name ?: "TTSRoad"
@@ -118,6 +118,27 @@ class TokenStore(
             response.deviceId?.let { prefs[Keys.DeviceId] = it } ?: prefs.remove(Keys.DeviceId)
             response.expiresAt?.let { prefs[Keys.ExpiresAt] = it } ?: prefs.remove(Keys.ExpiresAt)
         }
+    }
+
+    /**
+     * The value to write for [token]: an envelope, or — only after sealing has failed twice — the
+     * plaintext token.
+     *
+     * Policy when the Keystore will not seal:
+     * - **Retry once.** Keystore failures are often transient (the keystore daemon busy just after
+     *   boot, a key generation that races another), and a second attempt costs nothing.
+     * - **Then store plaintext, and say so in the log.** Keeping the token in memory only is not an
+     *   option: playback is started by Android Auto and the media notification in a process that
+     *   may have been reaped since sign-in, and it needs the stored token to stream. Refusing to
+     *   sign in at all would be worse still. Plaintext is exactly what every build before 0.9.0
+     *   stored, and it is not permanent: [encryptStoredTokenIfNeeded] re-seals it on every launch.
+     *
+     * The warning names the failure, never the token.
+     */
+    private fun sealForStorage(token: String): String {
+        repeat(SealAttempts) { cipher.seal(token)?.let { return it } }
+        warn("Keystore could not seal the session token; storing it unencrypted until the next launch re-seals it")
+        return token
     }
 
     override suspend fun clearToken(): Unit = sessionMutation.withLock {
@@ -149,7 +170,13 @@ class TokenStore(
             val stored = prefs[Keys.Token] ?: return@edit
             if (isEncryptedToken(stored)) return@edit
             cipher.seal(stored)?.let { prefs[Keys.Token] = it }
+                ?: warn("Keystore could not seal the stored session token; it stays unencrypted until the next launch")
         }
+    }
+
+    private companion object {
+        const val LogTag = "TokenStore"
+        const val SealAttempts = 2
     }
 }
 
