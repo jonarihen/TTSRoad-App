@@ -31,7 +31,7 @@ import dk.perspektiva.ttsroad.update.renderReleaseNotes
 import dk.perspektiva.ttsroad.update.splitReleaseNotes
 
 internal const val InstallPermissionExplanation =
-    "Android will now ask whether TTSRoad may install updates. Tap Allow, then come back here — " +
+    "Once the download finishes, Android will ask whether TTSRoad may install updates. Tap Allow, then come back here — " +
         "the update installs from there. You are only asked once."
 
 /**
