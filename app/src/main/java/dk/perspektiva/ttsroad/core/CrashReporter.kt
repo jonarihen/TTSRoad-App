@@ -49,14 +49,14 @@ object CrashReporter {
     /** The user's on-device choice. Defaults to on, since a DSN is only built in deliberately. */
     fun isEnabled(context: Context): Boolean = prefs(context).getBoolean(KeyEnabled, true)
 
-    fun start(context: Context, serverUrls: Flow<String>) {
+    fun start(context: Context, serverUrls: Flow<List<String>>) {
         if (!isConfigured) return
         val appContext = context.applicationContext
         servers = prefs(appContext).getString(KeyServers, null)
             ?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
         scope.launch {
-            serverUrls.collectLatest { url ->
-                val updated = rememberServer(servers, url)
+            serverUrls.collectLatest { urls ->
+                val updated = rememberServers(servers, urls)
                 if (updated != servers) {
                     servers = updated
                     prefs(appContext).edit().putString(KeyServers, updated.joinToString("\n")).apply()
