@@ -124,6 +124,5 @@ internal class RecoveryCodesOwner(
     }
 
     private fun sameSession(first: SessionState?, second: SessionState): Boolean =
-        first != null && first.serverUrl == second.serverUrl && first.username == second.username &&
-            first.token == second.token
+        second.isSameSession(first) && first?.username == second.username
 }

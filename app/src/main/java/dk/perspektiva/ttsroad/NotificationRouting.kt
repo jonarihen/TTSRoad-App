@@ -145,7 +145,7 @@ internal fun NotificationRouting(
             return@LaunchedEffect
         }
         val bound = pending.session
-        if (bound != null && (bound.serverUrl != signedIn.serverUrl || bound.token != signedIn.token)) {
+        if (bound != null && !bound.isSameSession(signedIn)) {
             owner.consume(pending)
             return@LaunchedEffect
         }
@@ -154,7 +154,7 @@ internal fun NotificationRouting(
             repeat(3) {
                 delay(5_000)
                 val live = latestCurrentSession()
-                if (live.serverUrl != signedIn.serverUrl || live.token != signedIn.token || !live.isLoggedIn) {
+                if (!live.isSameSession(signedIn) || !live.isLoggedIn) {
                     owner.consume(pending)
                     return@LaunchedEffect
                 }
@@ -168,7 +168,7 @@ internal fun NotificationRouting(
             }
             currentCoroutineContext().ensureActive()
             val finished = latestCurrentSession()
-            if (finished.isLoggedIn && finished.serverUrl == signedIn.serverUrl && finished.token == signedIn.token) {
+            if (finished.isLoggedIn && finished.isSameSession(signedIn)) {
                 latestNavigate(AppScreen.Listening)
             }
             owner.consume(pending)
@@ -179,7 +179,7 @@ internal fun NotificationRouting(
             return@LaunchedEffect
         }
         val live = latestCurrentSession()
-        if (live.serverUrl != signedIn.serverUrl || live.token != signedIn.token || !live.isLoggedIn) {
+        if (!live.isSameSession(signedIn) || !live.isLoggedIn) {
             owner.consume(pending)
             return@LaunchedEffect
         }
@@ -198,7 +198,7 @@ internal fun NotificationRouting(
         }
         currentCoroutineContext().ensureActive()
         val finished = latestCurrentSession()
-        if (finished.isLoggedIn && finished.serverUrl == signedIn.serverUrl && finished.token == signedIn.token) {
+        if (finished.isLoggedIn && finished.isSameSession(signedIn)) {
             latestNavigate(destination)
         }
         owner.consume(pending)

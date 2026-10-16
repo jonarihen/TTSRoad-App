@@ -490,7 +490,7 @@ class TtsRoadRepository(
         }
         val fetched = capabilities(session.serverUrl, forceRefresh)
         val current = tokenStore.current()
-        if (current.serverUrl != session.serverUrl || current.token != session.token) return fetched
+        if (!current.isSameSession(session)) return fetched
         // A cache entry exists only after a successful response or a definitive old-server 404.
         // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
         // treating that provisional value as proof of a shared catalogue could destroy a saved

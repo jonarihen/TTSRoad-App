@@ -197,7 +197,7 @@ class NewChapterPollJob : JobService() {
             val response = repository.chapterNotifications() ?: return
             announceNewlyReady(response.notifications, session, store, notifier) {
                 val live = currentSession()
-                live.isLoggedIn && live.serverUrl == session.serverUrl && live.token == session.token
+                live.isLoggedIn && live.isSameSession(session)
             }
         }
     }

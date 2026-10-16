@@ -249,7 +249,7 @@ class PlaybackController internal constructor(
     ): Boolean {
         val owner = expectedSession ?: tokenStore.current()
         val current = tokenStore.current()
-        if (!current.isLoggedIn || current.serverUrl != owner.serverUrl || current.token != owner.token) return false
+        if (!current.isLoggedIn || !current.isSameSession(owner)) return false
         val serverUrl = owner.serverUrl
         val built = chapters
             .filter { it.audio != null }
@@ -274,7 +274,7 @@ class PlaybackController internal constructor(
         ) return false
         currentCoroutineContext().ensureActive()
         val live = tokenStore.current()
-        if (!live.isLoggedIn || live.serverUrl != owner.serverUrl || live.token != owner.token) return false
+        if (!live.isLoggedIn || !live.isSameSession(owner)) return false
         val ticket = SessionBoundQueue.issue(owner, built.map { it.second }, startIndex, startPositionMs)
         try {
             queueSnapshot.invalidate()
@@ -285,7 +285,7 @@ class PlaybackController internal constructor(
             } ?: false
             currentCoroutineContext().ensureActive()
             val finished = tokenStore.current()
-            if (!finished.isLoggedIn || finished.serverUrl != owner.serverUrl || finished.token != owner.token) return false
+            if (!finished.isLoggedIn || !finished.isSameSession(owner)) return false
             publishState(controller)
             return installed
         } finally {
