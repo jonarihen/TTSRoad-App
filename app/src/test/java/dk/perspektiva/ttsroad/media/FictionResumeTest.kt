@@ -49,9 +49,15 @@ class FictionResumeTest {
     }
 
     @Test
-    fun `an untouched or finished fiction has no resume point`() {
+    fun `an untouched fiction has no resume point`() {
         assertNull(resumeChapterIn(listOf(chapter(1), chapter(2))))
-        assertNull(resumeChapterIn(listOf(chapter(1, played = true), chapter(2, played = true))))
+    }
+
+    @Test
+    fun `a caught-up fiction stays on its last chapter instead of restarting`() {
+        val chapters = listOf(chapter(1, played = true), chapter(2, played = true))
+
+        assertEquals(2, resumeChapterIn(chapters)?.resolvedChapterId)
     }
 
     @Test

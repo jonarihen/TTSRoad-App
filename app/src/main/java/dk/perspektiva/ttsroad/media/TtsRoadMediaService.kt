@@ -1628,7 +1628,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 if (wholeFiction != null) {
                     val sessionAtRequest = service.librarySessionGeneration
                     service.buildFictionQueue(wholeFiction, startChapterId = null, sessionAtRequest)
-                        ?.let { return@future it }
+                        ?.let { return@future it.forAudioAccount(account) }
                     throw UnsupportedOperationException("Could not load that fiction")
                 }
 
