@@ -9,6 +9,8 @@
          saving chapters is a data sync rather than playback. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Lets the periodic new-chapter check (NewChapterPollJob, #344) survive a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Volume boost: attaching a LoudnessEnhancer to the player's audio session needs this.
          Normal permission, granted at install, so there is nothing to request at runtime. -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
@@ -101,6 +103,12 @@
             android:name=".download.TtsRoadDownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- The background new-chapter check (#344). Bound only by the system job scheduler. -->
+        <service
+            android:name=".NewChapterPollJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!-- The continue-listening widget (#150). Exported because the launcher, another process
              entirely, is what instantiates it; its actions go through the media session rather
