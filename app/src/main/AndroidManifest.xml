@@ -65,7 +65,8 @@
 
         <activity
             android:name=".NotificationPlayActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
