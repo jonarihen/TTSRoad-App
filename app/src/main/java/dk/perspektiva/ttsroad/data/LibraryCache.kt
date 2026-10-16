@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -127,8 +128,11 @@ class LibraryCache(
         libraryJob?.cancel()
         libraryJob = scope.launch {
             _library.value = _library.value.copy(isRefreshing = true, error = null, errorDetails = null)
-            _library.value = runCatching { refreshedLibrary() }.fold(
+            val next = runCatching { refreshedLibrary() }.fold(
                 onSuccess = { library ->
+                    // runCatching swallows the cancellation from clear(), so a sign-out mid-write must
+                    // be re-checked here or the previous account's shelf is put back (#444).
+                    ensureActive()
                     runCatching { writeSnapshot(library) }
                     Cached(value = library)
                 },
@@ -146,6 +150,8 @@ class LibraryCache(
                     }
                 },
             )
+            ensureActive()
+            _library.value = next
         }
     }
 
@@ -212,12 +218,14 @@ class LibraryCache(
         browseAllJob?.cancel()
         browseAllJob = scope.launch {
             _browseAll.value = _browseAll.value.copy(isRefreshing = true, error = null, errorDetails = null)
-            _browseAll.value = runCatching { refreshedBrowseAll() }.fold(
+            val next = runCatching { refreshedBrowseAll() }.fold(
                 onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
                     _browseAll.value.failedWith(failure, "Could not load fictions")
                 },
             )
+            ensureActive()
+            _browseAll.value = next
         }
     }
 
@@ -334,7 +342,7 @@ class LibraryCache(
         val state = chapterState(fictionId)
         chapterJobs[fictionId] = scope.launch {
             state.value = state.value.copy(isRefreshing = true, error = null, errorDetails = null)
-            state.value = runCatching {
+            val next = runCatching {
                 chapterMutex(fictionId).withLock {
                     val current = state.value.value
                     val cursor = chapterCursors[fictionId]
@@ -360,6 +368,8 @@ class LibraryCache(
                     state.value.failedWith(failure, "Could not load chapters")
                 },
             )
+            ensureActive()
+            state.value = next
         }
     }
 
