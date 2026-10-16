@@ -522,7 +522,9 @@ private fun TtsRoadApp(
             // The cache outlives the composition, so signing out has to empty it explicitly —
             // otherwise the next account is shown the previous one's library.
             ServiceLocator.libraryCache(context).clear()
-            ServiceLocator.pendingProgress(context).clear()
+            // The offline progress backlog is deliberately not cleared here: this also runs when a
+            // 401 ends the session, and that backlog is owner-stamped and flushes on re-login to
+            // the same account. Explicit logout and a different-account login drop it (#311).
         },
     )
 

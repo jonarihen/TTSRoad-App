@@ -141,11 +141,23 @@ class TtsRoadRepository(
     /** Where read-along documents survive a restart. Defaults to not persisting at all. */
     private val readAlongStore: ReadAlongStore = ReadAlongStore.None,
     /**
-     * Runs wherever the session is dropped, so per-account state the repository cannot see —
-     * the offline progress backlog — is cleared with the rest rather than flushing under the
-     * next account. A callback rather than a reference: this class must not depend on player.
+     * Runs on an explicit [logout], so per-account state the repository cannot see — the offline
+     * progress backlog — is cleared with the rest rather than flushing under the next account. A
+     * callback rather than a reference: this class must not depend on player.
      */
     private val onSessionCleared: () -> Unit = {},
+    /**
+     * Runs when the server ends the session (a 401, see [endSession]). Unlike [onSessionCleared]
+     * the user did not sign out: the offline backlog is kept, because the likeliest next step is
+     * signing back in to the same account, and its entries carry their owner so they can never be
+     * sent as anyone else (#311).
+     */
+    private val onSessionExpired: () -> Unit = {},
+    /**
+     * Runs after a successful [login] with the new session, so per-account state recorded under a
+     * *different* account or server can be dropped then (#311).
+     */
+    private val onSignedIn: (SessionState) -> Unit = {},
     httpClient: OkHttpClient = OkHttpClient(),
 ) {
     private val moshi = Moshi.Builder()
@@ -329,6 +341,7 @@ class TtsRoadRepository(
                 invalidateListeningStats()
                 _sessionEnd.value = null
                 _currentCapabilitiesResolved.value = false
+                onSignedIn(tokenStore.current())
             }
             LoginResult.Success
         } catch (e: CancellationException) {
@@ -391,7 +404,7 @@ class TtsRoadRepository(
         tokenStore.clearToken()
         invalidateListeningStats()
         invalidateReader()
-        onSessionCleared()
+        onSessionExpired()
         _currentCapabilitiesResolved.value = false
         _sessionEnd.value = end
     }

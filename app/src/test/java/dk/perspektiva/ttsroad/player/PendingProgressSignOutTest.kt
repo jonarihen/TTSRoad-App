@@ -14,6 +14,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -94,15 +95,12 @@ class PendingProgressSignOutTest {
     }
 
     @Test
-    fun `first real signed out session clears progress without a previous account`() {
+    fun `first real signed out session is reported once`() {
         pendingStore().record(1, 7, 30.0, false, owner = owner)
         val sessions = MutableSharedFlow<SessionState>(replay = 1)
         var signedOut = 0
         compose.setContent {
-            resolvedSession(sessions, onSignedIn = {}, onSignedOut = {
-                signedOut++
-                pendingStore().clear()
-            })
+            resolvedSession(sessions, onSignedIn = {}, onSignedOut = { signedOut++ })
         }
         compose.waitForIdle()
         assertEquals(0, signedOut)
@@ -110,20 +108,18 @@ class PendingProgressSignOutTest {
         compose.waitForIdle()
 
         assertEquals(1, signedOut)
-        assertFalse(file.exists())
+        // Signed-out handling no longer owns the backlog; logout and login do (#311).
+        assertTrue(file.exists())
     }
 
     @Test
-    fun `restored session ending stops playback and clears progress`() {
+    fun `restored session ending reports sign-out and keeps the owner-stamped backlog`() {
         pendingStore().record(1, 7, 30.0, false, owner = owner)
         val sessions = MutableSharedFlow<SessionState>(replay = 1)
         var signedIn = 0
         var signedOut = 0
         compose.setContent {
-            resolvedSession(sessions, onSignedIn = { signedIn++ }, onSignedOut = {
-                signedOut++
-                pendingStore().clear()
-            })
+            resolvedSession(sessions, onSignedIn = { signedIn++ }, onSignedOut = { signedOut++ })
         }
         compose.runOnIdle { sessions.tryEmit(SessionState(serverUrl = server.url("/").toString(), token = "t")) }
         compose.waitForIdle()
@@ -133,7 +129,7 @@ class PendingProgressSignOutTest {
         compose.runOnIdle { sessions.tryEmit(SessionState(serverUrl = server.url("/").toString())) }
         compose.waitForIdle()
         assertEquals(1, signedOut)
-        assertFalse(file.exists())
+        assertEquals(1, pendingStore().pending().size)
     }
 
     @Test
@@ -149,16 +145,94 @@ class PendingProgressSignOutTest {
         assertFalse(file.exists())
     }
 
+    private fun repositoryWith(store: PendingProgressStore, sessions: FakeSessionStore = loggedInStore()) =
+        TtsRoadRepository(
+            sessions,
+            onSessionCleared = store::clear,
+            onSignedIn = store::retainOwnedBy,
+        )
+
+    private fun loginResponse(username: String) = MockResponse().setBody(
+        """{"token":"fresh","token_type":"bearer","user":{"id":1,"username":"$username"}}""",
+    )
+
+    private suspend fun TtsRoadRepository.loginAs(username: String) = login(
+        baseUrl = server.url("/").toString(),
+        username = username,
+        password = "correct",
+        deviceName = "Pixel",
+    )
+
     @Test
-    fun `endSession clears the pending queue and its file`() = runTest {
+    fun `endSession keeps the pending queue and its file`() = runTest {
         val store = pendingStore()
         store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
-        val repository = TtsRoadRepository(loggedInStore(), onSessionCleared = store::clear)
+        val repository = repositoryWith(store)
 
         repository.endSession(parseSessionEnd(null))
 
+        assertEquals(1, store.pending().size)
+        assertTrue(file.exists())
+    }
+
+    @Test
+    fun `a 401 followed by re-login to the same account flushes the queued progress`() = runTest {
+        val store = pendingStore()
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
+        val repository = repositoryWith(store)
+        // The token expired on the flight: the first call after landing is refused.
+        server.enqueue(MockResponse().setResponseCode(401))
+        runCatching { repository.library() }
+        assertNotNull(repository.sessionEnd.value)
+        assertEquals(1, store.pending().size)
+
+        server.enqueue(loginResponse("admin"))
+        repository.loginAs("admin")
+        server.enqueue(MockResponse().setBody("""{"capabilities":{"batch_progress":true},"limits":{}}"""))
+        repository.refreshCurrentCapabilities()
+        server.enqueue(MockResponse().setBody("""{"accepted":[{"chapter_id":7}],"rejected":[],"server_state":[]}"""))
+        val result = ProgressSync(repository, store).flush()
+
+        assertEquals(1, result.accepted)
+        assertTrue(result.drained)
+        repeat(3) { server.takeRequest() }
+        val sync = server.takeRequest()
+        assertEquals("/api/mobile/playback/sync", sync.path)
+        assertEquals("Bearer fresh", sync.getHeader("Authorization"))
         assertTrue(store.isEmpty())
-        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `a 401 followed by login to a different account discards the queue`() = runTest {
+        val store = pendingStore()
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
+        val repository = repositoryWith(store)
+        repository.endSession(parseSessionEnd(null))
+        assertEquals(1, store.pending().size)
+
+        server.enqueue(loginResponse("other"))
+        repository.loginAs("other")
+
+        assertTrue(store.isEmpty())
+    }
+
+    @Test
+    fun `login to the same account on a different server discards the queue`() = runTest {
+        val store = pendingStore()
+        store.record(
+            fictionId = 1,
+            chapterId = 7,
+            positionSeconds = 30.0,
+            isPlayed = false,
+            owner = owner.copy(serverUrl = "https://elsewhere.example/"),
+        )
+        val repository = repositoryWith(store)
+        repository.endSession(parseSessionEnd(null))
+
+        server.enqueue(loginResponse("admin"))
+        repository.loginAs("admin")
+
+        assertTrue(store.isEmpty())
     }
 
     @Test

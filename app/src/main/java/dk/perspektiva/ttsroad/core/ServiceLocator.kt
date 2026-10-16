@@ -162,6 +162,10 @@ object ServiceLocator {
                     pendingProgress(appContext).clear()
                     playedMarks.clear()
                 },
+                // A 401 keeps the offline backlog: it is owner-stamped, so it only ever flushes
+                // once the same account is signed in again (#311).
+                onSessionExpired = { playedMarks.clear() },
+                onSignedIn = { session -> pendingProgress(appContext).retainOwnedBy(session) },
             ).also { repository = it }
         }
 
