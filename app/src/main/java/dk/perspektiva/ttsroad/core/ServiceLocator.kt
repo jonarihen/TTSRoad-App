@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.core
 
 import android.content.Context
+import androidx.glance.appwidget.updateAll
 import dk.perspektiva.ttsroad.data.AccountPreferenceSync
 import dk.perspektiva.ttsroad.data.BrowsePreferences
 import dk.perspektiva.ttsroad.data.ChapterListPreferences
@@ -20,9 +21,14 @@ import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.PlayedMarks
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
+import dk.perspektiva.ttsroad.player.historyAccountKey
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.update.UpdateManager
+import dk.perspektiva.ttsroad.widget.NowPlayingStore
+import dk.perspektiva.ttsroad.widget.NowPlayingWidget
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -98,6 +104,7 @@ object ServiceLocator {
         // Off the main thread and fire-and-forget: it touches the keystore and DataStore, and a
         // token that has not been re-sealed yet still reads fine, so nothing needs to wait on it.
         initScope.launch { tokenStore(context).encryptStoredTokenIfNeeded() }
+        bindHistoryToAccount(context.applicationContext)
         repository(context)
         playbackController(context)
         playbackHistory(context)
@@ -105,6 +112,32 @@ object ServiceLocator {
         playbackPreferences(context)
         readerPreferences(context)
         libraryCache(context)
+    }
+
+    /**
+     * Keep the jump-back history and the widget's note on the account that recorded them (#368).
+     *
+     * Here rather than in the media service, because the history is also read by the app with the
+     * service dead, and the widget is drawn by the launcher with this whole process dead — so the
+     * scoping cannot depend on whichever of them happens to be running at sign-out.
+     */
+    private fun bindHistoryToAccount(context: Context) {
+        initScope.launch {
+            var previous: String? = null
+            tokenStore(context).session
+                .map(::historyAccountKey)
+                .distinctUntilChanged()
+                .collect { key ->
+                    playbackHistory(context).bindAccount(key)
+                    // Signed out from a session this process saw. The media service clears the note
+                    // too when it is running; this covers sign-out with the service already gone.
+                    if (previous != null && key == null) {
+                        NowPlayingStore(context).clear()
+                        runCatching { NowPlayingWidget().updateAll(context) }
+                    }
+                    previous = key
+                }
+        }
     }
 
     fun tokenStore(context: Context): TokenStore =

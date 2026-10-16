@@ -4,7 +4,10 @@ import android.content.Context
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import dk.perspektiva.ttsroad.data.normalizeBaseUrl
+import dk.perspektiva.ttsroad.data.SessionState
 import java.io.File
+import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +31,29 @@ data class HistorySnapshot(
     val title: String,         // chapter title
     val fictionTitle: String?,
     val positionMs: Long,      // position within the chapter when the snapshot was taken
+    /**
+     * Which server and account recorded this, as [historyAccountKey]. Fiction and chapter ids are
+     * only unique per server, so a snapshot from another account would jump back into whatever book
+     * happens to share the id there (#368). Null on snapshots written before the key existed.
+     */
+    val account: String? = null,
 )
+
+/**
+ * The account a jump-back snapshot belongs to, or null when signed out.
+ *
+ * Server and username rather than the token: signing in again to the same account — after a token
+ * expiry in the middle of the night, say — must keep the very history the sleeper needs. Hashed so
+ * the file does not spell out a self-hosted address that is usually a home one.
+ */
+fun historyAccountKey(session: SessionState): String? {
+    if (!session.isLoggedIn) return null
+    val server = runCatching { normalizeBaseUrl(session.serverUrl) }.getOrDefault(session.serverUrl)
+    val identity = "$server\u0000${session.username.orEmpty()}"
+    return MessageDigest.getInstance("SHA-256")
+        .digest(identity.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+}
 
 /**
  * Where the history lives between launches.
@@ -115,6 +140,10 @@ class PlaybackHistoryStore internal constructor(
     /** Guarded by [writeMutex]: the newest generation that has actually reached the disk. */
     private var persistedGeneration = 0L
 
+    /** The account new snapshots are stamped with; see [bindAccount]. */
+    @Volatile
+    private var account: String? = null
+
     private val _snapshots = MutableStateFlow(load())
     val snapshots: StateFlow<List<HistorySnapshot>> = _snapshots.asStateFlow()
 
@@ -128,7 +157,9 @@ class PlaybackHistoryStore internal constructor(
         positionMs: Long,
     ) {
         if (mediaId.isBlank()) return
-        val snap = HistorySnapshot(timestamp, mediaId, fictionId, chapterId, title, fictionTitle, positionMs.coerceAtLeast(0L))
+        val snap = HistorySnapshot(
+            timestamp, mediaId, fictionId, chapterId, title, fictionTitle, positionMs.coerceAtLeast(0L), account,
+        )
         synchronized(lock) {
             val current = _snapshots.value
             val last = current.lastOrNull()
@@ -142,6 +173,41 @@ class PlaybackHistoryStore internal constructor(
             pending = PendingPersist.Write(++generation, list)
             schedulePersist()
         }
+    }
+
+    /**
+     * Scope the history to the signed-in account [key] (#368).
+     *
+     * Snapshots another account recorded are dropped — they name fiction ids that mean a different
+     * book here, or none. Unstamped ones from before the key existed are adopted by the first account
+     * bound, which on an upgrade is the account that recorded them.
+     *
+     * Signing out ([key] null) keeps everything: the next sign-in is usually the same account, and
+     * only then is it known whether the history still applies.
+     */
+    fun bindAccount(key: String?) {
+        account = key
+        if (key == null) return
+        synchronized(lock) {
+            val current = _snapshots.value
+            val scoped = current.mapNotNull { snapshot ->
+                when (snapshot.account) {
+                    key -> snapshot
+                    null -> snapshot.copy(account = key)
+                    else -> null
+                }
+            }
+            if (scoped == current) return
+            _snapshots.value = scoped
+            pending = if (scoped.isEmpty()) {
+                PendingPersist.Delete(++generation)
+            } else {
+                PendingPersist.Write(++generation, scoped)
+            }
+            persistJob?.cancel()
+            persistJob = null
+        }
+        scope.launch { persistPending() }
     }
 
     fun clear() {
