@@ -636,7 +636,8 @@ class AudioAuthSnapshotTest {
         ))
         for (item in listOf(chapter, queued)) {
             assertEquals(address, item.mediaMetadata.extras!!.getString(AudioServerUrlExtra))
-            assertTrue(item.localConfiguration!!.uri.toString().startsWith("https://home.example/audio/"))
+            // Root-relative audio keeps the reverse-proxy prefix it was served under (#365).
+            assertTrue(item.localConfiguration!!.uri.toString().startsWith("https://home.example/ttsroad/audio/"))
             assertTrue(audioItemBelongsToSession(item, session))
             assertFalse(audioItemBelongsToSession(item, session.copy(serverUrl = "https://home.example/another/")))
             val stripped = item.buildUpon().setUri(null as android.net.Uri?).build()
