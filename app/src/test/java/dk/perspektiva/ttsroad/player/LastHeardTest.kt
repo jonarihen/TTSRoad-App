@@ -104,4 +104,60 @@ class LastHeardTest {
 
         assertNull(lastHeardSnapshot(history, now))
     }
+
+    private fun minutesAgo(m: Long) = now - m * 60_000L
+
+    /** 23:00 to 00:00 of playback, a snapshot every 5 minutes, then nothing until 08:00. */
+    private val night = (540L downTo 480L step 5).map { m ->
+        snapshot(minutesBeforeNow = m, positionMs = (540L - m) * 60_000L)
+    }
+
+    @Test
+    fun `without a timer stop the banner says the audio stopped`() {
+        val result = estimateLastHeard(night, now, sleepStop = null)!!
+
+        assertEquals(night.last(), result.snapshot)
+        assertEquals(LastHeardKind.AudioStopped, result.kind)
+    }
+
+    @Test
+    fun `a sleep timer stop moves the suggestion back to when the timer was set`() {
+        // Armed a 45 minute timer at 23:15; it fired at 00:00.
+        val stop = SleepTimerStop(stoppedAtMs = minutesAgo(480), lastInteractionAtMs = minutesAgo(525))
+
+        val result = estimateLastHeard(night, now, stop)!!
+
+        assertEquals(LastHeardKind.TimerSet, result.kind)
+        assertEquals(minutesAgo(525), result.snapshot.timestamp)
+        assertEquals(15 * 60_000L, result.snapshot.positionMs)
+        assertEquals(minutesAgo(480), result.stoppedAtMs)
+    }
+
+    @Test
+    fun `a timer stop from an earlier night does not rewind a later session`() {
+        val stop = SleepTimerStop(stoppedAtMs = minutesAgo(2_000), lastInteractionAtMs = minutesAgo(2_045))
+
+        val result = estimateLastHeard(night, now, stop)!!
+
+        assertEquals(LastHeardKind.AudioStopped, result.kind)
+        assertEquals(night.last(), result.snapshot)
+    }
+
+    @Test
+    fun `a timer set before the logged history still points into this session`() {
+        // Armed long before the earliest snapshot kept: the first snapshot is the best estimate.
+        val stop = SleepTimerStop(stoppedAtMs = minutesAgo(480), lastInteractionAtMs = minutesAgo(900))
+
+        val result = estimateLastHeard(night, now, stop)!!
+
+        assertEquals(LastHeardKind.TimerSet, result.kind)
+        assertEquals(night.first(), result.snapshot)
+    }
+
+    @Test
+    fun `the timer estimate still waits for the overnight gap`() {
+        val stop = SleepTimerStop(stoppedAtMs = minutesAgo(480), lastInteractionAtMs = minutesAgo(525))
+
+        assertNull(estimateLastHeard(night, minutesAgo(470), stop))
+    }
 }

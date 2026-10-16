@@ -66,6 +66,20 @@ class SleepTimerController {
     /** When the player was first seen paused with this timer armed, or null while it plays. */
     private var pausedSinceMs: Long? = null
 
+    /**
+     * The tick clock's reading at the listener's last touch of this timer (arm or extend), or null
+     * until the first tick after that touch stamps it. Arming has no clock of its own.
+     */
+    private var interactionTickMs: Long? = null
+
+    /**
+     * How long before the most recent [SleepTimerAction.Expire] the listener last touched the timer
+     * — the last moment they were known to be awake. Read by the service when it applies the
+     * expiry; null before any timer has expired.
+     */
+    var lastExpirySinceInteractionMs: Long? = null
+        private set
+
     // Arming, cancelling, and extending only move the state; [tick] is the single place that
     // decides what the player's volume should be, so the UI can call these without a player.
 
@@ -77,6 +91,7 @@ class SleepTimerController {
         }
         lastTickMs = null
         pausedSinceMs = null
+        interactionTickMs = null
         _state.value = SleepTimerState(mode = SleepTimerMode.Duration, remainingMs = durationMs)
     }
 
@@ -91,6 +106,7 @@ class SleepTimerController {
     fun armEndOfChapter(chapterRemainingMs: Long, capMs: Long? = null) {
         lastTickMs = null
         pausedSinceMs = null
+        interactionTickMs = null
         val cap = capMs?.coerceAtLeast(0L)
         val toChapterEnd = chapterRemainingMs.coerceAtLeast(0L)
         _state.value = SleepTimerState(
@@ -118,6 +134,7 @@ class SleepTimerController {
         val current = _state.value
         if (!current.isArmed) return
         pausedSinceMs = null
+        interactionTickMs = null
         _state.value = SleepTimerState(
             mode = SleepTimerMode.Duration,
             remainingMs = current.remainingMs + extraMs,
@@ -138,6 +155,7 @@ class SleepTimerController {
 
         val previousTickMs = lastTickMs
         lastTickMs = nowMs
+        if (interactionTickMs == null) interactionTickMs = nowMs
 
         // Reaching the chapter boundary *is* this timer firing, so it counts even though the
         // player has already stopped itself there via pauseAtEndOfMediaItems.
@@ -178,8 +196,10 @@ class SleepTimerController {
         }
 
         if (remainingMs <= 0L) {
+            lastExpirySinceInteractionMs = (nowMs - (interactionTickMs ?: nowMs)).coerceAtLeast(0L)
             lastTickMs = null
             pausedSinceMs = null
+            interactionTickMs = null
             appliedVolume = 1f
             _state.value = SleepTimerState()
             return SleepTimerAction.Expire

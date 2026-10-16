@@ -453,4 +453,25 @@ class SleepTimerControllerTest {
             SleepTimerController.buttonLabel(SleepTimerState(SleepTimerMode.EndOfChapter, remainingMs = 1L)),
         )
     }
+
+    @Test
+    fun `an expiry reports how long ago the timer was last touched`() {
+        controller.armDuration(10 * 60_000L)
+        val action = run(fromMs = 1_000L, forMs = 11 * 60_000L)
+
+        assertEquals(SleepTimerAction.Expire, action)
+        assertEquals(10 * 60_000L, controller.lastExpirySinceInteractionMs)
+    }
+
+    @Test
+    fun `extending counts as the listener being awake`() {
+        controller.armDuration(60_000L)
+        run(fromMs = 0L, forMs = 40_000L)
+        controller.extend(SleepTimerController.ExtendMs)
+        val action = run(fromMs = 40_500L, forMs = 10 * 60_000L)
+
+        assertEquals(SleepTimerAction.Expire, action)
+        // 20s left plus five minutes, counted from the shake at 40.5s.
+        assertEquals(20_000L + SleepTimerController.ExtendMs - 500L, controller.lastExpirySinceInteractionMs)
+    }
 }
