@@ -12,7 +12,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Starts crash reporting, if and only if a DSN was configured and it has not been turned off on
@@ -52,8 +55,13 @@ object CrashReporter {
     fun start(context: Context, serverUrls: Flow<List<String>>) {
         if (!isConfigured) return
         val appContext = context.applicationContext
-        servers = prefs(appContext).getString(KeyServers, null)
+        val persisted = prefs(appContext).getString(KeyServers, null)
             ?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
+        // Blocking, but only on the first launch with a DSN: until the collector below runs, an
+        // empty list would let an early crash go out with the address in it (#454).
+        servers = startupServers(persisted) {
+            runBlocking { withTimeoutOrNull(StartupReadTimeoutMs) { serverUrls.first() } }.orEmpty()
+        }
         scope.launch {
             serverUrls.collectLatest { urls ->
                 val updated = rememberServers(servers, urls)
@@ -64,6 +72,14 @@ object CrashReporter {
             }
         }
         if (isEnabled(appContext)) initialise(appContext)
+    }
+
+    /**
+     * Redact [serverUrl] from now on, before the session that names it is saved — a failed sign-in
+     * and the first events after a successful one would otherwise wait on the collector (#454).
+     */
+    fun rememberServer(serverUrl: String) {
+        if (isConfigured) servers = rememberServer(servers, serverUrl)
     }
 
     /**
@@ -112,7 +128,12 @@ object CrashReporter {
     private const val PrefsName = "ttsroad_crash_reporting"
     private const val KeyEnabled = "enabled"
     private const val KeyServers = "redacted_servers"
+    private const val StartupReadTimeoutMs = 2_000L
 }
+
+/** The servers to redact from the first event on: the persisted list, or else the current session's. */
+internal fun startupServers(persisted: List<String>, current: () -> List<String>): List<String> =
+    persisted.ifEmpty { rememberServers(persisted, current()) }
 
 /**
  * Strip the servers' addresses out of an assembled event.
