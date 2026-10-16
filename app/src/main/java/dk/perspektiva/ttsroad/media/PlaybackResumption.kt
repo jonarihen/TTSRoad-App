@@ -1,5 +1,10 @@
 package dk.perspektiva.ttsroad.media
 
+import androidx.media3.common.MediaItem
+import dk.perspektiva.ttsroad.data.ChapterSummary
+import dk.perspektiva.ttsroad.data.FictionSummary
+import dk.perspektiva.ttsroad.widget.NowPlayingSnapshot
+
 /**
  * Read where to resume only once the offline progress backlog has had its chance (#314).
  *
@@ -16,4 +21,42 @@ package dk.perspektiva.ttsroad.media
 internal suspend fun <T> afterPendingProgress(flush: suspend () -> Unit, read: suspend () -> T): T {
     flush()
     return read()
+}
+
+/** What to do about a resume the server could not be asked about (#327). */
+internal sealed interface OfflineResume {
+    /** The chapter's audio is on this phone: play it from [startPositionMs]. */
+    data class Play(val item: MediaItem, val startPositionMs: Long) : OfflineResume
+
+    /** Nothing on this phone to play. [message] says so in words a driver can act on. */
+    data class Unavailable(val message: String) : OfflineResume
+}
+
+/**
+ * Resume [chapter] — the newest continue-listening entry, from the library saved on disk — with no
+ * server to build its fiction's queue from (#327).
+ *
+ * It can only play if its audio was downloaded; streamed audio needs the server that is not there.
+ * The start position is the widget's note when that note is about the same chapter, because the
+ * note is written on every tick and is newer than anything the server was told before the network
+ * went; otherwise the position the saved library carries.
+ */
+internal fun offlineResume(
+    chapter: ChapterSummary,
+    fiction: FictionSummary?,
+    serverUrl: String?,
+    isDownloaded: (mediaId: String) -> Boolean,
+    note: NowPlayingSnapshot?,
+): OfflineResume {
+    val item = TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
+    val title = chapter.resolvedTitle.takeIf { it.isNotBlank() } ?: "the last chapter"
+    if (item == null || !isDownloaded(item.mediaId)) {
+        return OfflineResume.Unavailable("Can't reach the server, and \"$title\" is not downloaded")
+    }
+    val fromNote = note
+        ?.takeIf { it.chapterId > 0 && it.chapterId == chapter.resolvedChapterId }
+        ?.positionMs
+        ?.takeIf { it > 0L }
+    val fromLibrary = chapter.resolvedPositionSeconds.takeIf { it > 0.0 }?.let { (it * 1000).toLong() }
+    return OfflineResume.Play(item, fromNote ?: fromLibrary ?: 0L)
 }
