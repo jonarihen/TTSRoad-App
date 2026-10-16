@@ -1,8 +1,12 @@
 package dk.perspektiva.ttsroad.data
 
 import android.content.Context
+import androidx.core.util.AtomicFile
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import dk.perspektiva.ttsroad.core.deleteUnderLock
+import dk.perspektiva.ttsroad.core.readUtf8OrNull
+import dk.perspektiva.ttsroad.core.writeUtf8
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -29,10 +33,12 @@ data class StoredLibrary(
  * Every successful load is written here, and a load that fails with nothing in memory falls back
  * to it. It is read only for the account that wrote it, and deleted on sign-out.
  *
- * One file shared by the app and the media service (same process). Writes go through a temp file
- * and a rename, so a reader never sees half a library.
+ * One file shared by the app and the media service (same process). Writes go through an
+ * [AtomicFile], so a reader never sees half a library.
  */
-class LibrarySnapshotStore internal constructor(private val file: File) {
+class LibrarySnapshotStore internal constructor(file: File) {
+    private val file = AtomicFile(file)
+
     constructor(context: Context) : this(File(context.filesDir, FileName))
 
     private val adapter = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -42,7 +48,7 @@ class LibrarySnapshotStore internal constructor(private val file: File) {
     fun read(accountKey: String?): StoredLibrary? {
         if (accountKey.isNullOrEmpty()) return null
         val json = synchronized(lock) {
-            runCatching { if (file.isFile) file.readText() else null }.getOrNull()
+            file.readUtf8OrNull()
         } ?: return null
         val stored = runCatching { adapter.fromJson(json) }.getOrNull() ?: return null
         return stored.takeIf { it.accountKey == accountKey }
@@ -52,24 +58,13 @@ class LibrarySnapshotStore internal constructor(private val file: File) {
         if (accountKey.isNullOrEmpty()) return
         val json = runCatching { adapter.toJson(StoredLibrary(accountKey, savedAt, library)) }.getOrNull() ?: return
         synchronized(lock) {
-            runCatching {
-                file.parentFile?.mkdirs()
-                val tmp = File(file.parentFile, "${file.name}.tmp")
-                tmp.writeText(json)
-                if (!tmp.renameTo(file)) {
-                    if (file.exists()) file.delete()
-                    tmp.renameTo(file)
-                }
-            }
+            runCatching { file.writeUtf8(json) }
         }
     }
 
     fun clear() {
         synchronized(lock) {
-            runCatching {
-                File(file.parentFile, "${file.name}.tmp").takeIf { it.exists() }?.delete()
-                if (file.exists()) file.delete()
-            }
+            runCatching { file.deleteUnderLock() }
         }
     }
 

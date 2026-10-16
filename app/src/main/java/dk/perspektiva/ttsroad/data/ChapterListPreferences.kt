@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -38,20 +39,41 @@ private val Context.chapterListDataStore: DataStore<Preferences> by preferencesD
 fun chapterFilterFromStored(stored: String?): ChapterFilter =
     ChapterFilter.entries.firstOrNull { it.name == stored } ?: ChapterFilter.All
 
+/**
+ * Reads the stored sort direction back, defaulting to oldest first — reading order, which is what
+ * the list showed before the direction was remembered (#349).
+ */
+fun chapterSortAscendingFromStored(stored: Boolean?): Boolean = stored ?: true
+
 class ChapterListPreferences(private val context: Context) {
     private object Keys {
         val Filter = stringPreferencesKey("chapter_filter")
+        val SortAscending = booleanPreferencesKey("chapter_sort_ascending")
     }
 
-    val filter: Flow<ChapterFilter> = context.chapterListDataStore.data
+    private val stored: Flow<Preferences> = context.chapterListDataStore.data
         .catch { throwable ->
             if (throwable is IOException) emit(emptyPreferences()) else throw throwable
         }
-        .map { stored -> chapterFilterFromStored(stored[Keys.Filter]) }
+
+    val filter: Flow<ChapterFilter> = stored
+        .map { prefs -> chapterFilterFromStored(prefs[Keys.Filter]) }
+
+    /**
+     * OLDEST (true) or NEWEST (false). Library-wide like the filter and for the same reason: it used
+     * to reset to OLDEST on every visit, so someone who reads the latest release first flipped it on
+     * every open. Local only — the account has no key for it.
+     */
+    val sortAscending: Flow<Boolean> = stored
+        .map { prefs -> chapterSortAscendingFromStored(prefs[Keys.SortAscending]) }
 
     suspend fun current(): ChapterFilter = filter.first()
 
     suspend fun setFilter(filter: ChapterFilter) {
         context.chapterListDataStore.edit { it[Keys.Filter] = filter.name }
+    }
+
+    suspend fun setSortAscending(ascending: Boolean) {
+        context.chapterListDataStore.edit { it[Keys.SortAscending] = ascending }
     }
 }

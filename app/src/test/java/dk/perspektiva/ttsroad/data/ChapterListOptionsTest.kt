@@ -48,6 +48,39 @@ class ChapterListOptionsTest {
     }
 
     @Test
+    fun `unplayed and ready combine`() {
+        val view = chapters.chapterView(ChapterFilter.UnplayedReady, ascending = true)
+
+        assertEquals(listOf(3), view.map { it.resolvedChapterId })
+    }
+
+    @Test
+    fun `the two filter switches toggle independently`() {
+        assertEquals(ChapterFilter.UnplayedReady, ChapterFilter.Unplayed.withReadyOnly(true))
+        assertEquals(ChapterFilter.UnplayedReady, ChapterFilter.Ready.withUnplayedOnly(true))
+        assertEquals(ChapterFilter.Ready, ChapterFilter.UnplayedReady.withUnplayedOnly(false))
+        assertEquals(ChapterFilter.Unplayed, ChapterFilter.UnplayedReady.withReadyOnly(false))
+        assertEquals(ChapterFilter.All, ChapterFilter.Ready.withReadyOnly(false))
+        for (unplayed in listOf(true, false)) {
+            for (ready in listOf(true, false)) {
+                val filter = ChapterFilter.of(unplayed, ready)
+                assertEquals(unplayed, filter.unplayedOnly)
+                assertEquals(ready, filter.readyOnly)
+            }
+        }
+    }
+
+    @Test
+    fun `ids from a chapter run to the end in reading order whatever the sort`() {
+        val shuffled = chapters.reversed()
+
+        assertEquals(listOf(3, 4), shuffled.chapterIdsFrom(3))
+        assertEquals(listOf(1, 2, 3, 4), shuffled.chapterIdsFrom(1))
+        assertEquals(listOf(4), shuffled.chapterIdsFrom(4))
+        assertEquals(emptyList<Int>(), shuffled.chapterIdsFrom(99))
+    }
+
+    @Test
     fun `descending sort reverses the list`() {
         val view = chapters.chapterView(ChapterFilter.All, ascending = false)
 

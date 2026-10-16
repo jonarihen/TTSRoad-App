@@ -1,10 +1,14 @@
 package dk.perspektiva.ttsroad.widget
 
 import android.content.Context
+import androidx.core.util.AtomicFile
 import androidx.media3.common.C
 import androidx.media3.common.Player
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import dk.perspektiva.ttsroad.core.deleteUnderLock
+import dk.perspektiva.ttsroad.core.readUtf8OrNull
+import dk.perspektiva.ttsroad.core.writeUtf8
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.sync.Mutex
@@ -174,28 +178,19 @@ internal interface SnapshotPersistence {
 }
 
 /**
- * The real one. Writes through a temp file and renames it over the target: the launcher may read
+ * The real one. Writes through an [AtomicFile]: the launcher may read
  * this file at any moment, and a half-written record is one the widget has to discard.
  */
-internal class FileSnapshotPersistence(private val file: File) : SnapshotPersistence {
-    override fun read(): String? = runCatching { if (file.isFile) file.readText() else null }.getOrNull()
+internal class FileSnapshotPersistence(file: File) : SnapshotPersistence {
+    private val file = AtomicFile(file)
+
+    override fun read(): String? = file.readUtf8OrNull()
 
     override fun write(json: String) {
-        runCatching {
-            val tmp = File(file.parentFile, "${file.name}.tmp")
-            tmp.writeText(json)
-            if (!tmp.renameTo(file)) {
-                if (file.exists()) file.delete()
-                tmp.renameTo(file)
-            }
-        }
+        runCatching { file.writeUtf8(json) }
     }
 
     override fun delete() {
-        runCatching {
-            val tmp = File(file.parentFile, "${file.name}.tmp")
-            if (tmp.exists()) tmp.delete()
-            if (file.exists()) file.delete()
-        }
+        runCatching { file.deleteUnderLock() }
     }
 }

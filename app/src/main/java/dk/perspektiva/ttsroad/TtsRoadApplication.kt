@@ -9,7 +9,6 @@ import dk.perspektiva.ttsroad.core.ServiceLocator
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 
 class TtsRoadApplication : Application(), ImageLoaderFactory {
@@ -37,7 +36,7 @@ class TtsRoadApplication : Application(), ImageLoaderFactory {
                 val authorized = request.newBuilder()
                     .removeHeader("Authorization")
                     .apply {
-                        if (isSameOrigin(request.url.toString(), session.serverUrl)) {
+                        if (ServerUrls.isSameOrigin(request.url.toString(), session.serverUrl)) {
                             session.authorizationHeader?.let { header("Authorization", it) }
                         }
                     }
@@ -51,7 +50,3 @@ class TtsRoadApplication : Application(), ImageLoaderFactory {
             .build()
     }
 }
-
-/** True only when both URLs have the same scheme, host and effective port. */
-internal fun isSameOrigin(requestUrl: String, serverUrl: String): Boolean =
-    ServerUrls.isSameOrigin(requestUrl, serverUrl)
