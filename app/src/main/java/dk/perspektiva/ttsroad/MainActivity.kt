@@ -64,29 +64,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.Article
-import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.DownloadDone
-import androidx.compose.material.icons.filled.Forward10
-import androidx.compose.material.icons.filled.Forward30
-import androidx.compose.material.icons.filled.Forward5
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Replay10
-import androidx.compose.material.icons.filled.Replay30
-import androidx.compose.material.icons.filled.Replay5
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
@@ -132,6 +116,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -3012,7 +2997,7 @@ internal fun PlayerScreenBody(
             // Hidden outright on a server without read-along, rather than offered and then 404ing.
             if (canRead) {
                 PlayerIconAction(
-                    icon = Icons.Default.Article,
+                    icon = ImageVector.vectorResource(R.drawable.ic_article),
                     contentDescription = "Read along",
                     onClick = onRead,
                 )
@@ -3032,7 +3017,7 @@ internal fun PlayerScreenBody(
             // this book, UP NEXT is what was lined up across books.
             if (canOpenQueue) {
                 PlayerIconAction(
-                    icon = Icons.AutoMirrored.Filled.QueueMusic,
+                    icon = ImageVector.vectorResource(R.drawable.ic_queue_music),
                     contentDescription = "Up next",
                     onClick = onOpenQueue,
                 )
@@ -3117,7 +3102,7 @@ internal fun PlayerScreenBody(
         ) {
             if (canJumpBack) {
                 PlayerIconAction(
-                    icon = Icons.Default.History,
+                    icon = ImageVector.vectorResource(R.drawable.ic_history),
                     contentDescription = "Jump back to where you were",
                     onClick = onOpenJumpBack,
                 )
@@ -3127,7 +3112,7 @@ internal fun PlayerScreenBody(
             // press made without looking, so demoting it would undo the feature.
             if (canBookmark) {
                 PlayerIconAction(
-                    icon = Icons.Default.BookmarkAdd,
+                    icon = ImageVector.vectorResource(R.drawable.ic_bookmark_add),
                     contentDescription = "Bookmark this moment",
                     accent = true,
                     onClick = onBookmark,
@@ -3138,7 +3123,7 @@ internal fun PlayerScreenBody(
             // well as the read one (#125).
             if (canReportPronunciation) {
                 PlayerIconAction(
-                    icon = Icons.Default.RecordVoiceOver,
+                    icon = ImageVector.vectorResource(R.drawable.ic_record_voice_over),
                     contentDescription = "Report a mispronunciation",
                     accent = true,
                     onClick = onReportPronunciation,
@@ -3216,7 +3201,7 @@ internal fun PlayerScreenBody(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TransportIconButton(
-                icon = Icons.Default.SkipPrevious,
+                icon = ImageVector.vectorResource(R.drawable.ic_skip_previous),
                 contentDescription = "Previous chapter",
                 enabled = playerState.hasMedia,
                 size = 46.dp,
@@ -3228,7 +3213,7 @@ internal fun PlayerScreenBody(
                 size = 46.dp,
             ) { onSkipBack() }
             TransportIconButton(
-                icon = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                icon = if (playerState.isPlaying) ImageVector.vectorResource(R.drawable.ic_pause) else Icons.Default.PlayArrow,
                 contentDescription = if (playerState.isPlaying) "Pause" else "Play",
                 enabled = playerState.hasMedia,
                 size = 68.dp,
@@ -3241,7 +3226,7 @@ internal fun PlayerScreenBody(
                 size = 46.dp,
             ) { onSkipForward() }
             TransportIconButton(
-                icon = Icons.Default.SkipNext,
+                icon = ImageVector.vectorResource(R.drawable.ic_skip_next),
                 contentDescription = "Next chapter",
                 enabled = playerState.hasNext,
                 size = 46.dp,
@@ -6589,7 +6574,7 @@ private fun MiniPlayerBar(
             ) { playbackController.skipBy(-skipIntervalMs) }
             Spacer(modifier = Modifier.width(8.dp))
             TransportIconButton(
-                icon = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                icon = if (state.isPlaying) ImageVector.vectorResource(R.drawable.ic_pause) else Icons.Default.PlayArrow,
                 contentDescription = if (state.isPlaying) "Pause" else "Play",
                 enabled = state.hasMedia,
                 size = 42.dp,
@@ -7025,7 +7010,7 @@ internal fun ChapterRow(
             // Offered even for a chapter with no audio yet: the text is worth reading on its own.
             onOpenReader?.let { open ->
                 TransportIconButton(
-                    icon = Icons.Default.Article,
+                    icon = ImageVector.vectorResource(R.drawable.ic_article),
                     contentDescription = "Read along",
                     enabled = true,
                     size = 36.dp,
@@ -7110,9 +7095,10 @@ private fun chapterNumberLabel(chapter: ChapterSummary): String =
 private fun chapterNumberLabel(number: Double): String = chapterNumberText(number).orEmpty()
 
 /** The row's download button. Its icon is the *action*, not the state — except when there is none. */
+@Composable
 private fun downloadIcon(state: ChapterDownloadState): ImageVector = when (state) {
-    ChapterDownloadState.None -> Icons.Default.Download
-    ChapterDownloadState.Downloaded -> Icons.Default.DownloadDone
+    ChapterDownloadState.None -> ImageVector.vectorResource(R.drawable.ic_download)
+    ChapterDownloadState.Downloaded -> ImageVector.vectorResource(R.drawable.ic_download_done)
     ChapterDownloadState.Failed -> Icons.Default.Refresh
     // Queued, Downloading and Removing all resolve to "stop what is happening".
     else -> Icons.Default.Close
@@ -10790,16 +10776,18 @@ private fun formatDuration(ms: Long): String {
  * icon. Use the nearest one and let the content description carry the real value — a screen reader
  * gets the truth even where the glyph rounds.
  */
+@Composable
 private fun skipBackIcon(skipIntervalMs: Long): ImageVector = when {
-    skipIntervalMs <= 7_500L -> Icons.Default.Replay5
-    skipIntervalMs <= 20_000L -> Icons.Default.Replay10
-    else -> Icons.Default.Replay30
+    skipIntervalMs <= 7_500L -> ImageVector.vectorResource(R.drawable.ic_replay_5)
+    skipIntervalMs <= 20_000L -> ImageVector.vectorResource(R.drawable.ic_replay_10)
+    else -> ImageVector.vectorResource(R.drawable.ic_replay_30)
 }
 
+@Composable
 private fun skipForwardIcon(skipIntervalMs: Long): ImageVector = when {
-    skipIntervalMs <= 7_500L -> Icons.Default.Forward5
-    skipIntervalMs <= 20_000L -> Icons.Default.Forward10
-    else -> Icons.Default.Forward30
+    skipIntervalMs <= 7_500L -> ImageVector.vectorResource(R.drawable.ic_forward_5)
+    skipIntervalMs <= 20_000L -> ImageVector.vectorResource(R.drawable.ic_forward_10)
+    else -> ImageVector.vectorResource(R.drawable.ic_forward_30)
 }
 
 /** "30m", or "Ask" for the server's 0, which means "no default — pick one each time". */
