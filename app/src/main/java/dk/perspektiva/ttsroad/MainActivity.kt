@@ -974,10 +974,15 @@ internal fun PrimaryNavigationBar(
                             .background(if (isSelected) AarisColor.Accent else Color.Transparent),
                     )
                     val badge = badges[root] ?: 0
-                    Row(
+                    // A FlowRow, so the badge drops under the label when the two do not fit side
+                    // by side. In a Row the shrink-to-fit label took the whole tab at 200 % font
+                    // and squeezed the badge to nothing; sharing the width instead would have
+                    // needed the label smaller than anyone can read.
+                    FlowRow(
                         modifier = Modifier.padding(vertical = 18.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                        itemVerticalAlignment = Alignment.CenterVertically,
                     ) {
                         NavigationTabLabel(
                             text = root.label,
@@ -6708,6 +6713,8 @@ internal fun ChapterTile(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             // Two lines, so a large font still shows more than the first word or two (#354).
+            // Always two, so the meta lines of neighbouring tiles in a rail stay level.
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -6754,6 +6761,8 @@ private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             // Two lines, so a large font still shows more than the first word or two (#354).
+            // Always two, so the meta lines of neighbouring tiles in a rail stay level.
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )

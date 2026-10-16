@@ -6,6 +6,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.text.TextLayoutResult
@@ -104,6 +105,31 @@ class LargeFontLayoutTest {
                 layout.size.width <= 80,
             )
         }
+    }
+
+    @Test
+    @Config(fontScale = 2f)
+    fun `the new-chapters badge keeps its width beside a shrunk label`() {
+        compose.setContent {
+            TtsRoadTheme {
+                PrimaryNavigationBar(
+                    selected = AppRoot.Home,
+                    onSelect = {},
+                    badges = mapOf(AppRoot.Listening to 3),
+                )
+            }
+        }
+
+        val badge = compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertIsDisplayed()
+        val bounds = badge.fetchSemanticsNode().boundsInRoot
+        assertTrue("badge is ${bounds.width}px wide", bounds.width > 0f)
+        val layout = compose.onNodeWithText("LISTENING", useUnmergedTree = true).textLayout()
+        assertFalse("LISTENING overflows beside its badge", layout.hasVisualOverflow)
+        // Both inside the Listening tab, the third quarter of the bar.
+        val label = compose.onNodeWithText("LISTENING", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("label starts at ${label.left}", label.left >= 160f)
+        assertTrue("badge ends at ${bounds.right}", bounds.right <= 240f)
     }
 
     @Test
