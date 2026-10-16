@@ -1,9 +1,13 @@
 package dk.perspektiva.ttsroad.download
 
 import android.content.Context
+import androidx.core.util.AtomicFile
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
+import dk.perspektiva.ttsroad.core.deleteUnderLock
+import dk.perspektiva.ttsroad.core.readUtf8OrNull
+import dk.perspektiva.ttsroad.core.writeUtf8
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -29,7 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * on the one-server phone that wrote them is the right one. A null scope is that legacy bucket.
  */
 class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) {
-    private val file = File(context.filesDir, FileName)
+    private val file = AtomicFile(File(context.filesDir, FileName))
     private val adapter: JsonAdapter<Map<String, String>> = moshi.adapter(
         Types.newParameterizedType(Map::class.java, String::class.java, String::class.java),
     )
@@ -76,7 +80,7 @@ class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) 
     fun clear() {
         synchronized(lock) {
             _hashes.value = emptyMap()
-            runCatching { file.delete() }
+            runCatching { file.deleteUnderLock() }
         }
     }
 
@@ -93,15 +97,15 @@ class AudioHashRecord(context: Context, moshi: Moshi = Moshi.Builder().build()) 
     }
 
     private fun read(): Map<String, String> = runCatching {
-        if (!file.exists()) return@runCatching emptyMap()
-        adapter.fromJson(file.readText())
+        val json = file.readUtf8OrNull() ?: return@runCatching emptyMap()
+        adapter.fromJson(json)
             ?.filterKeys { parseKey(it) != null }
             .orEmpty()
     }.getOrDefault(emptyMap())
 
     private fun write(hashes: Map<String, String>) {
         runCatching {
-            file.writeText(adapter.toJson(hashes))
+            file.writeUtf8(adapter.toJson(hashes))
         }
     }
 

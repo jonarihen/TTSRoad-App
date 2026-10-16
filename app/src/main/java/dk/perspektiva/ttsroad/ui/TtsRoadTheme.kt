@@ -67,7 +67,6 @@ data class AarisPalette(
     val line: Color,
     val lineSoft: Color,
     val accent: Color,
-    val accentHover: Color,
     val ok: Color,
     val warning: Color,
     val danger: Color,
@@ -87,7 +86,6 @@ data class AarisPalette(
             line = Color(0xFF232830),
             lineSoft = Color(0xFF1A1E25),
             accent = Color(0xFFFF5A1F),
-            accentHover = Color(0xFFFF7A44),
             ok = Color(0xFF3FD97F),
             warning = Color(0xFFFFB224),
             danger = Color(0xFFEC555A),
@@ -112,7 +110,6 @@ data class AarisPalette(
             line = Color(0xFF181B20),
             lineSoft = Color(0xFF101216),
             accent = Color(0xFFFF5A1F),
-            accentHover = Color(0xFFFF7A44),
             ok = Color(0xFF3FD97F),
             warning = Color(0xFFFFB224),
             danger = Color(0xFFEC555A),
@@ -172,7 +169,6 @@ object AarisColor {
     val Line: Color get() = palette.line
     val LineSoft: Color get() = palette.lineSoft
     val Accent: Color get() = palette.accent
-    val AccentHover: Color get() = palette.accentHover
     val Ok: Color get() = palette.ok
     val Warning: Color get() = palette.warning
     // 4.27:1 on the hover surface as #E5484D, and error text is the last thing that should be hard

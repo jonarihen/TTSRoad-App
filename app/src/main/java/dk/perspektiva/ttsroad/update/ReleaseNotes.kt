@@ -114,3 +114,24 @@ private fun AnnotatedString.trimTrailingLines(): AnnotatedString {
     val end = text.indexOfLast { !it.isWhitespace() } + 1
     return if (end <= 0) AnnotatedString("") else subSequence(0, end)
 }
+
+/** A release body split into its plain-language lead and the changelog under it (#363). */
+data class ReleaseNotesParts(val summary: String?, val details: String)
+
+private val StructuredBlockStart = Regex("""^\s*(#|[-*+]\s|\d+[.)]\s|>|```|~~~)""")
+
+/**
+ * The prose a release body opens with — "Bug-fix release from the October sweep." — before its first
+ * heading or list, which is where the developer-facing changelog starts. A body that is all prose,
+ * or all changelog, has no separate summary: there is nothing to put above anything else.
+ */
+fun splitReleaseNotes(markdown: String): ReleaseNotesParts {
+    val text = markdown.replace("\r\n", "\n").trim()
+    val blocks = text.split(Regex("\n\\s*\n"))
+    val lead = blocks.takeWhile { !StructuredBlockStart.containsMatchIn(it) }
+    if (lead.isEmpty() || lead.size == blocks.size) return ReleaseNotesParts(summary = null, details = text)
+    return ReleaseNotesParts(
+        summary = lead.joinToString("\n\n").trim(),
+        details = blocks.drop(lead.size).joinToString("\n\n").trim(),
+    )
+}
