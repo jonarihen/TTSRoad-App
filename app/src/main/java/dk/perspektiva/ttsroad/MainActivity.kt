@@ -5022,6 +5022,7 @@ internal fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
+                CrashReportingSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->
                     MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
                 }

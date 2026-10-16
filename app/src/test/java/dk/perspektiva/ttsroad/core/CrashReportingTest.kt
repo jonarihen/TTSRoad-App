@@ -169,4 +169,48 @@ class CrashReportingTest {
             redactServerUrl("GET https://home.example.com/api/mobile/fictions", "https://home.example.com"),
         )
     }
+
+    @Test
+    fun `the status says when no dsn is built in`() {
+        assertEquals("Off (not configured in this build)", crashReportingStatus(null, enabledOnDevice = true))
+        assertEquals("Off (not configured in this build)", crashReportingStatus("  ", enabledOnDevice = true))
+    }
+
+    @Test
+    fun `the status names where reports go, without the public key`() {
+        val dsn = "https://abc123@sentry.example.com/4"
+
+        assertEquals("sentry.example.com", crashReportingHost(dsn))
+        assertEquals("sentry.example.com:9000", crashReportingHost("https://abc123@sentry.example.com:9000/4"))
+        assertEquals("On → sentry.example.com", crashReportingStatus(dsn, enabledOnDevice = true))
+        assertEquals(
+            "Off on this phone (build reports to sentry.example.com)",
+            crashReportingStatus(dsn, enabledOnDevice = false),
+        )
+    }
+
+    @Test
+    fun `remembered servers are origins, newest first, deduplicated and capped`() {
+        var known = emptyList<String>()
+        known = rememberServer(known, "https://a.example/")
+        known = rememberServer(known, "http://10.0.0.2:8000/api")
+        known = rememberServer(known, "https://A.example")
+        known = rememberServer(known, "")
+        known = rememberServer(known, null)
+
+        assertEquals(listOf("https://A.example", "http://10.0.0.2:8000"), known)
+
+        repeat(20) { known = rememberServer(known, "https://s$it.example") }
+        assertEquals(RememberedServerLimit, known.size)
+        assertEquals("https://s19.example", known.first())
+    }
+
+    @Test
+    fun `string values in a map are redacted and others kept`() {
+        val redacted = redactStringValues(mapOf("url" to "https://a.example/x", "n" to 2, "none" to null)) {
+            redactServerUrl(it, "https://a.example")
+        }
+
+        assertEquals(mapOf("url" to "$RedactedServer/x", "n" to 2, "none" to null), redacted)
+    }
 }
