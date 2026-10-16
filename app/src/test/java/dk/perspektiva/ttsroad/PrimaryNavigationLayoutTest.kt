@@ -158,7 +158,7 @@ class PrimaryNavigationLayoutTest {
                     canOpenLogs = false,
                     canOpenNewChapters = true,
                     unreadNewChapters = 3,
-                    playableNewChapters = 1,
+                    readyNewChapters = 1,
                 )
             }
         }
@@ -192,12 +192,14 @@ class PrimaryNavigationLayoutTest {
 
     @Test
     fun `new chapters row title separates ready from waiting`() {
-        assertEquals("New chapters", newChaptersRowTitle(unread = 0, playable = 0))
-        assertEquals("New chapters (2 ready)", newChaptersRowTitle(unread = 2, playable = 2))
-        assertEquals("New chapters (3 waiting)", newChaptersRowTitle(unread = 3, playable = 0))
-        assertEquals("New chapters (1 ready · 2 waiting)", newChaptersRowTitle(unread = 3, playable = 1))
-        // A stale local list can briefly hold more playable rows than the server's count.
-        assertEquals("New chapters (1 ready)", newChaptersRowTitle(unread = 1, playable = 4))
+        assertEquals("New chapters", newChaptersRowTitle(unread = 0, ready = 0))
+        assertEquals("New chapters (2 ready)", newChaptersRowTitle(unread = 2, ready = 2))
+        assertEquals("New chapters (3 waiting)", newChaptersRowTitle(unread = 3, ready = 0))
+        assertEquals("New chapters (1 ready · 2 waiting)", newChaptersRowTitle(unread = 3, ready = 1))
+        // Never more ready than open.
+        assertEquals("New chapters (1 ready)", newChaptersRowTitle(unread = 1, ready = 4))
+        // Beyond the server's 200-row page the counts still come through whole.
+        assertEquals("New chapters (240 ready · 110 waiting)", newChaptersRowTitle(unread = 350, ready = 240))
     }
 
     @Test
