@@ -3,6 +3,7 @@ package dk.perspektiva.ttsroad
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
@@ -100,10 +101,13 @@ class NewChaptersRetryTest {
         val state = show()
 
         compose.onNodeWithText("CONVERT AGAIN").performClick()
-        compose.waitUntil(5_000) { requests.any { it.endsWith("/retry") } }
-        compose.waitForIdle()
+        // Wait for the answer, not the request: MockWebServer records the request before OkHttp has
+        // handed the 409 back, and waitForIdle does not wait for that I/O.
+        val refusal = "That chapter is already converting, or is excluded"
+        compose.waitUntil(5_000) { compose.onAllNodesWithText(refusal).fetchSemanticsNodes().isNotEmpty() }
 
-        compose.onNodeWithText("That chapter is already converting, or is excluded").assertIsDisplayed()
+        assertTrue(requests.any { it.endsWith("/retry") })
+        compose.onNodeWithText(refusal).assertIsDisplayed()
         assertEquals(0, state.refreshRequest)
     }
 
