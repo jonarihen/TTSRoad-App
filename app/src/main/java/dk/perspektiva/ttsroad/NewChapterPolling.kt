@@ -17,6 +17,7 @@ import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.newlyReady
 import dk.perspektiva.ttsroad.data.readyNotificationText
+import dk.perspektiva.ttsroad.player.historyAccountKeys
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -38,9 +39,9 @@ import kotlinx.coroutines.sync.withLock
  *
  * The rule that keeps the backlog quiet survives unchanged: an account this handset has **no**
  * record for reads as null, and [newlyReady] announces nothing on a null. One record, for one
- * account, keyed by [notificationSessionKey] — a hash, so the token itself is never written here.
- * A different account (or a rotated token) finds no record and starts silent, which is exactly the
- * "never announce the previous account's chapters" rule.
+ * account, keyed by `historyAccountKey` — server and account, hashed, so a rotated token keeps the
+ * record (#455) and nothing identifying is written here. A different account finds no record and
+ * starts silent, which is exactly the "never announce the previous account's chapters" rule.
  *
  * Plain text rather than Moshi on purpose: nothing reflective lives outside `data/` without a
  * proguard line, and two lines of text do not need one.
@@ -91,8 +92,12 @@ internal suspend fun announceNewlyReady(
     stillOwns: suspend () -> Boolean,
 ) {
     AnnounceLock.withLock {
-        val account = notificationSessionKey(session)
-        val (fresh, seen) = newlyReady(notifications, store.read(account))
+        val keys = historyAccountKeys(session)
+        val account = keys.firstOrNull() ?: return
+        // A record under a former key of this account, or under the pre-#455 token key, is this
+        // account's: read it once, and the write below moves it to the current key.
+        val before = keys.firstNotNullOfOrNull { store.read(it) } ?: store.read(notificationSessionKey(session))
+        val (fresh, seen) = newlyReady(notifications, before)
         if (!stillOwns()) return
         store.write(account, seen)
         readyNotificationText(fresh)?.let { (title, body) ->

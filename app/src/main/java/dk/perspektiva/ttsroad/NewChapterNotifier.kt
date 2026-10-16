@@ -11,7 +11,18 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import dk.perspektiva.ttsroad.data.ChapterNotificationEntry
 import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.player.historyAccountKey
+import dk.perspektiva.ttsroad.player.historyAccountKeys
 import java.security.MessageDigest
+
+/**
+ * Whether a Play action stamped with [key] was posted for [session]'s account. Keyed on the account,
+ * not the token, so a password change does not dead-end a Play already in the shade (#455); the
+ * token key is what actions posted before that carried.
+ */
+internal fun notificationActionOwnedBy(key: String?, session: SessionState): Boolean =
+    key != null && session.isLoggedIn &&
+        (key in historyAccountKeys(session) || key == notificationSessionKey(session))
 
 internal fun notificationSessionKey(session: SessionState): String = MessageDigest.getInstance("SHA-256")
     .digest("${session.serverUrl}\u0000${session.token.orEmpty()}".toByteArray(Charsets.UTF_8))
@@ -107,7 +118,7 @@ class NewChapterNotifier(private val context: Context) {
                 action = ActionPlay
                 putExtra(ExtraFictionId, it.fiction.id)
                 putExtra(ExtraChapterId, it.chapter.id)
-                session?.let { owner -> putExtra(ExtraSessionKey, notificationSessionKey(owner)) }
+                session?.let { owner -> historyAccountKey(owner)?.let { putExtra(ExtraSessionKey, it) } }
             }
         }
         return PendingIntent.getActivity(

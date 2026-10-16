@@ -23,6 +23,7 @@ import dk.perspektiva.ttsroad.player.PlayedMarks
 import dk.perspektiva.ttsroad.player.PlaybackController
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.historyAccountKey
+import dk.perspektiva.ttsroad.player.historyAccountKeys
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerStopStore
@@ -131,10 +132,11 @@ object ServiceLocator {
         initScope.launch {
             var previous: String? = null
             tokenStore(context).session
-                .map(::historyAccountKey)
+                .map(::historyAccountKeys)
                 .distinctUntilChanged()
-                .collect { key ->
-                    playbackHistory(context).bindAccount(key)
+                .collect { keys ->
+                    val key = keys.firstOrNull()
+                    playbackHistory(context).bindAccount(key, keys)
                     // Signed out from a session this process saw. The media service clears the note
                     // too when it is running; this covers sign-out with the service already gone.
                     if (previous != null && key == null) {
@@ -275,6 +277,7 @@ object ServiceLocator {
                 repository = repository(context),
                 snapshots = LibrarySnapshotStore(context.applicationContext),
                 accountKey = { historyAccountKey(tokenStore(context).current()) },
+                formerAccountKeys = { historyAccountKeys(tokenStore(context).current()) },
             ).also { libraryCache = it }
         }
 

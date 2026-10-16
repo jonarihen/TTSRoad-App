@@ -131,7 +131,7 @@ class NotificationRoutingTest {
             repeat(2) { attempt ->
                 notifier.notifyReady("Ready", "Chapter", ChapterNotificationEntry(
                     playable = true, fiction = ChapterNotificationFiction(id = 7), chapter = ChapterNotificationChapter(id = 102 + attempt),
-                ), signedIn)
+                ), signedIn.copy(username = "listener"))
                 manager.getNotification(NewChapterNotifier.Tag, NewChapterNotifier.NotificationId).actions.single().actionIntent.send()
                 val delivered = shadowOf(context).nextStartedActivity
                 val trampoline = Robolectric.buildActivity(NotificationPlayActivity::class.java, delivered).create()
@@ -186,6 +186,19 @@ class NotificationRoutingTest {
             trampoline.destroy()
             kotlinx.coroutines.runBlocking { store.clearToken() }
         }
+    }
+
+    @Test
+    fun `a Play action survives a token rotation but not a different account`() {
+        val anna = signedIn.copy(username = "anna")
+        val key = dk.perspektiva.ttsroad.player.historyAccountKey(anna)
+        assertTrue(notificationActionOwnedBy(key, anna.copy(token = "rotated")))
+        assertFalse(notificationActionOwnedBy(key, anna.copy(username = "bo")))
+        assertFalse(notificationActionOwnedBy(key, anna.copy(serverUrl = "https://other.example.com/")))
+        assertFalse(notificationActionOwnedBy(key, anna.copy(token = null)))
+        assertFalse(notificationActionOwnedBy(null, anna))
+        // Posted before #455: keyed on the token, still honoured for that same session.
+        assertTrue(notificationActionOwnedBy(notificationSessionKey(anna), anna))
     }
 
     @Test

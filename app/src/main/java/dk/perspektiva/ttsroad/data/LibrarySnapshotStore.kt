@@ -44,14 +44,17 @@ class LibrarySnapshotStore internal constructor(file: File) {
     private val adapter = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
         .adapter(StoredLibrary::class.java)
 
-    /** The stored library if it belongs to [accountKey]; null for no account, a mismatch, or a bad file. */
-    fun read(accountKey: String?): StoredLibrary? {
+    /**
+     * The stored library if it belongs to [accountKey], or was stored under one of [formerKeys] of
+     * the same account (#446); null for no account, a mismatch, or a bad file.
+     */
+    fun read(accountKey: String?, formerKeys: Collection<String> = emptyList()): StoredLibrary? {
         if (accountKey.isNullOrEmpty()) return null
         val json = synchronized(lock) {
             file.readUtf8OrNull()
         } ?: return null
         val stored = runCatching { adapter.fromJson(json) }.getOrNull() ?: return null
-        return stored.takeIf { it.accountKey == accountKey }
+        return stored.takeIf { it.accountKey == accountKey || it.accountKey in formerKeys }
     }
 
     fun write(accountKey: String?, library: LibraryResponse, savedAt: Long = System.currentTimeMillis()) {

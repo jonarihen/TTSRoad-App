@@ -73,6 +73,7 @@ import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.InProcessPlayer
 import dk.perspektiva.ttsroad.player.historyAccountKey
+import dk.perspektiva.ttsroad.player.historyAccountKeys
 import dk.perspektiva.ttsroad.player.NetworkReturnWatcher
 import dk.perspektiva.ttsroad.player.shouldRecoverOnNetworkReturn
 import dk.perspektiva.ttsroad.player.PendingProgressStore
@@ -1292,8 +1293,8 @@ class TtsRoadMediaService : MediaLibraryService() {
         } else if (lastLibrary == null) {
             // A fresh process with no network: last time's library rather than nothing, so the car
             // can still browse and resume (#327). No cursor, so the next load that works is a full one.
-            val key = historyAccountKey(tokenStore.current())
-            val stored = withContext(Dispatchers.IO) { librarySnapshots.read(key) }
+            val keys = historyAccountKeys(tokenStore.current())
+            val stored = withContext(Dispatchers.IO) { librarySnapshots.read(keys.firstOrNull(), keys) }
             if (stored != null && sessionStillCurrent(session)) {
                 searchCacheGeneration++
                 lastLibrary = stored.library
