@@ -58,6 +58,12 @@ data class PlaybackPrefs(
      * still skip.
      */
     val skipAdSegments: Boolean = DefaultSkipAdSegments,
+    /**
+     * The night palette: pure black and dimmer ink, for listening in a dark room (#343). A device
+     * setting like the four player keys above — how bright this phone's screen should be at night
+     * is not a fact about the account.
+     */
+    val nightMode: Boolean = false,
 )
 
 /**
@@ -169,6 +175,7 @@ class PlaybackPreferences(private val context: Context) {
         val SleepTimerDefaultMinutes = intPreferencesKey("sleep_timer_default_minutes")
         val AutoMarkPlayed = booleanPreferencesKey("auto_mark_played")
         val SkipAdSegments = booleanPreferencesKey("skip_ad_segments")
+        val NightMode = booleanPreferencesKey("night_mode")
     }
 
     val prefs: Flow<PlaybackPrefs> = context.playbackDataStore.data
@@ -188,6 +195,7 @@ class PlaybackPreferences(private val context: Context) {
                 ),
                 autoMarkPlayed = stored[Keys.AutoMarkPlayed] ?: DefaultAutoMarkPlayed,
                 skipAdSegments = stored[Keys.SkipAdSegments] ?: DefaultSkipAdSegments,
+                nightMode = stored[Keys.NightMode] ?: false,
             )
         }
 
@@ -223,5 +231,9 @@ class PlaybackPreferences(private val context: Context) {
 
     suspend fun setSkipAdSegments(enabled: Boolean) {
         context.playbackDataStore.edit { it[Keys.SkipAdSegments] = enabled }
+    }
+
+    suspend fun setNightMode(enabled: Boolean) {
+        context.playbackDataStore.edit { it[Keys.NightMode] = enabled }
     }
 }
