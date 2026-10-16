@@ -1104,10 +1104,25 @@ class MediaCachesTest {
         val second = DownloadRequest.Builder("chapter:2", Uri.parse("https://ttsroad.example/audio/2.mp3")).build()
         assertTrue(RetainedRekeyFile(file).save(mapOf("ttsroad.example" to mapOf(first.id to first))))
 
-        val failing = RetainedRekeyFile(file, replaceFile = { _, _ -> throw java.io.IOException("EXDEV") })
+        // The new snapshot reached its sibling, but the rename over the old one failed.
+        val failing = RetainedRekeyFile(file, writeFile = { target, text ->
+            File(target.parentFile, "${target.name}.new").writeText(text)
+            throw java.io.IOException("EXDEV")
+        })
         assertFalse(failing.save(mapOf("ttsroad.example" to mapOf(first.id to first, second.id to second))))
 
         assertEquals(mapOf("ttsroad.example" to mapOf(first.id to first)), RetainedRekeyFile(file).load())
+    }
+
+    @Test
+    fun `a durable retained-rekey save leaves no write debris beside it`() {
+        val file = File(RuntimeEnvironment.getApplication().filesDir, "rekeys_${System.nanoTime()}.json")
+        val request = DownloadRequest.Builder("chapter:1", Uri.parse("https://ttsroad.example/audio/1.mp3")).build()
+
+        assertTrue(RetainedRekeyFile(file).save(mapOf("ttsroad.example" to mapOf(request.id to request))))
+
+        assertEquals(mapOf("ttsroad.example" to mapOf(request.id to request)), RetainedRekeyFile(file).load())
+        assertFalse(File(file.parentFile, "${file.name}.new").exists())
     }
 
     @Test

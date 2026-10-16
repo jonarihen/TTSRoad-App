@@ -2,8 +2,10 @@ package dk.perspektiva.ttsroad.download
 
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.core.util.AtomicFile
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.DownloadRequest
+import dk.perspektiva.ttsroad.core.writeUtf8
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -48,10 +50,11 @@ internal interface RetainedRekeyStore {
 }
 
 /**
- * [RetainedRekeyStore] as one small JSON file, written to a sibling and moved into place with a single
- * atomic replace, so a file that exists is always complete and the previous snapshot stands until the
- * new one has taken its place. Never delete-then-rename: a failure between the two would leave no
- * snapshot at all while callers still hold the requests only in memory.
+ * [RetainedRekeyStore] as one small JSON file, written through [AtomicFile] like the other stores: to a
+ * sibling, synced, then renamed into place, so a file that exists is always complete — after a power
+ * cut too — and the previous snapshot stands until the new one has taken its place. Never
+ * delete-then-rename: a failure between the two would leave no snapshot at all while callers still
+ * hold the requests only in memory.
  *
  * A file that cannot be *read* loads as null, to be retried. One that reads but cannot be decoded will
  * not decode on a retry either; it is moved aside to `<name>.corrupt` — kept for inspection, never
@@ -66,6 +69,11 @@ internal class RetainedRekeyFile(
     private val readFile: (File) -> String = File::readText,
     private val replaceFile: (File, File) -> Unit = { source, target ->
         Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    },
+    private val writeFile: (File, String) -> Unit = { target, text ->
+        AtomicFile(target).writeUtf8(text)
+        // AtomicFile only logs a failed rename; the unrenamed sibling is how to tell it was not durable.
+        if (File(target.parentFile, "${target.name}.new").exists()) error("could not replace ${target.name}")
     },
 ) : RetainedRekeyStore {
     override fun load(): Map<String, Map<String, DownloadRequest>>? {
@@ -90,10 +98,8 @@ internal class RetainedRekeyFile(
             return@runCatching
         }
         file.parentFile?.mkdirs()
-        val tmp = File(file.parentFile, "${file.name}.tmp")
-        tmp.writeText(encodeRetainedRekeys(nonEmpty))
         // On failure the destination is untouched and the previous snapshot still stands.
-        replaceFile(tmp, file)
+        writeFile(file, encodeRetainedRekeys(nonEmpty))
     }.isSuccess
 }
 
