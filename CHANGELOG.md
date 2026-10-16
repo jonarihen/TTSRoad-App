@@ -2,6 +2,117 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.20.0 — 2026-10-16
+
+### Added
+
+- Settings › Profile has an **Other addresses** card: add a LAN IP or Tailscale name for the
+  signed-in server, check it, and switch between saved addresses without signing out. An address is
+  only accepted after it reports the same server identity (checked before the token is sent) and the
+  same account, and saved addresses are re-checked on every switch. (#372)
+- Alternate addresses are verified against the server's own instance id and a proof
+  that the session is live there, rather than the public `base_url` alone. (#437)
+- Sharing a web link to TTSRoad from a browser opens the add-fiction sheet with the URL filled in,
+  for an admin on a server that manages fictions. A link shared while signed out opens after
+  sign-in. (#347)
+- The notification, lockscreen and Android Auto have a sleep timer button. Each press arms the
+  default timer or steps to the next longer preset, and past an hour turns it off. (#337)
+- Android Auto can play a fiction directly, and a fiction's chapter list opens with a **Resume:
+  Chapter N** row at the resume point. Continue, Recent and search rows name the fiction alongside
+  the time left. (#328, #331)
+- New chapters are checked in the background every 30 minutes while the app is closed, and what was
+  already seen is kept per account, so a chapter that became ready overnight is announced on the
+  next look without re-announcing the backlog. (#344)
+- The Listening tab shows a badge with the number of new chapters ready to play, and the New
+  chapters row reads e.g. "1 ready · 2 waiting". (#346)
+- Failed rows in New chapters offer **Convert again** on servers with chapter maintenance. (#350)
+- An optional **Night mode** under Settings › Playback & sleep switches to a pure black, dimmed
+  palette for listening in the dark. (#343)
+- An optional **Readable text** setting uses a plain sans-serif at a larger minimum size and shows
+  labels as written instead of in capitals. Sign-in wording is plainer throughout. (#359)
+- After a jump back, the player offers to mark the chapters that played on while you slept as
+  unplayed. The chapter bulk sheet adds **Mark this and later as unplayed** and **Mark all as
+  unplayed**. (#342, #349)
+- The library is kept on disk, so Home shows the last saved copy with a notice when the server is
+  unreachable, and resuming from the car or a headset plays the current chapter offline if it is
+  downloaded. (#327)
+- Playback resumes on its own when the network returns after a long outage, if it was playing when
+  the stream failed. (#326)
+- Settings › About shows whether crash reporting is configured in this build and where it reports,
+  with a switch to turn it off on this phone. (#367)
+- Settings › About has a **Check for updates on launch** switch, and the update dialog gains **Skip
+  this version**; **Later** now snoozes the prompt for a day. (#363, #369)
+
+### Changed
+
+- Network and server errors are worded in plain language with a suggested fix, and the raw text sits
+  behind a **Details** toggle. (#360)
+- The server address field normalises what is typed (doubled or missing `https://`, trailing
+  slashes, capitalised schemes) and only probes the server once the host looks complete. The
+  username is no longer pre-filled with "admin", and the device name moves under **Advanced**.
+  (#361, #362)
+- The app explains why it wants notifications before Android's permission prompt, once per install.
+  (#364)
+- Skip buttons on the notification, lockscreen, car and widget show the configured interval, and
+  headset next/previous (earbud double/triple tap) seek by that interval instead of changing
+  chapter. (#335, #336)
+- Clearing jump-back history and signing out now ask for confirmation first. (#339)
+- The chapter list remembers its sort order, the Unplayed and Ready filters can be combined, and a
+  visible ⋮ button opens the chapter actions that were only reachable by long press. (#349, #356)
+- The streaming cache defaults to 512 MB on installs that never chose a size. (#373)
+- The read-along keeps the screen on only while audio plays, plus two minutes after it stops. (#333)
+- The widget redraws only when something visible changes, and streaming holds a network wake lock so
+  Wi-Fi power saving no longer stalls playback with the screen off. (#338)
+- The last-heard banner after a sleep timer points at when the timer was last set, not where the
+  audio stopped. (#332)
+- Accessibility: the seek slider is named and reads its value as time, disabled transport controls
+  look disabled, player toggles and sheets carry proper roles, labels and spoken errors, TalkBack no
+  longer reads cover initials or "slash slash" kickers, and the Continue card, tab labels and titles
+  stay whole at 200% font. (#351, #352, #353, #354, #355, #357, #358)
+- The 2FA setup and recovery-code dialogs are hidden from screenshots and the Recents thumbnail.
+  (#371)
+- Growing playback queues poll for new chapters only near their end, the read-along keeps only a few
+  chapters in memory, and the stored token is decrypted once rather than on every request. (#289,
+  #315, #321)
+
+### Fixed
+
+- Turning off two-factor authentication now asks for an authenticator or recovery code, as servers
+  from TTSRoad 1.5.5 require. (#435)
+- Update APKs are checked against the installed app's signing certificate before the installer
+  opens, and a mismatched one is deleted and reported. (#369)
+- Downloads and audio hashes are scoped to the server they came from, so two servers with the same
+  chapter number no longer share offline audio. Existing downloads are kept as they are. (#316)
+- Offline downloads survive an interrupted cache migration, and a failed read of the download index
+  is retried instead of cleaning up records. (#285)
+- An audio request failing late with 401 signs out only the session that sent it, never a newer
+  sign-in. (#287)
+- A 401 that ends the session no longer discards listening progress recorded offline; it is sent
+  after signing back in to the same account. (#311)
+- Cold-start resume sends queued progress before reading the server position, so it no longer
+  resumes at an older point. (#314)
+- Replaying a finished chapter no longer un-marks it as played. (#325)
+- Jump-back history is kept per account, and the widget note is cleared on sign-out, so a jump back
+  after switching server can no longer load another server's fiction. (#368)
+- Typing a "fell asleep at" time matches the same trail the jump-back list shows, and a time far
+  from anything recorded asks before jumping. A failed jump-back reload is reported with Retry
+  instead of opening an empty player. (#319, #340, #341)
+- Behind a reverse proxy on a subpath, audio and cover URLs keep the path prefix. (#365)
+- A Bluetooth headset or head unit's Play button resumes playback after the app has been closed.
+  (#329)
+- A sleep timer left paused for an hour is cancelled, so it cannot fade out playback the next day.
+  (#334)
+- New chapters: **Clear N ready** no longer crashes on a server error, Play and Open failures are
+  shown inline, and a failing library check is no longer repeated on every poll. (#322, #345, #348)
+- The widget's play button can no longer crash when two playback events arrive at once. (#320)
+- Offline read-along copies are saved durably and a removed download can no longer bring its copy
+  back. (#253)
+- Crash reports redact the bare server host, resolved addresses, breadcrumb data and earlier
+  servers' addresses, not just the current origin. (#313, #367)
+- A failed attempt to encrypt the token is retried once before falling back. (#370)
+- The small on-device stores (jump-back history, pending progress, widget note, saved library) are
+  written atomically, so an interrupted write can no longer lose them. (#317)
+
 ## 0.19.0 — 2026-10-04
 
 ### Fixed
