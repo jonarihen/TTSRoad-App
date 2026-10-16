@@ -391,4 +391,66 @@ class SleepTimerControllerTest {
             controller.tick(0L, isPlaying = true, chapterRemainingMs = 90 * 60_000L),
         )
     }
+
+    @Test
+    fun `the lockscreen button arms the default timer first`() {
+        controller.cyclePreset(defaultMinutes = 45)
+
+        assertEquals(SleepTimerMode.Duration, controller.state.value.mode)
+        assertEquals(45 * 60_000L, controller.state.value.remainingMs)
+    }
+
+    @Test
+    fun `with no default the lockscreen button arms half an hour`() {
+        // 0 is "ask me every time", and nothing can ask on a lockscreen.
+        controller.cyclePreset(defaultMinutes = 0)
+
+        assertEquals(SleepTimerController.ButtonFallbackMinutes * 60_000L, controller.state.value.remainingMs)
+    }
+
+    @Test
+    fun `further presses step up through the presets, then turn it off`() {
+        controller.cyclePreset(defaultMinutes = 30)
+        controller.cyclePreset(defaultMinutes = 30)
+        assertEquals(45 * 60_000L, controller.state.value.remainingMs)
+        controller.cyclePreset(defaultMinutes = 30)
+        assertEquals(60 * 60_000L, controller.state.value.remainingMs)
+        controller.cyclePreset(defaultMinutes = 30)
+        assertEquals(SleepTimerMode.Off, controller.state.value.mode)
+    }
+
+    @Test
+    fun `a timer that has run down steps to the preset just above what is left`() {
+        controller.armDuration(30 * 60_000L)
+        run(fromMs = 0L, forMs = 20 * 60_000L)
+
+        controller.cyclePreset(defaultMinutes = 30)
+
+        assertEquals(15 * 60_000L, controller.state.value.remainingMs)
+    }
+
+    @Test
+    fun `the button turns an end of chapter timer off`() {
+        controller.armEndOfChapter(chapterRemainingMs = 10 * 60_000L)
+        controller.cyclePreset(defaultMinutes = 30)
+
+        assertEquals(SleepTimerMode.Off, controller.state.value.mode)
+    }
+
+    @Test
+    fun `the button label carries the timer's state in whole minutes`() {
+        assertEquals("Sleep timer: off", SleepTimerController.buttonLabel(SleepTimerState()))
+        assertEquals(
+            "Sleep timer: 30 min",
+            SleepTimerController.buttonLabel(SleepTimerState(SleepTimerMode.Duration, remainingMs = 30 * 60_000L)),
+        )
+        assertEquals(
+            "Sleep timer: 30 min",
+            SleepTimerController.buttonLabel(SleepTimerState(SleepTimerMode.Duration, remainingMs = 29 * 60_000L + 1)),
+        )
+        assertEquals(
+            "Sleep timer: end of chapter",
+            SleepTimerController.buttonLabel(SleepTimerState(SleepTimerMode.EndOfChapter, remainingMs = 1L)),
+        )
+    }
 }

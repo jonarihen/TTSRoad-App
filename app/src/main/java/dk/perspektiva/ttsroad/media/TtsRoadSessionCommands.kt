@@ -9,6 +9,7 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionError
 import com.google.common.collect.ImmutableList
+import dk.perspektiva.ttsroad.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -25,6 +26,7 @@ object TtsRoadSessionCommands {
     const val SkipForward = "dk.perspektiva.ttsroad.SKIP_FORWARD"
     const val Bookmark = "dk.perspektiva.ttsroad.BOOKMARK"
     const val ReportPronunciation = "dk.perspektiva.ttsroad.REPORT_PRONUNCIATION"
+    const val SleepTimer = "dk.perspektiva.ttsroad.SLEEP_TIMER"
 
     internal val installQueueCommand = SessionCommand("dk.perspektiva.ttsroad.INSTALL_QUEUE", Bundle.EMPTY)
     internal val verifyQueueCommand = SessionCommand("dk.perspektiva.ttsroad.VERIFY_QUEUE", Bundle.EMPTY)
@@ -52,6 +54,7 @@ object TtsRoadSessionCommands {
     val skipForwardCommand = SessionCommand(SkipForward, Bundle.EMPTY)
     val bookmarkCommand = SessionCommand(Bookmark, Bundle.EMPTY)
     val reportPronunciationCommand = SessionCommand(ReportPronunciation, Bundle.EMPTY)
+    val sleepTimerCommand = SessionCommand(SleepTimer, Bundle.EMPTY)
 
     /**
      * Buttons for the session's media button preferences. [CommandButton.SLOT_BACK] and
@@ -68,11 +71,14 @@ object TtsRoadSessionCommands {
      *   well as the read one, so offering this button before the answer is known would invite a
      *   press that cannot store anything — on the one control whose whole point is being used
      *   without looking at the screen.
+     * @param sleepTimerLabel the sleep-timer button's name, which carries its state ("Sleep timer:
+     *   30 min"), or null for no button. Each press steps the timer through its presets (#337).
      */
     @OptIn(UnstableApi::class)
     fun mediaButtonPreferences(
         bookmarks: Boolean = false,
         pronunciationReports: Boolean = false,
+        sleepTimerLabel: String? = null,
     ): ImmutableList<CommandButton> {
         val buttons = ImmutableList.builder<CommandButton>()
             .add(
@@ -110,6 +116,19 @@ object TtsRoadSessionCommands {
                 CommandButton.Builder(CommandButton.ICON_FLAG_FILLED)
                     .setSessionCommand(reportPronunciationCommand)
                     .setDisplayName("Report a mispronunciation")
+                    .setSlots(CommandButton.SLOT_OVERFLOW)
+                    .build(),
+            )
+        }
+        if (sleepTimerLabel != null) {
+            // Overflow, last: the sleep timer is set once a night, from bed, with the phone locked —
+            // reachable without the app is the whole point, beside play/pause is not (#337).
+            // Media3 has no timer icon of its own, hence the custom crescent.
+            buttons.add(
+                CommandButton.Builder(CommandButton.ICON_UNDEFINED)
+                    .setCustomIconResId(R.drawable.ic_sleep_timer)
+                    .setSessionCommand(sleepTimerCommand)
+                    .setDisplayName(sleepTimerLabel)
                     .setSlots(CommandButton.SLOT_OVERFLOW)
                     .build(),
             )
