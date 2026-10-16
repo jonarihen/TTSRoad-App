@@ -81,6 +81,7 @@ class UpdateManagerTest {
             .readTimeout(5, TimeUnit.SECONDS)
             .build(),
         onInstall: (File) -> Unit = {},
+        verifier: (File) -> String? = { null },
     ): UpdateManager =
         UpdateManager(
             client = client,
@@ -92,6 +93,7 @@ class UpdateManagerTest {
                 installedContents += file.readBytes().toList()
             },
             apiBaseUrl = server.url("/repos/test").toString().removeSuffix("/"),
+            verifier = { _, file -> verifier(file) },
         )
 
     private fun release(apkPath: String = "/update.apk") = ReleaseInfo(
@@ -645,5 +647,41 @@ class UpdateManagerTest {
 
         assertTrue(thrown is CancellationException)
         assertEquals(UpdateState.Idle, manager.state.value)
+    }
+
+    @Test
+    fun `an APK signed by another key never reaches the installer and says why`() = runTest {
+        var verified: File? = null
+        val manager = updateManager(this, verifier = { file ->
+            verified = file
+            assertEquals("signed elsewhere", file.readText())
+            "signed with a different key"
+        })
+        server.enqueue(MockResponse().setBody("signed elsewhere"))
+
+        manager.downloadAndInstall(context, release()).join()
+
+        assertNotNull("the downloaded APK must be checked", verified)
+        assertEquals(UpdateState.Rejected("signed with a different key"), manager.state.value)
+        assertNull("installer must not be invoked for a rejected APK", installedFile)
+        assertTrue("a rejected APK must not stay in the cache", updateFiles().isEmpty())
+
+        manager.dismiss()
+        assertEquals(UpdateState.Idle, manager.state.value)
+    }
+
+    @Test
+    fun `an automatic check can find a release without announcing it`() = runTest {
+        val manager = updateManager(this)
+        val releaseJson = """{"tag_name": "v1.2.0", "assets": [{"name": "a.apk", "browser_download_url": "x"}]}"""
+        server.enqueue(MockResponse().setBody(releaseJson))
+        server.enqueue(MockResponse().setBody(releaseJson))
+
+        manager.check(currentVersionName = "1.0.0") { it != "1.2.0" }
+        assertEquals(false, (manager.state.value as UpdateState.Available).announce)
+
+        // Asking is not being nagged: a manual check always opens the dialog.
+        manager.check(currentVersionName = "1.0.0", manual = true) { false }
+        assertEquals(true, (manager.state.value as UpdateState.Available).announce)
     }
 }

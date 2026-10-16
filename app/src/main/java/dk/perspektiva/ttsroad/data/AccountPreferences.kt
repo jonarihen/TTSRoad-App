@@ -220,21 +220,18 @@ fun readerHighlightFromServer(value: String?): HighlightGranularity? = when (val
     else -> null
 }
 
-/** The app's chapter filter as the server's `hide_played`. Only Unplayed hides played chapters. */
-fun serverHidePlayed(filter: ChapterFilter): Boolean = filter == ChapterFilter.Unplayed
+/** The app's chapter filter as the server's `hide_played`: whether it hides played chapters. */
+fun serverHidePlayed(filter: ChapterFilter): Boolean = filter.unplayedOnly
 
 /**
  * The server's `hide_played` as the app's chapter filter, given what is set locally.
  *
- * `false` maps to [ChapterFilter.All] *unless* the local filter already shows played chapters —
- * [ChapterFilter.Ready] also projects to `false`, and turning it into All would drop a filter the
- * server has no opinion about.
+ * Only the played switch is the server's to set. The ready switch is local — the server has no
+ * opinion about it — so it survives whatever `hide_played` says: Ready plus `true` becomes
+ * Unplayed + ready, and Unplayed + ready plus `false` becomes Ready.
  */
-fun chapterFilterFromServer(hidePlayed: Boolean, local: ChapterFilter): ChapterFilter = when {
-    hidePlayed -> ChapterFilter.Unplayed
-    serverHidePlayed(local) -> ChapterFilter.All
-    else -> local
-}
+fun chapterFilterFromServer(hidePlayed: Boolean, local: ChapterFilter): ChapterFilter =
+    local.withUnplayedOnly(hidePlayed)
 
 /**
  * A value read out of the preferences blob.

@@ -1,6 +1,10 @@
 package dk.perspektiva.ttsroad.player
 
 import android.content.Context
+import androidx.core.util.AtomicFile
+import dk.perspektiva.ttsroad.core.deleteUnderLock
+import dk.perspektiva.ttsroad.core.readUtf8OrNull
+import dk.perspektiva.ttsroad.core.writeUtf8
 import dk.perspektiva.ttsroad.data.SessionState
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -123,7 +127,7 @@ class PendingProgressStore(
     private val adapter = moshi.adapter<List<PendingProgress>>(
         Types.newParameterizedType(List::class.java, PendingProgress::class.java),
     )
-    private val file = File(context.applicationContext.filesDir, "pending_progress.json")
+    private val file = AtomicFile(File(context.applicationContext.filesDir, "pending_progress.json"))
 
     private val lock = Any()
     private var entries: MutableList<PendingProgress> = load().toMutableList()
@@ -213,27 +217,16 @@ class PendingProgressStore(
         synchronized(lock) {
             entries.clear()
             lastRecordedMillis = Long.MIN_VALUE
-            runCatching {
-                val tmp = File(file.parentFile, "${file.name}.tmp")
-                if (tmp.exists()) tmp.delete()
-                if (file.exists()) file.delete()
-            }
+            runCatching { file.deleteUnderLock() }
         }
     }
 
     private fun persist() {
-        runCatching {
-            val tmp = File(file.parentFile, "${file.name}.tmp")
-            tmp.writeText(adapter.toJson(entries))
-            if (!tmp.renameTo(file)) {
-                if (file.exists()) file.delete()
-                tmp.renameTo(file)
-            }
-        }
+        runCatching { file.writeUtf8(adapter.toJson(entries)) }
     }
 
     private fun load(): List<PendingProgress> =
-        runCatching { if (file.isFile) adapter.fromJson(file.readText()) else null }
+        runCatching { file.readUtf8OrNull()?.let(adapter::fromJson) }
             .getOrNull()
             .orEmpty()
 }
