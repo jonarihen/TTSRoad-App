@@ -40,9 +40,13 @@ sealed interface UpdateState {
     data object Idle : UpdateState
     data object Checking : UpdateState
     data object UpToDate : UpdateState
-    data class Available(val release: ReleaseInfo) : UpdateState
+    /** [announce] false: found by an automatic check while skipped or snoozed — Settings only. */
+    data class Available(val release: ReleaseInfo, val announce: Boolean = true) : UpdateState
     data class Downloading(val percent: Int) : UpdateState
     data class Failed(val message: String) : UpdateState
+
+    /** The download finished but must not be installed — said in a dialog, not only in Settings. */
+    data class Rejected(val message: String) : UpdateState
 }
 
 /**
@@ -62,6 +66,7 @@ class UpdateManager internal constructor(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
     private val installer: (Context, File) -> Unit = ::defaultInstallApk,
     private val apiBaseUrl: String = "https://api.github.com/repos/$REPO",
+    private val verifier: (Context, File) -> String? = ::verifyUpdateApk,
 ) {
     constructor() : this(
         client = OkHttpClient.Builder()
@@ -71,6 +76,7 @@ class UpdateManager internal constructor(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
         installer = ::defaultInstallApk,
         apiBaseUrl = "https://api.github.com/repos/$REPO",
+        verifier = ::verifyUpdateApk,
     )
 
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
@@ -93,8 +99,15 @@ class UpdateManager internal constructor(
         var installed = false
     }
 
-    /** [manual] checks surface "up to date"/errors; automatic checks fail silently back to Idle. */
-    suspend fun check(currentVersionName: String, manual: Boolean = false) {
+    /**
+     * [manual] checks surface "up to date"/errors; automatic checks fail silently back to Idle.
+     * [announce] decides whether an automatic check's find opens the dialog; a manual one always does.
+     */
+    suspend fun check(
+        currentVersionName: String,
+        manual: Boolean = false,
+        announce: (versionName: String) -> Boolean = { true },
+    ) {
         if (_state.value is UpdateState.Downloading) return
         _state.value = UpdateState.Checking
         val release = try {
@@ -108,7 +121,8 @@ class UpdateManager internal constructor(
         }
         _state.value = when {
             release == null -> if (manual) UpdateState.Failed("No releases found") else UpdateState.Idle
-            isNewer(release.versionName, currentVersionName) -> UpdateState.Available(release)
+            isNewer(release.versionName, currentVersionName) ->
+                UpdateState.Available(release, announce = manual || announce(release.versionName))
             else -> UpdateState.UpToDate
         }
     }
@@ -121,6 +135,14 @@ class UpdateManager internal constructor(
             try {
                 val apk = download(attempt, release.apkUrl)
                 currentCoroutineContext().ensureActive()
+                val problem = withContext(Dispatchers.IO) { verifier(appContext, apk) }
+                currentCoroutineContext().ensureActive()
+                if (problem != null) {
+                    synchronized(downloadLock) {
+                        if (downloadAttempt === attempt) _state.value = UpdateState.Rejected(problem)
+                    }
+                    return@launch
+                }
                 synchronized(downloadLock) {
                     if (downloadAttempt === attempt) {
                         attempt.job.ensureActive()

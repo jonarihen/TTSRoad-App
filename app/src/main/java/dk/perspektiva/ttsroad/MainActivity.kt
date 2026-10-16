@@ -370,8 +370,9 @@ import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
-import dk.perspektiva.ttsroad.update.renderReleaseNotes
+import dk.perspektiva.ttsroad.update.UpdatePreferences
 import dk.perspektiva.ttsroad.update.UpdateState
+import dk.perspektiva.ttsroad.update.shouldAnnounceUpdate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -623,8 +624,16 @@ private fun TtsRoadApp(
         }
     }
 
-    // Quietly check GitHub Releases for a newer build once per launch.
-    LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
+    // Quietly check GitHub Releases for a newer build once per launch — unless turned off in
+    // Settings (#369). A skipped or snoozed version is still found, but only Settings mentions it.
+    LaunchedEffect(Unit) {
+        val choices = UpdatePreferences.read(context)
+        if (choices.autoCheck) {
+            updateManager.check(BuildConfig.VERSION_NAME) { version ->
+                shouldAnnounceUpdate(version, choices, System.currentTimeMillis())
+            }
+        }
+    }
 
     CompositionLocalProvider(LocalServerUrl provides session?.serverUrl.orEmpty()) {
         when {
@@ -676,6 +685,15 @@ private fun TtsRoadApp(
         state = updateState,
         onDownload = { release -> updateManager.downloadAndInstall(context, release) },
         onDismiss = { updateManager.dismiss() },
+        onLater = {
+            UpdatePreferences.snooze(context)
+            updateManager.dismiss()
+        },
+        onSkip = { release ->
+            UpdatePreferences.skip(context, release.versionName)
+            updateManager.dismiss()
+        },
+        canInstallPackages = { context.packageManager.canRequestPackageInstalls() },
     )
 }
 
@@ -695,85 +713,6 @@ internal fun resolvedSession(
         }
     }
     return session
-}
-
-@Composable
-internal fun UpdateOverlay(
-    state: UpdateState,
-    onDownload: (ReleaseInfo) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    when (state) {
-        is UpdateState.Available -> {
-            // The note region takes a share of the actual window, capped for ordinary portrait
-            // phones. A fixed 320 dp cap still clipped the actions in landscape and short split
-            // screen windows once the title and dialog padding were counted.
-            val notesMaxHeight = (LocalConfiguration.current.screenHeightDp.dp * 0.42f)
-                .coerceIn(96.dp, 320.dp)
-            AlertDialog(
-                onDismissRequest = onDismiss,
-                containerColor = AarisColor.BgRaise,
-            title = { Text("UPDATE AVAILABLE", style = MaterialTheme.typography.titleLarge) },
-            text = {
-                // Bounded and scrollable rather than truncated. Release notes are the only thing
-                // in this dialog that says what the install actually changes, and `take(400)` cut
-                // them mid-sentence with nothing on screen admitting anything was missing — so a
-                // long entry ended in a severed word and the rest was simply unreachable.
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .heightIn(max = notesMaxHeight)
-                        .verticalScroll(rememberScrollState())
-                        .testTag("update-notes"),
-                ) {
-                    MetaText(text = "Version ${state.release.versionName}", color = AarisColor.Accent)
-                    if (state.release.notes.isNotBlank()) {
-                        Text(
-                            text = renderReleaseNotes(state.release.notes),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AarisColor.Muted,
-                            // Left, explicitly. Prose and bullet lists are read down a common left
-                            // edge; centring ragged lines costs the eye that edge on every line.
-                            textAlign = TextAlign.Start,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = { onDownload(state.release) }, shape = RectangleShape) {
-                    Text("DOWNLOAD & INSTALL")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) { Text("LATER") }
-            },
-        )
-        }
-
-        is UpdateState.Downloading -> AlertDialog(
-            onDismissRequest = {},
-            containerColor = AarisColor.BgRaise,
-            title = { Text("DOWNLOADING UPDATE", style = MaterialTheme.typography.titleLarge) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    LinearProgressIndicator(
-                        progress = { state.percent / 100f },
-                        color = AarisColor.Accent,
-                        trackColor = AarisColor.Line,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    MetaText(text = "${state.percent}%")
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = onDismiss) { Text("CANCEL") }
-            },
-        )
-
-        else -> Unit // Idle / Checking / UpToDate / Failed surface in Settings instead
-    }
 }
 
 @Composable
@@ -5195,6 +5134,7 @@ internal fun SettingsScreen(
             ) {
                 SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
                 CrashReportingSetting()
+                AutoUpdateCheckSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->
                     MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
                 }
@@ -6381,6 +6321,7 @@ private fun updateStatusText(state: UpdateState): Pair<String, Boolean>? = when 
     is UpdateState.Available -> "Version ${state.release.versionName} available" to false
     is UpdateState.Downloading -> "Downloading ${state.percent}%" to false
     is UpdateState.Failed -> state.message to true
+    is UpdateState.Rejected -> state.message to true
     else -> null
 }
 
