@@ -2,6 +2,38 @@
 
 Notable changes to the TTSRoad Android client.
 
+## 0.21.0 — 2026-10-17
+
+### Fixed
+
+- Replaying a finished chapter, or resuming a caught-up fiction, starts from the top instead of at
+  the end and skipping straight on. (#451)
+- A progress save the server refuses (a deleted chapter, say) is dropped instead of blocking every
+  later save. (#445)
+- The last position is queued when the media service is torn down mid-save. (#449)
+- Account settings changed offline are pushed once the server is reachable, not reverted by the
+  next sync. (#453)
+- Downloaded chapters get their read-along text back after a sign-out or expired session. (#447)
+- Switching to a saved alternate address keeps jump-back history and the offline library, and a
+  password change keeps new-chapter notices and their Play button working. (#446, #455)
+- A new chapter is no longer announced twice when two checks overlap. (#452)
+- A one-off Keystore failure after boot no longer reads as signed out or stops the background
+  new-chapter check. (#448)
+- Signing out mid-refresh can no longer leave the previous account's library on screen. (#444)
+- Changing the streaming cache size while audio plays can no longer freeze playback. (#443)
+- The startup cache sweep no longer deletes a download that is just starting, and migrated
+  downloads survive a power cut. (#456, #450)
+- With crash reporting configured, the first report after start or sign-in has the server address
+  redacted too. (#454)
+- Tapping Play on a new-chapter notification no longer flashes a blank window. (#461)
+
+### Changed
+
+- The APK is about 4 MB smaller: the extended Material icon set is replaced by the 20 icons the app
+  uses. (#460)
+- Tag and source filters share one implementation, and all their buttons are square. (#459)
+- Dead code and a committed session transcript were removed. (#458, #457)
+
 ## 0.20.0 — 2026-10-16
 
 ### Added
