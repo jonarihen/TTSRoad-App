@@ -7,7 +7,11 @@ import android.app.job.JobService
 import android.content.ComponentName
 import android.content.Context
 import androidx.core.content.ContextCompat
+import androidx.core.util.AtomicFile
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.core.deleteUnderLock
+import dk.perspektiva.ttsroad.core.readUtf8OrNull
+import dk.perspektiva.ttsroad.core.writeUtf8
 import dk.perspektiva.ttsroad.data.ChapterNotificationEntry
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
@@ -41,30 +45,24 @@ import kotlinx.coroutines.sync.withLock
  * Plain text rather than Moshi on purpose: nothing reflective lives outside `data/` without a
  * proguard line, and two lines of text do not need one.
  */
-internal class NewChapterSeenStore(private val file: File) {
+internal class NewChapterSeenStore(file: File) {
+    private val file = AtomicFile(file)
+
     constructor(context: Context) : this(File(context.applicationContext.filesDir, FileName))
 
     fun read(account: String): Set<Int>? = synchronized(Lock) {
-        val lines = runCatching { file.readLines() }.getOrNull() ?: return null
+        val lines = file.readUtf8OrNull()?.lines() ?: return null
         if (lines.firstOrNull() != account) return null
         lines.getOrNull(1).orEmpty().split(',').mapNotNull { it.trim().toIntOrNull() }.toSet()
     }
 
     fun write(account: String, ids: Set<Int>) = synchronized(Lock) {
-        runCatching {
-            file.parentFile?.mkdirs()
-            val temp = File(file.parentFile, "${file.name}.tmp")
-            temp.writeText("$account\n${ids.sorted().joinToString(",")}\n")
-            if (!temp.renameTo(file)) {
-                file.writeText(temp.readText())
-                temp.delete()
-            }
-        }
+        runCatching { file.writeUtf8("$account\n${ids.sorted().joinToString(",")}\n") }
         Unit
     }
 
     fun clear() = synchronized(Lock) {
-        runCatching { file.delete() }
+        runCatching { file.deleteUnderLock() }
         Unit
     }
 
