@@ -926,7 +926,17 @@ data class TwoFactorSetup(
 
 data class TwoFactorEnableRequest(val code: String)
 
-data class TwoFactorDisableRequest(val password: String)
+/**
+ * `POST /api/mobile/account/2fa/disable`.
+ *
+ * [code] is an authenticator code or an unused recovery code. Servers before 1.5.5 ignore it; from
+ * 1.5.5 it is checked whenever it is sent (TTSRoad#423), and the server means to require it from
+ * bearer callers once this app sends it — so the app always does.
+ */
+data class TwoFactorDisableRequest(
+    val password: String,
+    val code: String? = null,
+)
 
 /**
  * The result of enabling, or of reissuing the codes.

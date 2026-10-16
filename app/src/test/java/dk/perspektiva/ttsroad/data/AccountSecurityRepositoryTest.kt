@@ -169,7 +169,7 @@ class AccountSecurityRepositoryTest {
         val setup = repository.startTwoFactorSetup() as AccountActionResult.Done
         val enabled = repository.enableTwoFactor(" 123456 ") as AccountActionResult.Done
         val reissued = repository.reissueRecoveryCodes() as AccountActionResult.Done
-        val disabled = repository.disableTwoFactor("still secret") as AccountActionResult.Done
+        val disabled = repository.disableTwoFactor("still secret", "654321") as AccountActionResult.Done
 
         server.takeRequest()
         assertEquals("/api/mobile/account/2fa/setup", server.takeRequest().path)
@@ -185,6 +185,88 @@ class AccountSecurityRepositoryTest {
         assertEquals(listOf("first-code", "second-code"), enabled.value.recoveryCodes)
         assertEquals(listOf("replacement-code"), reissued.value.recoveryCodes)
         assertFalse(disabled.value.enabled)
+    }
+
+    @Test
+    fun `disabling sends the password and the trimmed second-factor code`() = runTest {
+        val (repository, _) = repository()
+        server.enqueue(json("""{"api_version": 1, "enabled": false}"""))
+
+        val result = repository.disableTwoFactor("still secret", "  123456 \n")
+
+        server.takeRequest()
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/api/mobile/account/2fa/disable", request.path)
+        assertEquals("""{"password":"still secret","code":"123456"}""", request.body.readUtf8())
+        assertFalse((result as AccountActionResult.Done).value.enabled)
+    }
+
+    @Test
+    fun `a recovery code is sent as typed apart from surrounding space`() = runTest {
+        val (repository, _) = repository()
+        server.enqueue(json("""{"api_version": 1, "enabled": false}"""))
+
+        repository.disableTwoFactor("still secret", " ab12-cd34 ")
+
+        server.takeRequest()
+        assertEquals(
+            """{"password":"still secret","code":"ab12-cd34"}""",
+            server.takeRequest().body.readUtf8(),
+        )
+    }
+
+    @Test
+    fun `a wrong disable code shows the server message and is not retried`() = runTest {
+        val (repository, _) = repository()
+        server.enqueue(json("""{"detail":"Invalid authentication code."}""", code = 400))
+
+        val result = repository.disableTwoFactor("still secret", "000000")
+
+        assertEquals(
+            "Invalid authentication code.",
+            (result as AccountActionResult.Refused).message,
+        )
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a wrong disable password shows the server message`() = runTest {
+        val (repository, _) = repository()
+        server.enqueue(json("""{"detail":"Password is incorrect."}""", code = 400))
+
+        val result = repository.disableTwoFactor("wrong", "123456")
+
+        assertEquals("Password is incorrect.", (result as AccountActionResult.Refused).message)
+    }
+
+    @Test
+    fun `a throttled disable surfaces the server message without retrying`() = runTest {
+        val (repository, _) = repository()
+        server.enqueue(
+            json("""{"detail":"Too many failed attempts. Try again in 14 minutes."}""", code = 429)
+                .setHeader("Retry-After", "840"),
+        )
+
+        val result = repository.disableTwoFactor("still secret", "123456")
+
+        assertEquals(
+            "Too many failed attempts. Try again in 14 minutes.",
+            (result as AccountActionResult.Refused).message,
+        )
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a throttle without a detail still explains itself`() = runTest {
+        val (repository, _) = repository()
+        server.enqueue(MockResponse().setResponseCode(429))
+
+        val result = repository.disableTwoFactor("still secret", "123456")
+
+        assertTrue(
+            (result as AccountActionResult.Refused).message.startsWith("Too many failed attempts"),
+        )
     }
 
     @Test
