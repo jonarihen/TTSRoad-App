@@ -132,10 +132,17 @@ object TtsRoadMediaItems {
             .build()
     }
 
+    /**
+     * @param crossFiction whether this row sits in a list that spans books — Continue, Recent, a
+     *   search. There the subtitle names the fiction, because "Chapter 212 · 41 min" with no book
+     *   is unanswerable from a driver's seat, and many car UIs never show the album title (#331).
+     *   Inside a fiction's own folder the book is already known, so the duration stays.
+     */
     fun chapter(
         chapter: ChapterSummary,
         fiction: FictionSummary? = chapter.fiction,
         serverUrl: String? = null,
+        crossFiction: Boolean = false,
     ): MediaItem? {
         val rawUrl = chapter.audio?.url ?: return null
         val audioUrl = ServerUrls.rewriteAudioUrlOrNull(rawUrl, serverUrl) ?: return null
@@ -159,7 +166,13 @@ object TtsRoadMediaItems {
             .setTitle(chapter.resolvedTitle)
             .setAlbumTitle(fictionTitle)
             .setArtist(author)
-            .setSubtitle(chapter.audioDurationLabel)
+            .setSubtitle(
+                if (crossFiction) {
+                    crossFictionSubtitle(fictionTitle, chapter) ?: chapter.audioDurationLabel
+                } else {
+                    chapter.audioDurationLabel
+                },
+            )
             .setExtras(extras)
             .setIsBrowsable(false)
             .setIsPlayable(true)
@@ -229,5 +242,30 @@ object TtsRoadMediaItems {
             )
             .setMediaMetadata(metadataBuilder.build())
             .build()
+    }
+
+    /**
+     * "Ashes of Aether · 12 min left" for a started chapter, "Ashes of Aether · 41 min" for an
+     * unstarted one, the fiction alone when there is no duration. Null without a fiction title.
+     */
+    internal fun crossFictionSubtitle(fictionTitle: String?, chapter: ChapterSummary): String? {
+        val book = fictionTitle?.takeIf { it.isNotBlank() } ?: return null
+        val started = chapter.resolvedPositionSeconds > 0.0 && !chapter.resolvedIsPlayed
+        val remaining = chapter.resolvedRemainingSeconds.takeIf { started }
+        val time = remaining?.let { seconds -> minutesLabel(seconds)?.let { "$it left" } }
+            ?: chapter.audioDurationLabel?.takeIf { it.isNotBlank() }
+        return listOfNotNull(book, time).joinToString(" \u00b7 ")
+    }
+
+    /** "12 min", "1 h 5 min", or null once nothing meaningful remains. */
+    private fun minutesLabel(seconds: Double): String? {
+        val minutes = (seconds / 60.0).toLong()
+        return when {
+            seconds <= 0.0 -> null
+            minutes < 1L -> "<1 min"
+            minutes < 60L -> "$minutes min"
+            minutes % 60L == 0L -> "${minutes / 60} h"
+            else -> "${minutes / 60} h ${minutes % 60} min"
+        }
     }
 }

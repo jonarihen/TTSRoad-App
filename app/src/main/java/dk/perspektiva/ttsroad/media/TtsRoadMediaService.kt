@@ -1326,7 +1326,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             chapters.mapNotNull { chapter ->
                 val fiction = chapter.fiction
                     ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
+                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl, crossFiction = true)
             }
         return SearchResult(items.map { withAudioOrigin(it, origin) }, generation)
     }
@@ -1708,7 +1708,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             if (!service.sessionStillCurrent(session)) return emptyList()
             return library.continueListening.mapNotNull { chapter ->
                 val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
+                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl, crossFiction = true)
             }
         }
 
@@ -1727,7 +1727,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             if (!service.sessionStillCurrent(session)) return emptyList()
             return library.recentChapters.mapNotNull { chapter ->
                 val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
+                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl, crossFiction = true)
             }
         }
 
