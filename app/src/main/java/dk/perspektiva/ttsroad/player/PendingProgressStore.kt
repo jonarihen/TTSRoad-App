@@ -43,6 +43,10 @@ data class PendingProgress(
 /**
  * Whether [this] entry may be sent with [session]'s credentials: same server, same account.
  *
+ * "Same server" includes the session's saved alternate addresses (#372): each was confirmed to be
+ * this server, answering as this account, before it was saved, so a position heard over the LAN
+ * address is still this account's once the phone has switched to the Tailscale one.
+ *
  * An entry without an owner fails. It predates owners, and the one thing that must not happen is
  * a position from one account landing in another — a one-off loss of an offline backlog that was
  * already waiting across the upgrade is the lesser harm.
@@ -50,7 +54,7 @@ data class PendingProgress(
 fun PendingProgress.ownedBy(session: SessionState): Boolean {
     val owner = ownerServerUrl ?: return false
     if (!session.isLoggedIn) return false
-    return sameProgressServer(owner, session.serverUrl) && ownerAccount == session.username
+    return ownerAccount == session.username && session.knownAddresses.any { sameProgressServer(owner, it) }
 }
 
 /**
