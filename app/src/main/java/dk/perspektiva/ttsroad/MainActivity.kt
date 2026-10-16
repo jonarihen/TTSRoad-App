@@ -2806,7 +2806,7 @@ private fun PlayerIconAction(
         Box(
             modifier = Modifier
                 .size(32.dp)
-                .border(1.dp, if (accent) AarisColor.Accent else AarisColor.Line),
+                .border(1.dp, if (accent) AarisColor.Accent else AarisColor.ControlOutline),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -6471,21 +6471,37 @@ internal fun TransportIconButton(
                         else -> AarisColor.BgRaise
                     },
                 )
-                .let { if (filled) it else it.border(1.dp, AarisColor.Line) },
+                .let { if (filled) it else it.border(1.dp, transportOutline(enabled)) },
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = when {
-                    filled -> AarisColor.Bg
-                    enabled -> AarisColor.Muted
-                    else -> AarisColor.Dim
-                },
+                tint = transportTint(enabled = enabled, filled = filled),
                 modifier = Modifier.size(size / 2),
             )
         }
     }
+}
+
+/**
+ * The outline of an unfilled transport control (#357). [AarisColor.Line] is a separator at about
+ * 1.2:1, too faint to show where a control is (WCAG 1.4.11 wants 3:1), so an enabled control is
+ * drawn with [AarisColor.ControlOutline]; a disabled one keeps the faint line, which is itself part
+ * of looking unavailable.
+ */
+internal fun transportOutline(enabled: Boolean): Color =
+    if (enabled) AarisColor.ControlOutline else AarisColor.Line
+
+/**
+ * The glyph colour of a transport control. Disabled was [AarisColor.Dim] against an enabled
+ * [AarisColor.Muted] — two greys a few steps apart, so a dead button looked live (#357).
+ * [AarisColor.Disabled] is the token for exactly this.
+ */
+internal fun transportTint(enabled: Boolean, filled: Boolean): Color = when {
+    filled -> AarisColor.Bg
+    enabled -> AarisColor.Muted
+    else -> AarisColor.Disabled
 }
 
 /** Fraction of the chapter already listened to, for progress-on-artwork. */
