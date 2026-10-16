@@ -570,7 +570,7 @@ private fun TtsRoadApp(
                 load = { repository.chapters(it, playableOnly = true) },
                 stillAllowed = {
                     val current = tokenStore.current()
-                    current.serverUrl == owner.serverUrl && current.token == owner.token &&
+                    current.isSameSession(owner) &&
                         canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
                 },
                 playQueue = { response, chapterId ->
@@ -1319,7 +1319,7 @@ private fun MainScaffold(
                             load = { repository.chapters(it, playableOnly = true) },
                             stillAllowed = {
                                 val current = ServiceLocator.tokenStore(context).current()
-                                current.serverUrl == session.serverUrl && current.token == session.token &&
+                                current.isSameSession(session) &&
                                     canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
                             },
                             playQueue = { response, chapterId ->

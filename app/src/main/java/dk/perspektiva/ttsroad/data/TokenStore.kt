@@ -64,6 +64,16 @@ data class SessionState(
     val isLoggedIn: Boolean
         get() = !serverUrl.isBlank() && !token.isNullOrBlank()
 
+    /**
+     * Whether [other] is this same session: the same server and the same token (#318).
+     *
+     * The one comparison behind every "is this still the account that started it?" check, so a field
+     * added to what identifies a session is added here once rather than at each of them. It says
+     * nothing about being signed in — callers that need that combine it with [isLoggedIn].
+     */
+    fun isSameSession(other: SessionState?): Boolean =
+        other != null && serverUrl == other.serverUrl && token == other.token
+
     val authorizationHeader: String?
         get() = token?.takeIf { it.isNotBlank() }?.let { "Bearer $it" }
 }
@@ -104,7 +114,7 @@ class TokenStore(
 
     internal suspend fun <T> withCurrentSession(owner: SessionState, block: () -> T): T? = sessionMutation.withLock {
         val live = current()
-        if (!live.isLoggedIn || live.serverUrl != owner.serverUrl || live.token != owner.token) return@withLock null
+        if (!live.isLoggedIn || !live.isSameSession(owner)) return@withLock null
         block()
     }
 
@@ -238,7 +248,7 @@ class TokenStore(
         change: (MutablePreferences, SessionState) -> Unit,
     ): Boolean = sessionMutation.withLock {
         val live = current()
-        if (!live.isLoggedIn || live.serverUrl != owner.serverUrl || live.token != owner.token) return@withLock false
+        if (!live.isLoggedIn || !live.isSameSession(owner)) return@withLock false
         context.sessionDataStore.edit { change(it, live) }
         true
     }

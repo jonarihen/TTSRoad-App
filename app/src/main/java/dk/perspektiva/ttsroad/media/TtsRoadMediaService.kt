@@ -251,7 +251,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // covers service start, so a reconnect settles the backlog rather than deepening it.
                 ownerProgressFlush.onSession(state)
                 val queueOwner = boundQueueSession
-                if (queueOwner != null && (queueOwner.serverUrl != state.serverUrl || queueOwner.token != state.token || !state.isLoggedIn)) {
+                if (queueOwner != null && (!queueOwner.isSameSession(state) || !state.isLoggedIn)) {
                     boundQueueSession = null
                     if (::player.isInitialized) stopSignedOutPlayback(player)
                 }
