@@ -117,6 +117,13 @@ class OfflineDownloads(
     private val readerPinLock = Any()
     private val readerPins = mutableMapOf<Int, Job>()
 
+    /**
+     * Chapters whose read-along was asked for since the server last became able to serve one (#447).
+     * Not cleared by [remove], so a row still listed while its delete is in flight is not re-pinned.
+     */
+    private val readerPinsRequested = mutableSetOf<Int>()
+    private val readAlongReady = MutableStateFlow(false)
+
     // Same contract as the player's resolver: read the latest header per request, so signing out
     // and back in does not require rebuilding the cache, the manager or the player.
     @Volatile
@@ -370,9 +377,29 @@ class OfflineDownloads(
                     cacheIdentities.forServer(current.serverUrl, discovered)
                     audioAuth = snapshot
                     readAlongSupported = discovered.discoveryBaseUrl == current.serverUrl && discovered.readAlong
+                    readAlongReady.value = current.isLoggedIn && readAlongSupported
                     republish()
                     val identity = cacheIdentities.advertisedForServer(current.serverUrl, discovered)
                     if (current.isLoggedIn) adoptServerIdentity(identity) else pendingMigration = null
+                }
+        }
+        // Sign-out and a 401 delete every pinned document but keep the audio, and a download queued
+        // before discovery resolved was never pinned at all (#447): pin whatever is on the list once
+        // the server can answer. The repository's pin is a no-op for a document already held.
+        scope.launch {
+            combine(readAlongReady, _downloads) { ready, downloads -> ready to downloads }
+                .collect { (ready, downloads) ->
+                    synchronized(readerPinLock) {
+                        if (!ready) {
+                            readerPinsRequested.clear()
+                            return@collect
+                        }
+                        val present = downloads.filterValues {
+                            it.state != ChapterDownloadState.Failed && it.state != ChapterDownloadState.Removing
+                        }.keys.mapNotNullTo(mutableSetOf()) { TtsRoadMediaIds.chapterId(it) }
+                        readerPinsRequested.retainAll(present)
+                        (present - readerPinsRequested).forEach(::pinReadAlongFor)
+                    }
                 }
         }
         // Requirements are enforced by the manager itself, so a queued chapter waits for Wi-Fi
@@ -500,13 +527,13 @@ class OfflineDownloads(
             // Asked for again: an earlier deletion must not keep the migration from moving it, and a
             // rekey retained for it must not later overwrite it. Dropped only once the add went out.
             identityMigration.restore(request.id, retainedScope()) { send(request) }
-            pinReadAlongFor(chapter)
+            chapter.resolvedChapterId.takeIf { it > 0 }?.let(::pinReadAlongFor)
         }
     }
 
-    private fun pinReadAlongFor(chapter: ChapterSummary) {
+    private fun pinReadAlongFor(chapterId: Int) {
         if (!readAlongSupported) return
-        val chapterId = chapter.resolvedChapterId.takeIf { it > 0 } ?: return
+        readerPinsRequested += chapterId
         readerPins.remove(chapterId)?.cancel()
         val job = scope.launch(start = CoroutineStart.LAZY) { runCatching { pinReadAlong(chapterId) } }
         readerPins[chapterId] = job
