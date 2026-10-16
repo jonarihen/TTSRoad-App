@@ -58,6 +58,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -1037,11 +1039,9 @@ internal fun PrimaryNavigationBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Text(
+                        NavigationTabLabel(
                             text = root.label,
-                            style = MaterialTheme.typography.labelMedium,
                             color = if (isSelected) AarisColor.Accent else AarisColor.Muted,
-                            maxLines = 1,
                         )
                         if (badge > 0) NavigationCountBadge(badge)
                     }
@@ -1050,6 +1050,32 @@ internal fun PrimaryNavigationBar(
         }
     }
 }
+
+/**
+ * A tab label that shrinks to fit its quarter of the bar instead of being cut off (#354).
+ *
+ * At 200 % font "LISTENING" is far wider than a quarter of a 320 dp phone, and one word cannot
+ * wrap without splitting it mid-letter. It is drawn at the theme's size, scaled with the user's
+ * font setting, until that no longer fits, and then steps down until it does. At ordinary font
+ * sizes it never shrinks.
+ */
+@Composable
+private fun NavigationTabLabel(text: String, color: Color) {
+    val style = MaterialTheme.typography.labelMedium
+    BasicText(
+        text = text,
+        style = style.copy(color = color),
+        maxLines = 1,
+        softWrap = false,
+        autoSize = TextAutoSize.StepBased(
+            minFontSize = NavigationTabLabelMinSize,
+            maxFontSize = style.fontSize,
+            stepSize = 0.5.sp,
+        ),
+    )
+}
+
+private val NavigationTabLabelMinSize = 6.sp
 
 /**
  * A square accent count, the AARIS stand-in for a Material badge. Capped at 99+ so it never
@@ -6399,7 +6425,7 @@ private fun MiniPlayerBar(
                         text = state.title,
                         style = MaterialTheme.typography.titleMedium,
                         color = AarisColor.Ink,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     state.fictionTitle?.let {
@@ -6527,6 +6553,11 @@ private fun listenedFraction(chapter: ChapterSummary): Float {
 /**
  * Netflix-style billboard for the most recent in-progress chapter: large cover, gradient panel,
  * one prominent resume action.
+ *
+ * 196 dp is a floor, not a size (#354). At 200 % font the title, fiction line and RESUME button
+ * need about 250 dp, and a fixed height cut the button off. The details column decides the height;
+ * the cover is drawn behind it with [Modifier.matchParentSize], so it stretches to whatever that
+ * turns out to be and crops rather than leaving a gap.
  */
 @Composable
 internal fun ContinueHero(
@@ -6535,62 +6566,79 @@ internal fun ContinueHero(
     onOpenFiction: () -> Unit,
     onResume: () -> Unit,
 ) {
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(196.dp)
             .border(1.dp, AarisColor.Line)
             .background(Brush.horizontalGradient(listOf(AarisColor.BgHover, AarisColor.Bg)))
             .clickable(enabled = fiction != null, onClick = onOpenFiction),
     ) {
-        CoverFill(
-            imageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
-            fallback = fiction?.title ?: chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
-            modifier = Modifier
-                .fillMaxHeight()
-                .aspectRatio(2f / 3f),
-            bordered = false,
-        )
+        Box(modifier = Modifier.matchParentSize()) {
+            CoverFill(
+                imageUrl = fiction?.coverImageUrl ?: chapter.resolvedCoverUrl,
+                fallback = fiction?.title ?: chapter.resolvedFictionTitle ?: chapter.resolvedTitle,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(ContinueHeroCoverWidth),
+                bordered = false,
+            )
+        }
         Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
+                .fillMaxWidth()
+                .heightIn(min = ContinueHeroMinHeight)
+                .padding(start = ContinueHeroCoverWidth)
                 .padding(16.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(
-                text = chapter.resolvedTitle,
-                style = MaterialTheme.typography.headlineSmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            (fiction?.title ?: chapter.resolvedFictionTitle)?.let {
-                Spacer(modifier = Modifier.height(4.dp))
-                MetaText(text = it)
-            }
-            Spacer(modifier = Modifier.weight(1f))
-            ThinProgress(fraction = listenedFraction(chapter), modifier = Modifier.fillMaxWidth())
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    onClick = onResume,
-                    enabled = chapter.audio != null,
-                    shape = RectangleShape,
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+            Column {
+                Text(
+                    text = chapter.resolvedTitle,
+                    style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                (fiction?.title ?: chapter.resolvedFictionTitle)?.let {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    MetaText(text = it)
                 }
-                Spacer(modifier = Modifier.width(12.dp))
-                (chapter.playback?.remainingLabel?.let { "$it left" } ?: chapter.audioDurationLabel)
-                    ?.let { MetaText(text = it, color = AarisColor.Dim) }
+            }
+            Column {
+                Spacer(modifier = Modifier.height(12.dp))
+                ThinProgress(fraction = listenedFraction(chapter), modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(12.dp))
+                // Wraps rather than squeezes: at a large font the time left goes under the button
+                // instead of pushing it narrower than its label.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        onClick = onResume,
+                        enabled = chapter.audio != null,
+                        shape = RectangleShape,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+                    }
+                    (chapter.playback?.remainingLabel?.let { "$it left" } ?: chapter.audioDurationLabel)
+                        ?.let { MetaText(text = it, color = AarisColor.Dim) }
+                }
             }
         }
     }
 }
+
+private val ContinueHeroMinHeight = 196.dp
+
+/** The 2:3 cover the hero always had at its old fixed 196 dp height. */
+private val ContinueHeroCoverWidth = ContinueHeroMinHeight * 2f / 3f
 
 @Composable
 private fun HorizontalChapterRail(
@@ -6673,7 +6721,8 @@ internal fun ChapterTile(
             text = chapter.resolvedTitle,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
+            // Two lines, so a large font still shows more than the first word or two (#354).
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(modifier = Modifier.height(2.dp))
@@ -6718,7 +6767,8 @@ private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
             text = fiction.title,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
+            // Two lines, so a large font still shows more than the first word or two (#354).
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(modifier = Modifier.height(2.dp))
@@ -6781,7 +6831,8 @@ internal fun ChapterRow(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = if (playable) AarisColor.Ink else AarisColor.Dim,
-                    maxLines = 1,
+                    // Two lines: at 200 % font one line held barely a word of the title (#354).
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 val meta = listOfNotNull(

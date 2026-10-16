@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -8,6 +9,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.player.PlayerUiState
 import dk.perspektiva.ttsroad.player.QueueItem
 import dk.perspektiva.ttsroad.player.SleepTimerState
@@ -220,6 +222,17 @@ class PlayerLayoutTest {
 
         compose.onNode(hasScrollAction()).assertExists()
         compose.onNodeWithContentDescription("Pause").performScrollTo().assertIsDisplayed()
+    }
+
+    /** 200 %, the largest font Android offers and the size WCAG 1.4.4 asks to survive (#354). */
+    @Test
+    @Config(sdk = [34], qualifiers = "w320dp-h640dp", fontScale = 2f)
+    fun `the largest font on a narrow phone still reaches every transport control`() {
+        renderPlayer()
+
+        compose.onNode(hasScrollAction()).assertExists()
+        compose.onNodeWithContentDescription("Pause").performScrollTo().assertIsDisplayed()
+            .assertHeightIsAtLeast(48.dp)
     }
 
     private fun renderPlayer(
