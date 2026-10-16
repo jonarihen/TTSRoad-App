@@ -10,6 +10,7 @@ import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionError
 import com.google.common.collect.ImmutableList
 import dk.perspektiva.ttsroad.R
+import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -59,10 +60,13 @@ object TtsRoadSessionCommands {
     /**
      * Buttons for the session's media button preferences. [CommandButton.SLOT_BACK] and
      * [CommandButton.SLOT_FORWARD] are the slots either side of play/pause, which is where this
-     * app wants the 30-second skips — previous/next chapter fall back to the secondary slots.
+     * app wants the skips — previous/next chapter fall back to the secondary slots.
      * Each also declares [CommandButton.SLOT_OVERFLOW] so a surface with room for fewer buttons
      * can still reach them.
      *
+     * @param skipIntervalMs the configured skip, so the icon and the spoken name say what a press
+     *   actually does (#335). The default is what a session built before the preference has been
+     *   read gets; the service republishes once it knows.
      * @param bookmarks whether the signed-in server can hold a bookmark. Off by default so a
      *   session built before capability discovery has finished — which is every cold start, and
      *   every start from the car with no UI running — offers nothing it might not be able to honour.
@@ -76,27 +80,28 @@ object TtsRoadSessionCommands {
      */
     @OptIn(UnstableApi::class)
     fun mediaButtonPreferences(
+        skipIntervalMs: Long = DefaultSkipIntervalMs,
         bookmarks: Boolean = false,
         pronunciationReports: Boolean = false,
         sleepTimerLabel: String? = null,
     ): ImmutableList<CommandButton> {
         val buttons = ImmutableList.builder<CommandButton>()
             .add(
-                CommandButton.Builder(CommandButton.ICON_SKIP_BACK_30)
+                CommandButton.Builder(skipBackIcon(skipIntervalMs))
                     .setSessionCommand(skipBackCommand)
-                    .setDisplayName("Back 30 seconds")
+                    .setDisplayName("Back ${skipIntervalWords(skipIntervalMs)}")
                     .setSlots(CommandButton.SLOT_BACK, CommandButton.SLOT_OVERFLOW)
                     .build(),
             )
             .add(
-                CommandButton.Builder(CommandButton.ICON_SKIP_FORWARD_30)
+                CommandButton.Builder(skipForwardIcon(skipIntervalMs))
                     .setSessionCommand(skipForwardCommand)
-                    .setDisplayName("Forward 30 seconds")
+                    .setDisplayName("Forward ${skipIntervalWords(skipIntervalMs)}")
                     .setSlots(CommandButton.SLOT_FORWARD, CommandButton.SLOT_OVERFLOW)
                     .build(),
             )
         if (bookmarks) {
-            // Overflow only, and last. The 30-second skips are what a driver reaches for constantly
+            // Overflow only, and last. The skips are what a driver reaches for constantly
             // and they own the slots either side of play/pause; a bookmark button that displaced one
             // of them would cost more than it adds. Overflow is where the car puts extra actions,
             // which is exactly what this is.
@@ -134,5 +139,39 @@ object TtsRoadSessionCommands {
             )
         }
         return buttons.build()
+    }
+
+    /**
+     * Media3 has numbered glyphs for 5, 10, 15 and 30 seconds only. Any other interval gets the
+     * plain, unnumbered skip glyph rather than the nearest number: a "30" on a button that moves
+     * 60 seconds is a claim, and the display name is there to carry the actual amount.
+     */
+    @OptIn(UnstableApi::class)
+    internal fun skipBackIcon(skipIntervalMs: Long): Int = when (skipIntervalMs) {
+        5_000L -> CommandButton.ICON_SKIP_BACK_5
+        10_000L -> CommandButton.ICON_SKIP_BACK_10
+        15_000L -> CommandButton.ICON_SKIP_BACK_15
+        30_000L -> CommandButton.ICON_SKIP_BACK_30
+        else -> CommandButton.ICON_SKIP_BACK
+    }
+
+    @OptIn(UnstableApi::class)
+    internal fun skipForwardIcon(skipIntervalMs: Long): Int = when (skipIntervalMs) {
+        5_000L -> CommandButton.ICON_SKIP_FORWARD_5
+        10_000L -> CommandButton.ICON_SKIP_FORWARD_10
+        15_000L -> CommandButton.ICON_SKIP_FORWARD_15
+        30_000L -> CommandButton.ICON_SKIP_FORWARD_30
+        else -> CommandButton.ICON_SKIP_FORWARD
+    }
+
+    /** "30 seconds" / "1 minute" — read aloud by the car and by TalkBack, so spelled out. */
+    internal fun skipIntervalWords(skipIntervalMs: Long): String {
+        val seconds = skipIntervalMs / 1000
+        return when {
+            seconds == 60L -> "1 minute"
+            seconds > 60L && seconds % 60 == 0L -> "${seconds / 60} minutes"
+            seconds == 1L -> "1 second"
+            else -> "$seconds seconds"
+        }
     }
 }

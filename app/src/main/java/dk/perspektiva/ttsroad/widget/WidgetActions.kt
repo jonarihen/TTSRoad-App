@@ -126,7 +126,7 @@ class TogglePlayPauseAction : ActionCallback {
 }
 
 /**
- * The same 30-second skips the notification offers, sent as the session's own custom commands.
+ * The same skips the notification offers, sent as the session's own custom commands.
  *
  * Media3 has no built-in transport command for "seek by N inside the current item", which is why
  * [TtsRoadSessionCommands] exists; reusing it here means the widget and the notification cannot

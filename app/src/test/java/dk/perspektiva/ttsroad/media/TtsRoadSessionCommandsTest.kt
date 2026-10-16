@@ -176,4 +176,47 @@ class TtsRoadSessionCommandsTest {
             actions(buttons),
         )
     }
+
+    private fun skips(skipIntervalMs: Long): Pair<CommandButton, CommandButton> {
+        val buttons = TtsRoadSessionCommands.mediaButtonPreferences(skipIntervalMs = skipIntervalMs)
+        return buttons.first { it.sessionCommand?.customAction == TtsRoadSessionCommands.SkipBack } to
+            buttons.first { it.sessionCommand?.customAction == TtsRoadSessionCommands.SkipForward }
+    }
+
+    @Test
+    fun `the default skips are labelled thirty seconds`() {
+        val (back, forward) = skips(30_000L)
+
+        assertEquals(CommandButton.ICON_SKIP_BACK_30, back.icon)
+        assertEquals(CommandButton.ICON_SKIP_FORWARD_30, forward.icon)
+        assertEquals("Back 30 seconds", back.displayName)
+        assertEquals("Forward 30 seconds", forward.displayName)
+    }
+
+    @Test
+    fun `a configured interval with its own glyph uses it`() {
+        // #335: the car and the lockscreen said 30 while a press moved 10 or 15.
+        val (back10, forward10) = skips(10_000L)
+        assertEquals(CommandButton.ICON_SKIP_BACK_10, back10.icon)
+        assertEquals(CommandButton.ICON_SKIP_FORWARD_10, forward10.icon)
+        assertEquals("Back 10 seconds", back10.displayName)
+
+        val (back15, forward15) = skips(15_000L)
+        assertEquals(CommandButton.ICON_SKIP_BACK_15, back15.icon)
+        assertEquals(CommandButton.ICON_SKIP_FORWARD_15, forward15.icon)
+        assertEquals("Forward 15 seconds", forward15.displayName)
+    }
+
+    @Test
+    fun `an interval with no numbered glyph gets the plain one and says the amount`() {
+        val (back45, forward45) = skips(45_000L)
+        assertEquals(CommandButton.ICON_SKIP_BACK, back45.icon)
+        assertEquals(CommandButton.ICON_SKIP_FORWARD, forward45.icon)
+        assertEquals("Back 45 seconds", back45.displayName)
+
+        val (back60, forward60) = skips(60_000L)
+        assertEquals(CommandButton.ICON_SKIP_BACK, back60.icon)
+        assertEquals("Back 1 minute", back60.displayName)
+        assertEquals("Forward 1 minute", forward60.displayName)
+    }
 }

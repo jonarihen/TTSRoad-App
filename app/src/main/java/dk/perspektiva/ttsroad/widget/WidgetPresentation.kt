@@ -124,3 +124,18 @@ fun remainingLabel(remainingMs: Long): String {
         else -> "${minutes}m left"
     }
 }
+
+/** The two skip buttons' text, e.g. "−15" and "+15". */
+data class SkipButtonLabels(val back: String, val forward: String)
+
+/**
+ * Label the skips with the configured interval rather than a fixed 30 (#335).
+ *
+ * Seconds, always: "+60" fits a widget button where "+1 minute" does not, and the in-app player's
+ * glyphs already teach the number-of-seconds reading. The minus is U+2212, not a hyphen, so it is
+ * the same width as the plus and the two buttons line up.
+ */
+fun skipButtonLabels(skipIntervalMs: Long): SkipButtonLabels {
+    val seconds = (skipIntervalMs / 1000).coerceAtLeast(1L)
+    return SkipButtonLabels(back = "\u2212$seconds", forward = "+$seconds")
+}
