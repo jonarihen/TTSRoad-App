@@ -248,7 +248,7 @@ class TokenStore(
         change: (MutablePreferences, SessionState) -> Unit,
     ): Boolean = sessionMutation.withLock {
         val live = current()
-        if (!live.isLoggedIn || live.serverUrl != owner.serverUrl || live.token != owner.token) return@withLock false
+        if (!live.isLoggedIn || !live.isSameSession(owner)) return@withLock false
         context.sessionDataStore.edit { change(it, live) }
         true
     }
