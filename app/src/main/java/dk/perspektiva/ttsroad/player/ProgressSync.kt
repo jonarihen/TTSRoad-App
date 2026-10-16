@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 /**
  * A rejection the client should stop retrying.
@@ -24,6 +25,14 @@ private val TerminalRejectReasons = setOf(
     "missing_client_updated_at",
     "invalid_client_updated_at",
 )
+
+/**
+ * True when the server answered and will answer the same way again: a 4xx other than 401 (the
+ * session ended — the entry belongs to that account and waits for it, #311) and the two that
+ * explicitly mean "try later". Anything else — offline, a 5xx — keeps the entry queued.
+ */
+private fun Throwable.isPermanentRefusal(): Boolean =
+    this is HttpException && code() in 400..499 && code() !in setOf(401, 408, 429)
 
 /** What a flush did, for the caller that wants to react to reconciled state. */
 data class ProgressFlushResult(
@@ -132,9 +141,15 @@ class ProgressSync(
             // Bound to the session the entries were selected for: if another account signs in
             // between the check above and the request, it still goes out as [session] — never with
             // the newcomer's credentials.
-            val response = runCatching {
+            val attempt = runCatching {
                 repository.syncProgress(batch.map { it.asSyncItem() }, asSession = session)
-            }.getOrNull() ?: break // Offline again, or the call failed: keep the rest queued.
+            }
+            if (attempt.exceptionOrNull()?.isPermanentRefusal() == true) {
+                // Refused as a whole: resending it unchanged would fail identically, forever.
+                withContext(Dispatchers.IO) { store.resolve(batch) }
+                continue
+            }
+            val response = attempt.getOrNull() ?: break // Offline again, or the call failed: keep the rest queued.
 
             sent += batch.size
             accepted += response.accepted.size
@@ -179,7 +194,7 @@ class ProgressSync(
         var accepted = 0
         for (entry in queued) {
             if (repository.currentSession() != session) break // Switched account mid-flush.
-            val ok = runCatching {
+            val attempt = runCatching {
                 repository.saveProgress(
                     fictionId = entry.fictionId,
                     chapterId = entry.chapterId,
@@ -187,10 +202,13 @@ class ProgressSync(
                     isPlayed = entry.isPlayed,
                     asSession = session,
                 )
-            }.isSuccess
-            if (!ok) break // Still offline; keep this and everything after it.
+            }
+            val refused = attempt.exceptionOrNull()?.isPermanentRefusal() == true
+            // Still offline; keep this and everything after it. A refused entry (its chapter was
+            // deleted, say) is dropped instead — at the head of the queue it would block the rest.
+            if (attempt.isFailure && !refused) break
             withContext(Dispatchers.IO) { store.resolve(listOf(entry)) }
-            accepted++
+            if (!refused) accepted++
         }
         return ProgressFlushResult(
             sent = accepted,

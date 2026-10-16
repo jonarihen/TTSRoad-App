@@ -261,6 +261,57 @@ class ProgressSyncTest {
     }
 
     @Test
+    fun `a refused entry is dropped and the ones behind it are still sent`() = runTest {
+        // A chapter deleted on the server while its position was queued: a 404 at the head of the
+        // queue used to block every later save, on every tick, forever.
+        val repository = repository(batchProgress = false)
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        store.record(1, 8, 40.0, false, owner = owner)
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(
+            MockResponse()
+                .setBody("""{"status": "ok", "chapter_id": 8}""")
+                .setHeader("Content-Type", "application/json"),
+        )
+
+        val result = ProgressSync(repository, store).flush()
+
+        server.takeRequest() // capabilities
+        assertTrue(server.takeRequest().body.readUtf8().contains(""""chapter_id":7"""))
+        assertTrue(server.takeRequest().body.readUtf8().contains(""""chapter_id":8"""))
+        assertEquals(1, result.accepted)
+        assertTrue(result.drained)
+        assertTrue(store.isEmpty())
+    }
+
+    @Test
+    fun `a 401 keeps the whole queue for the account to come back`() = runTest {
+        val repository = repository(batchProgress = false)
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        store.record(1, 8, 40.0, false, owner = owner)
+        server.enqueue(MockResponse().setResponseCode(401))
+
+        ProgressSync(repository, store).flush()
+
+        assertEquals(2, store.pending().size)
+    }
+
+    @Test
+    fun `a batch the server refuses outright is not retried forever`() = runTest {
+        val repository = repository(batchProgress = true)
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        server.enqueue(MockResponse().setResponseCode(422))
+
+        val result = ProgressSync(repository, store).flush()
+
+        assertTrue(result.drained)
+        assertTrue(store.isEmpty())
+    }
+
+    @Test
     fun `flushing an empty queue makes no request`() = runTest {
         val repository = repository(batchProgress = true)
         val store = pendingStore()
