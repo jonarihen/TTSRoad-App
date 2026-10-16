@@ -58,7 +58,7 @@ sealed interface UpdateState {
  * signed with the same key as the installed app (the debug key, for personal builds) to update
  * in place.
  */
-class UpdateManager internal constructor(
+class UpdateManager(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
@@ -68,17 +68,6 @@ class UpdateManager internal constructor(
     private val apiBaseUrl: String = "https://api.github.com/repos/$REPO",
     private val verifier: (Context, File) -> String? = ::verifyUpdateApk,
 ) {
-    constructor() : this(
-        client = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .build(),
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
-        installer = ::defaultInstallApk,
-        apiBaseUrl = "https://api.github.com/repos/$REPO",
-        verifier = ::verifyUpdateApk,
-    )
-
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
 
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
@@ -278,10 +267,6 @@ class UpdateManager internal constructor(
         currentCoroutineContext().ensureActive()
         if (!attempt.partial.renameTo(attempt.apk)) throw IOException("Could not finish download")
         attempt.apk
-    }
-
-    private fun installApk(context: Context, file: File) {
-        installer(context, file)
     }
 
     /** Semver-ish comparison: "0.4.0" vs "0.3.1" → true. */
