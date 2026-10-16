@@ -41,17 +41,23 @@ interface TokenCipher {
  */
 class KeystoreTokenCipher : TokenCipher {
 
+    private val lastOpened = LastOpenedToken(::decrypt)
+
     override fun seal(plaintext: String): String? = runCatching {
         val cipher = Cipher.getInstance(Transformation)
         cipher.init(Cipher.ENCRYPT_MODE, key())
         encodeTokenEnvelope(cipher.iv, cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8)))
-    }.getOrNull()
+    }.getOrNull()?.also { lastOpened.remember(it, plaintext) }
 
     override fun open(stored: String?): String? {
         if (stored == null) return null
         // A token from a build before encryption. Still valid — reading it is what stops an upgrade
         // silently signing the user out. It is replaced with an envelope on the next write.
         if (!isEncryptedToken(stored)) return stored
+        return lastOpened.open(stored)
+    }
+
+    private fun decrypt(stored: String): String? {
         val envelope = decodeTokenEnvelope(stored) ?: return null
         return runCatching {
             val cipher = Cipher.getInstance(Transformation)
@@ -83,5 +89,34 @@ class KeystoreTokenCipher : TokenCipher {
         const val KeyAlias = "ttsroad_session_token"
         const val Transformation = "AES/GCM/NoPadding"
         const val TagBits = 128
+    }
+}
+
+/**
+ * Remembers the last envelope that was opened and what it opened to.
+ *
+ * Every API call and every cover image reads the session, and each read opens the stored token:
+ * without this, a library grid of fifty covers is fifty Android Keystore round trips for the same
+ * unchanged value. The stored value is the cache key, so a new sign-in (a new envelope with a fresh
+ * nonce) or a sign-out (no value at all) is never answered from a stale entry.
+ *
+ * Only successful opens are remembered: a value that could not be opened is tried again next time,
+ * in case the keystore failure was transient.
+ */
+internal class LastOpenedToken(private val decrypt: (String) -> String?) {
+    private class Entry(val stored: String, val plaintext: String)
+
+    // One immutable entry behind a volatile reference: concurrent readers see either the old pair
+    // or the new one, never a key from one and a value from the other.
+    @Volatile private var entry: Entry? = null
+
+    fun open(stored: String): String? {
+        entry?.takeIf { it.stored == stored }?.let { return it.plaintext }
+        return decrypt(stored)?.also { entry = Entry(stored, it) }
+    }
+
+    /** Record a value just sealed, so the first read after sign-in does not decrypt it again. */
+    fun remember(stored: String, plaintext: String) {
+        entry = Entry(stored, plaintext)
     }
 }
