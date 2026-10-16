@@ -134,6 +134,10 @@ enum class AppRoot(val screen: AppScreen, val label: String) {
     Browse(AppScreen.Fictions, "BROWSE"),
     Listening(AppScreen.Listening, "LISTENING"),
     Settings(AppScreen.Settings, "SETTINGS"),
+    ;
+
+    /** [label] in sentence case, for the readable-text setting (#359): "Listening", not "LISTENING". */
+    val sentenceLabel: String get() = label.lowercase().replaceFirstChar { it.uppercase() }
 }
 
 /** The stable root each destination belongs to, including drill-down and capability-gated screens. */
