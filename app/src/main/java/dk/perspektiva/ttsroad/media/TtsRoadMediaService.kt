@@ -66,7 +66,9 @@ import dk.perspektiva.ttsroad.data.VolumeBoost
 import dk.perspektiva.ttsroad.data.effectiveSpeed
 import dk.perspektiva.ttsroad.data.libraryMoved
 import dk.perspektiva.ttsroad.data.mergeLibraryDelta
+import dk.perspektiva.ttsroad.data.isAudioUnderServer
 import dk.perspektiva.ttsroad.data.normalizeBaseUrl
+import dk.perspektiva.ttsroad.data.sameServerAddress
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.InProcessPlayer
@@ -2166,11 +2168,10 @@ internal fun discardCrossServerPlayback(player: Player, previous: AudioAuthSnaps
     }
 }
 
-internal fun sameAudioServer(first: AudioAuthSnapshot, second: AudioAuthSnapshot): Boolean {
-    val firstUrl = runCatching { normalizeBaseUrl(first.serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
-    val secondUrl = runCatching { normalizeBaseUrl(second.serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
-    return firstUrl == secondUrl
-}
+// No normalizeBaseUrl guess here: a stored address already carries its scheme, and a scheme-less
+// one cannot prove which origin it meant (#457).
+internal fun sameAudioServer(first: AudioAuthSnapshot, second: AudioAuthSnapshot): Boolean =
+    sameServerAddress(first.serverUrl, second.serverUrl)
 
 /** Same backend and the same account on it — a token rotation, not a different user. */
 internal fun sameAudioAccount(first: AudioAuthSnapshot, second: AudioAuthSnapshot): Boolean =
@@ -2242,11 +2243,10 @@ internal fun withAudioAccount(item: MediaItem, account: String?): MediaItem {
 private fun audioItemBelongsToServer(item: MediaItem?, serverUrl: String): Boolean {
     val uri = item?.localConfiguration?.uri ?: item?.requestMetadata?.mediaUri ?: return false
     val request = uri.toString().toHttpUrlOrNull() ?: return false
-    val server = runCatching { normalizeBaseUrl(serverUrl).toHttpUrlOrNull() }.getOrNull() ?: return false
     val owner = item?.mediaMetadata?.extras?.getString(AudioServerUrlExtra)
-    if (owner != null && !sameAudioServer(AudioAuthSnapshot(owner), AudioAuthSnapshot(serverUrl))) return false
-    return ServerUrls.isSameOrigin(request.toString(), server.toString()) &&
-        (owner != null || request.encodedPath.startsWith("/audio/") ||
-            request.encodedPath.startsWith(server.encodedPath + "audio/"))
+    if (owner != null && !sameServerAddress(owner, serverUrl)) return false
+    if (isAudioUnderServer(request.toString(), serverUrl)) return true
+    return ServerUrls.isSameOrigin(request.toString(), serverUrl) &&
+        (owner != null || request.encodedPath.startsWith("/audio/"))
 }
 

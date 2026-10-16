@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.data
 
+import dk.perspektiva.ttsroad.core.ServerUrls
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -42,6 +43,17 @@ internal fun sameServerAddress(first: String?, second: String?): Boolean {
 private fun canonicalAddress(url: String?): okhttp3.HttpUrl? {
     val value = url?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     return "${value.trimEnd('/')}/".toHttpUrlOrNull()
+}
+
+/**
+ * Whether [requestUrl] is audio served by [serverUrl]: the same origin, and a path under the
+ * server's own path prefix plus `audio/`. The one spelling of that check (#457).
+ */
+internal fun isAudioUnderServer(requestUrl: String, serverUrl: String?): Boolean {
+    val request = requestUrl.toHttpUrlOrNull() ?: return false
+    val server = canonicalAddress(serverUrl) ?: return false
+    return ServerUrls.isSameOrigin(requestUrl, server.toString()) &&
+        request.encodedPath.startsWith(server.encodedPath + "audio/")
 }
 
 /**

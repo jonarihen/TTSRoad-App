@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.download
 
 import dk.perspektiva.ttsroad.data.ServerCapabilities
+import dk.perspektiva.ttsroad.data.isAudioUnderServer
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -123,16 +124,10 @@ internal class SessionCacheIdentity(
     @Synchronized
     fun ownsLegacyUrl(serverUrl: String, downloadUrl: String, capabilities: ServerCapabilities): Boolean {
         val address = canonicalAddress(serverUrl) ?: return false
-        val download = downloadUrl.toHttpUrlOrNull() ?: return false
-        val server = address.toHttpUrlOrNull() ?: return false
-        if (download.scheme == server.scheme && download.host == server.host && download.port == server.port &&
-            download.encodedPath.startsWith(server.encodedPath + "audio/")
-        ) return true
+        if (isAudioUnderServer(downloadUrl, address)) return true
         val identity = forServer(address, capabilities)
         return identities.any { (knownAddress, knownIdentity) ->
-            val known = knownAddress.toHttpUrlOrNull() ?: return@any false
-            knownIdentity == identity && download.scheme == known.scheme && download.host == known.host &&
-                download.port == known.port && download.encodedPath.startsWith(known.encodedPath + "audio/")
+            knownIdentity == identity && isAudioUnderServer(downloadUrl, knownAddress)
         }
     }
 
