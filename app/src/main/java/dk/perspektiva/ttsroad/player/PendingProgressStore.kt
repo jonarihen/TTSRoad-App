@@ -197,6 +197,18 @@ class PendingProgressStore(
         }
     }
 
+    /**
+     * Drop everything not owned by [session] — called when a sign-in lands, so a backlog kept
+     * across a 401 survives a re-login to the same account but not a login to a different account
+     * or server (#311).
+     */
+    fun retainOwnedBy(session: SessionState) {
+        synchronized(lock) {
+            val removed = entries.removeAll { !it.ownedBy(session) }
+            if (removed) persist()
+        }
+    }
+
     fun clear() {
         synchronized(lock) {
             entries.clear()

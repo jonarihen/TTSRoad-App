@@ -166,7 +166,7 @@ class AudioAuthSnapshotTest {
     fun `delayed active stream rejection ends the session and exposes its reason`() = runTest {
         val store = loggedInStore()
         var cleared = 0
-        val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ })
+        val repository = TtsRoadRepository(store, onSessionExpired = { cleared++ })
         val session = store.current()
         val snapshot = session.audioAuthSnapshot()
         val failure = delayedFailure({ snapshot }) { request ->
@@ -219,7 +219,7 @@ class AudioAuthSnapshotTest {
     fun `delayed old stream rejection cannot end the rotated token session`() = runTest {
         val store = loggedInStore()
         var cleared = 0
-        val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ })
+        val repository = TtsRoadRepository(store, onSessionExpired = { cleared++ })
         server.enqueue(MockResponse().setBody("""{"capabilities":{"account_security":true},"limits":{}}"""))
         repository.refreshCurrentCapabilities()
         server.takeRequest()
@@ -257,7 +257,7 @@ class AudioAuthSnapshotTest {
     fun `delayed old stream rejection cannot end a newer login on the same server`() = runTest {
         val store = loggedInStore()
         var cleared = 0
-        val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ })
+        val repository = TtsRoadRepository(store, onSessionExpired = { cleared++ })
         val session = store.current()
         var snapshot = session.audioAuthSnapshot()
         val failure = delayedFailure({ snapshot }) {
@@ -280,7 +280,7 @@ class AudioAuthSnapshotTest {
         try {
             val store = loggedInStore()
             var cleared = 0
-            val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ })
+            val repository = TtsRoadRepository(store, onSessionExpired = { cleared++ })
             val session = store.current()
             var snapshot = session.audioAuthSnapshot()
             val failure = delayedFailure({ snapshot }) { request ->
@@ -319,7 +319,7 @@ class AudioAuthSnapshotTest {
         }.build()
         val store = loggedInStore()
         var cleared = 0
-        val repository = TtsRoadRepository(store, onSessionCleared = { cleared++ }, httpClient = client)
+        val repository = TtsRoadRepository(store, onSessionExpired = { cleared++ }, httpClient = client)
         val session = store.current()
         var snapshot = session.audioAuthSnapshot()
         val pendingApi = async(Dispatchers.IO) { runCatching { repository.library() }.exceptionOrNull() }
