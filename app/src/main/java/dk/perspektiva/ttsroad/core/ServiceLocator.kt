@@ -317,11 +317,14 @@ object ServiceLocator {
                 unpinReadAlong = { chapterId -> repository(context).unpinReadAlong(chapterId) },
                 // A download that is gone cannot be stale, and its recorded hash describes bytes
                 // that are no longer on disk.
-                forgetAudioHash = { chapterId -> staleDownloads(context).forget(chapterId) },
+                forgetAudioHash = { scope, chapterId -> staleDownloads(context).forget(chapterId, scope) },
                 forgetAllAudioHashes = { staleDownloads(context).clear() },
                 initializeManager = initializeDownloadManager,
                 replacementHash = { chapterId -> staleDownloads(context).replacementHash(chapterId) },
-                replacementCompleted = { chapterId, hash -> staleDownloads(context).replacementCompleted(chapterId, hash) },
+                replacementCompleted = { scope, chapterId, hash ->
+                    staleDownloads(context).replacementCompleted(chapterId, hash, scope)
+                },
+                audioHashScope = { scope -> staleDownloads(context).useScope(scope) },
             ).also { offlineDownloads = it }
         }
 

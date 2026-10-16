@@ -329,4 +329,24 @@ class DownloadCacheKeysTest {
         assertEquals(addresses.size, keys.toSet().size)
         assertTrue(keys.all(DownloadCacheKeys::isScoped))
     }
+
+    @Test
+    fun `identityOf names the server a scoped key is filed under, and none for a bare key`() {
+        val url = "https://ttsroad.example.com/audio/my fiction/ch 1.mp3"
+        assertEquals("ttsroad.example", DownloadCacheKeys.identityOf(DownloadCacheKeys.forUrl(url, "ttsroad.example")))
+        assertEquals(
+            "address:http://10.0.0.5:8000/",
+            DownloadCacheKeys.identityOf(DownloadCacheKeys.forUrl(url, "address:http://10.0.0.5:8000/")),
+        )
+        assertNull(DownloadCacheKeys.identityOf(DownloadCacheKeys.forUrl(url)))
+    }
+
+    @Test
+    fun `a scoped download id still names its chapter`() {
+        val id = scopedDownloadId(42, "address:http://10.0.0.5:8000/")
+        assertTrue(isScopedDownloadId(id))
+        assertEquals(42, chapterIdOfDownload(id))
+        assertFalse(isScopedDownloadId("chapter:42"))
+        assertEquals(42, chapterIdOfDownload("chapter:42"))
+    }
 }

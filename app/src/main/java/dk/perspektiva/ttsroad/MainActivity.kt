@@ -5309,8 +5309,9 @@ internal fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MetaText(text = formatStorageSize(cacheBytes), color = AarisColor.Accent)
                     Text(
-                        text = "Every downloaded chapter is removed, along with the audio kept " +
-                            "from streaming. Playback progress is stored on the server and is " +
+                        text = "Every downloaded chapter on this phone is removed, from every " +
+                            "server you have signed in to, along with the audio kept from " +
+                            "streaming. Playback progress is stored on the server and is " +
                             "not affected.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AarisColor.Muted,

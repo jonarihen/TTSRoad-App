@@ -104,10 +104,11 @@ class OfflineDownloadReplacementTest {
             TokenStore(context),
             capabilities = capabilities,
             session = session,
-            forgetAudioHash = scanner::forget,
+            // One server throughout, so the scanner stays on the unscoped record these assertions read.
+            forgetAudioHash = { _, chapterId -> scanner.forget(chapterId) },
             initializeManager = false,
             replacementHash = scanner::replacementHash,
-            replacementCompleted = scanner::replacementCompleted,
+            replacementCompleted = { _, chapterId, hash -> scanner.replacementCompleted(chapterId, hash) },
             // The manager is never initialised here, so the identity migration only runs against an
             // index handed in explicitly. It forwards to the manager's own once a test opts in, and
             // until then reads as unavailable — a failed read leaves every record untouched, so the

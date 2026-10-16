@@ -96,17 +96,22 @@ class OfflineDownloads(
      * describes bytes this device no longer has. The next download of that chapter would then be
      * compared against the previous copy's hash and reported stale or fresh on no evidence.
      */
-    private val forgetAudioHash: (Int) -> Unit = {},
+    private val forgetAudioHash: (scope: String?, chapterId: Int) -> Unit = { _, _ -> },
     private val forgetAllAudioHashes: () -> Unit = {},
     private val initializeManager: Boolean = true,
     private val replacementHash: (Int) -> String? = { null },
-    private val replacementCompleted: (Int, String) -> Unit = { _, _ -> },
+    private val replacementCompleted: (scope: String?, chapterId: Int, hash: String) -> Unit = { _, _, _ -> },
     private val sendRemoveAllDownloads: () -> Unit = {
         DownloadService.sendRemoveAllDownloads(context, TtsRoadDownloadService::class.java, false)
     },
     session: Flow<SessionState> = tokenStore.session,
     private val migrationIndex: DownloadIndex? = null,
     private val migrationDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * Told the scope the signed-in server's audio hashes live under, whenever it changes (#316):
+     * hashes are per server for the same reason request ids are.
+     */
+    private val audioHashScope: (String?) -> Unit = {},
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val readerPinLock = Any()
@@ -166,6 +171,27 @@ class OfflineDownloads(
     private val unfinishedReplacementDownloads = mutableSetOf<String>()
 
     /**
+     * One download index row, whichever server it belongs to (#316).
+     *
+     * The index is shared by every server this phone has signed in to, and chapter ids are only
+     * unique per server. [owner] is the identity the row's cache key is filed under — null for a
+     * 0.8.0 key, whose owner is worked out from its URL — and is what [downloads] filters on.
+     */
+    private data class IndexedDownload(
+        val download: ChapterDownload,
+        val chapterId: Int?,
+        val owner: String?,
+        val uri: String,
+    )
+
+    /** Every row in the index, keyed by request id. Touched on the main thread only. */
+    private var rows: Map<String, IndexedDownload> = emptyMap()
+
+    /** The signed-in server's rows: chapter id -> the request id it is downloaded under. */
+    @Volatile
+    private var visibleRequestIds: Map<Int, String> = emptyMap()
+
+    /**
      * Keep-ahead's off-switch release could not reach the download service, most likely because the
      * process was in the background. Retried from [resumeUnfinished], which runs in the foreground.
      */
@@ -181,7 +207,11 @@ class OfflineDownloads(
      */
     val keepAheadGeneration = MutableStateFlow(0L)
 
-    /** Every known download, keyed by the chapter's media id. Empty until the index has loaded. */
+    /**
+     * The signed-in server's downloads, keyed by the chapter's media id. Empty until the index has
+     * loaded. Another server's row for the same chapter number is not here (#316): it would show as
+     * downloaded, keep-ahead would count it as handled, and a remove would delete it.
+     */
     val downloads: StateFlow<Map<String, ChapterDownload>> = _downloads.asStateFlow()
 
     private val databaseProvider: DatabaseProvider by lazy { StandaloneDatabaseProvider(context) }
@@ -311,9 +341,11 @@ class OfflineDownloads(
                         val ids = decodeDownloadIds(download.request.data)
                         val unfinishedReplacement = unfinishedReplacementDownloads.remove(download.request.id)
                         if (ids?.replacementHash == null || !unfinishedReplacement) {
-                            (ids?.chapterId ?: TtsRoadMediaIds.chapterId(download.request.id))?.let(forgetAudioHash)
+                            (ids?.chapterId ?: chapterIdOfDownload(download.request.id))
+                                ?.let { forgetAudioHash(hashScopeFor(download.request), it) }
                         }
-                        _downloads.value = _downloads.value - download.request.id
+                        rows = rows - download.request.id
+                        republish()
                     }
                 },
             )
@@ -335,6 +367,8 @@ class OfflineDownloads(
                     cacheIdentities.forServer(current.serverUrl, discovered)
                     audioAuth = snapshot
                     readAlongSupported = discovered.discoveryBaseUrl == current.serverUrl && discovered.readAlong
+                    audioHashScope(activeHashScope())
+                    republish()
                     val identity = cacheIdentities.advertisedForServer(current.serverUrl, discovered)
                     if (current.isLoggedIn) adoptServerIdentity(identity) else pendingMigration = null
                 }
@@ -457,7 +491,7 @@ class OfflineDownloads(
                 legacyDownloadKey(spec.url, serverUrl.orEmpty(), null)?.let(::add)
             }
         } else emptySet()
-        val request = spec.toDownloadRequest(hash, invalidationKeys)
+        val request = spec.copy(id = requestIdFor(spec.chapterId, identity)).toDownloadRequest(hash, invalidationKeys)
         // A replacement re-pins rather than unpinning: the chapter stays downloaded throughout, so
         // its read-along document must stay held while the new audio bytes arrive.
         synchronized(readerPinLock) {
@@ -562,11 +596,15 @@ class OfflineDownloads(
             // here: an unfinished replacement must keep the hash it was verifying against.
             // Committed together with the remove: a rekey retained from a failed migration dispatch
             // would otherwise queue this chapter again on the next retry.
-            val removed = identityMigration.forget(TtsRoadMediaIds.chapter(chapterId), retainedScope()) {
+            // This server's row only: another server's chapter with the same number is not ours to
+            // delete (#316).
+            val requestId = visibleRequestIds[chapterId]
+                ?: requestIdFor(chapterId, cacheIdentities.forServer(serverUrl, activeCapabilities))
+            val removed = identityMigration.forget(requestId, retainedScope()) {
                 DownloadService.sendRemoveDownload(
                     context,
                     TtsRoadDownloadService::class.java,
-                    TtsRoadMediaIds.chapter(chapterId),
+                    requestId,
                     /* foreground= */ false,
                 )
             }
@@ -586,7 +624,7 @@ class OfflineDownloads(
      */
     fun removeAll(): Boolean {
         synchronized(readerPinLock) {
-            val chapterIds = readerPins.keys + _downloads.value.keys.mapNotNull(TtsRoadMediaIds::chapterId)
+            val chapterIds = readerPins.keys + rows.values.mapNotNull { it.chapterId }
             // Global, like the remove-all command and the cache sweep below: every server's retained
             // rekeys go too, or one stranded on another server would re-download what was deleted.
             if (!identityMigration.forgetAll { sendRemoveAllDownloads() }) return false
@@ -824,7 +862,7 @@ class OfflineDownloads(
                 }
             }.getOrDefault(emptyList())
             withContext(Dispatchers.Main.immediate) {
-                publish(loaded.filter { it.request.id !in _downloads.value })
+                publish(loaded.filter { it.request.id !in rows })
             }
             refreshCacheBytes()
         }
@@ -833,13 +871,87 @@ class OfflineDownloads(
     private fun publish(loaded: List<Download>) {
         if (loaded.isEmpty()) return
         loaded.forEach(::recordReplacement)
-        _downloads.value = _downloads.value + loaded.associate { it.request.id to it.toChapterDownload() }
+        rows = rows + loaded.associate { it.request.id to it.toIndexedDownload() }
+        republish()
     }
 
     private fun put(download: Download) {
         recordReplacement(download)
-        _downloads.value = _downloads.value + (download.request.id to download.toChapterDownload())
+        rows = rows + (download.request.id to download.toIndexedDownload())
+        republish()
         refreshCacheBytes()
+    }
+
+    /** Recompute [downloads] from every row: the signed-in server's only, under bare media ids. */
+    private fun republish() {
+        val visible = mutableMapOf<String, ChapterDownload>()
+        val ids = mutableMapOf<Int, String>()
+        for ((requestId, row) in rows) {
+            val chapterId = row.chapterId ?: continue
+            if (!ownedByActiveServer(row.owner, row.uri)) continue
+            // One server should never hold two rows for a chapter; if it does, show the bare one,
+            // which is also the one [requestIdFor] answers with.
+            if (chapterId in ids && isScopedDownloadId(requestId)) continue
+            ids[chapterId] = requestId
+            visible[TtsRoadMediaIds.chapter(chapterId)] = row.download
+        }
+        visibleRequestIds = ids
+        _downloads.value = visible
+    }
+
+    /**
+     * Whether a row filed under [owner] belongs to the server signed in now: under the identity that
+     * server advertised, under its address fallback, or — for a 0.8.0 key that names no server —
+     * when its URL is one of this server's.
+     */
+    private fun ownedByActiveServer(owner: String?, uri: String): Boolean {
+        val address = audioAuth.serverUrl
+        if (owner == null) return cacheIdentities.ownsLegacyUrl(address, uri, activeCapabilities)
+        return owner == cacheIdentities.rememberedForServer(address) || owner == cacheIdentities.fallbackForServer(address)
+    }
+
+    private fun ownedByActiveServer(request: DownloadRequest): Boolean =
+        ownedByActiveServer(request.ownerIdentity(), request.uri.toString())
+
+    /**
+     * The request id [chapterId] is downloaded under on the server filed under [identity] (#316).
+     *
+     * Media3 keys the whole index on the request id, so two servers' chapter 42 cannot share
+     * `chapter:42`: the second download would merge over the first server's row, and a remove would
+     * delete it. The bare id stays with whoever holds it — nothing already on disk is re-keyed or
+     * downloaded again — and a server that finds it held by another server's row, or owed to another
+     * server's retained rekey, uses [scopedDownloadId].
+     */
+    private fun requestIdFor(chapterId: Int, identity: String?): String {
+        visibleRequestIds[chapterId]?.let { return it }
+        val bare = TtsRoadMediaIds.chapter(chapterId)
+        if (identity == null) return bare
+        val scoped = scopedDownloadId(chapterId, identity)
+        val index = DefaultDownloadIndex(databaseProvider)
+        // An unreadable index is the one case that cannot tell whose the bare row is, and only the
+        // scoped id is certain not to land on another server's.
+        val (bareRow, scopedRow) = runCatching { index.getDownload(bare) to index.getDownload(scoped) }
+            .getOrElse { return scoped }
+        return when {
+            scopedRow != null -> scoped
+            bareRow == null -> if (identityMigration.isRetainedElsewhere(bare, retainedScope())) scoped else bare
+            ownedByActiveServer(bareRow.request) -> bare
+            else -> scoped
+        }
+    }
+
+    /**
+     * Which server's audio hashes a row's events belong to: the signed-in server's scope for its own
+     * rows, whichever of its identities a row is filed under, and otherwise the identity the row
+     * names. A 0.8.0 row of another server names none and lands in the unscoped legacy record.
+     */
+    private fun hashScopeFor(request: DownloadRequest): String? =
+        if (ownedByActiveServer(request)) activeHashScope() else request.ownerIdentity()
+
+    /** The scope the signed-in server's audio hashes are kept under (#316). */
+    private fun activeHashScope(): String? {
+        val address = audioAuth.serverUrl
+        return cacheIdentities.rememberedForServer(address) ?: cacheIdentities.fallbackForServer(address)
     }
 
     private fun recordReplacement(download: Download) {
@@ -849,11 +961,20 @@ class OfflineDownloads(
             hash == null -> unfinishedReplacementDownloads.remove(download.request.id)
             download.state == Download.STATE_COMPLETED -> {
                 unfinishedReplacementDownloads.remove(download.request.id)
-                replacementCompleted(ids.chapterId, hash)
+                replacementCompleted(hashScopeFor(download.request), ids.chapterId, hash)
             }
             download.state != Download.STATE_REMOVING -> unfinishedReplacementDownloads.add(download.request.id)
         }
     }
+
+    private fun Download.toIndexedDownload() = IndexedDownload(
+        download = toChapterDownload(),
+        chapterId = decodeDownloadIds(request.data)?.chapterId ?: chapterIdOfDownload(request.id),
+        owner = request.ownerIdentity(),
+        uri = request.uri.toString(),
+    )
+
+    private fun DownloadRequest.ownerIdentity(): String? = customCacheKey?.let(DownloadCacheKeys::identityOf)
 
     private fun Download.toChapterDownload(): ChapterDownload {
         val ids = decodeDownloadIds(request.data)
