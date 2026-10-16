@@ -136,10 +136,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -3078,7 +3082,15 @@ internal fun PlayerScreenBody(
             },
             valueRange = 0f..playerState.durationMs.coerceAtLeast(1L).toFloat(),
             enabled = playerState.durationMs > 0L,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .seekSliderSemantics(
+                    positionMs = dragMs?.toLong() ?: playerState.positionMs,
+                    durationMs = playerState.durationMs,
+                    skipIntervalMs = skipIntervalMs,
+                    onSkipBack = onSkipBack,
+                    onSkipForward = onSkipForward,
+                ),
         )
         // Its own strip rather than an overlay on the slider. Drawing on the track would mean
         // competing with the slider's drag for the same pixels, and the thing that must keep
@@ -10453,6 +10465,53 @@ internal fun SettingsItem(label: String, value: String) {
             style = MaterialTheme.typography.titleMedium,
         )
     }
+}
+
+/**
+ * What TalkBack says for the scrubber (#351). Without it the slider was read as a bare "37
+ * percent", and a swipe moved it by Compose's default 5% — two minutes of a forty-minute chapter.
+ *
+ * The name and a time-based state replace the percentage; the range info's step count makes one
+ * swipe equal one skip interval, the same distance the transport buttons move; and the custom
+ * actions offer those two buttons from the slider itself, so they are a menu away without leaving it.
+ * Applied outside the slider's own semantics so these values are the ones that win.
+ */
+internal fun Modifier.seekSliderSemantics(
+    positionMs: Long,
+    durationMs: Long,
+    skipIntervalMs: Long,
+    onSkipBack: () -> Unit,
+    onSkipForward: () -> Unit,
+): Modifier = semantics {
+    contentDescription = "Position"
+    if (durationMs <= 0L) return@semantics
+    val position = positionMs.coerceIn(0L, durationMs)
+    stateDescription = "${spokenDuration(position)} of ${spokenDuration(durationMs)}"
+    val steps = if (skipIntervalMs > 0L) (durationMs / skipIntervalMs - 1L).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt() else 0
+    progressBarRangeInfo = ProgressBarRangeInfo(
+        current = position.toFloat(),
+        range = 0f..durationMs.toFloat(),
+        steps = steps,
+    )
+    val interval = formatSkipInterval(skipIntervalMs)
+    customActions = listOf(
+        CustomAccessibilityAction("Back $interval") { onSkipBack(); true },
+        CustomAccessibilityAction("Forward $interval") { onSkipForward(); true },
+    )
+}
+
+/** "12 minutes 3 seconds" — a duration as a screen reader should say it, not as "12:03". */
+internal fun spokenDuration(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    fun part(value: Long, unit: String) = "$value $unit" + if (value == 1L) "" else "s"
+    return listOfNotNull(
+        part(hours, "hour").takeIf { hours > 0 },
+        part(minutes, "minute").takeIf { minutes > 0 },
+        part(seconds, "second").takeIf { seconds > 0 || totalSeconds == 0L },
+    ).joinToString(" ")
 }
 
 private fun formatDuration(ms: Long): String {
