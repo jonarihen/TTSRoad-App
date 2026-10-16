@@ -20,6 +20,8 @@ data class CapabilityServerInfo(
     val name: String = "TTSRoad",
     val version: String? = null,
     @param:Json(name = "base_url") val baseUrl: String? = null,
+    /** See [ServerInfo.instanceId]. */
+    @param:Json(name = "instance_id") val instanceId: String? = null,
 )
 
 /**
@@ -38,6 +40,12 @@ data class ServerCapabilities(
      * cache keys on it so two servers cannot share a cache entry — see `DownloadCacheKeys`.
      */
     val serverBaseUrl: String? = null,
+    /**
+     * The server's random, persisted `instance_id` (#437), normalized by [normalizeInstanceId]. A
+     * stronger identity than [serverBaseUrl], which is configuration every unconfigured install
+     * shares. Null before server 1.5.7.
+     */
+    val serverInstanceId: String? = null,
     val apiVersion: Int = 1,
     val readAlong: Boolean = false,
     val search: Boolean = false,
@@ -239,6 +247,12 @@ data class ServerCapabilities(
     val playbackSkips: Boolean = false,
 
     /**
+     * `POST /api/mobile/session-proof` (#437): the server can prove it holds this phone's session
+     * without the token being sent to it. What the address check uses before `/me` goes anywhere.
+     */
+    val sessionProof: Boolean = false,
+
+    /**
      * Every flag the server advertised, exactly as sent, including ones this build has never heard
      * of.
      *
@@ -278,6 +292,7 @@ data class ServerCapabilities(
                 serverName = response.server?.name ?: "TTSRoad",
                 serverVersion = response.server?.version,
                 serverBaseUrl = response.server?.baseUrl?.takeIf { it.isNotBlank() },
+                serverInstanceId = normalizeInstanceId(response.server?.instanceId),
                 apiVersion = response.apiVersion,
                 readAlong = flags.flag("readalong"),
                 search = flags.flag("search"),
@@ -311,6 +326,7 @@ data class ServerCapabilities(
                 storage = flags.flag("storage"),
                 notifications = flags.flag("notifications"),
                 playbackSkips = flags.flag("playback_skips"),
+                sessionProof = flags.flag("session_proof"),
                 // Only entries that are actually booleans. A server sending something else for a
                 // key is saying something this build cannot read, and listing it as "off" would be
                 // a guess presented as fact.

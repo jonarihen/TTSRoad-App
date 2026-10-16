@@ -12,9 +12,12 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  * the token away, and only after the new address has been checked (see
  * [TtsRoadRepository.verifyServerAddress]):
  *
- * 1. its unauthenticated `/api/mobile/capabilities` reports the same server identity — the server's
- *    own configured `base_url`, the identity the download cache already keys on — as the session's;
- * 2. only then does the token go to it, on `/api/mobile/me`, and that must answer as the same
+ * 1. its unauthenticated `/api/mobile/capabilities` reports the same server identity as the
+ *    session's — the server's random, persisted `instance_id` when the session knows it (#437),
+ *    otherwise its configured `base_url`, the identity the download cache already keys on;
+ * 2. when it advertises `session_proof` and the session has a `device_id`, it proves it holds this
+ *    session by answering a fresh challenge — still without the token (see `SessionProof.kt`);
+ * 3. only then does the token go to it, on `/api/mobile/me`, and that must answer as the same
  *    account.
  *
  * A saved address is checked again every time it is switched to. A LAN address in particular is

@@ -66,8 +66,9 @@ again after login before loading the library. Cache the result per base URL, and
   "api_version": 1,
   "server": {
     "name": "TTSRoad",
-    "version": "1.4.0",
-    "base_url": "https://ttsroad.example.com"
+    "version": "1.5.7",
+    "base_url": "https://ttsroad.example.com",
+    "instance_id": "3f0c9a52-7d1e-4f63-9a0b-2c4e8d6b1f70"
   },
   "capabilities": {
     "readalong": true,
@@ -76,7 +77,8 @@ again after login before loading the library. Cache the result per base URL, and
     "delta_sync": false,
     "batch_progress": false,
     "audio_content_hash": false,
-    "device_management": true
+    "device_management": true,
+    "session_proof": true
   },
   "limits": {
     "max_chapters_per_page": 200,
@@ -89,6 +91,41 @@ Treat an unknown capability as `false` and ignore keys the client does not recog
 an older server: continue with the baseline API and treat every optional capability as `false`.
 Never use `api_version` as a proxy for an additive feature — it tracks breaking changes to the
 baseline, so inferring an additive one from it lights up UI the server cannot serve.
+
+### Server identity and session proof (server 1.5.7+)
+
+`server.instance_id` (in capabilities, the login response and `/api/mobile/library`) is a random
+UUID the server mints on first start and keeps in its database: stable across restarts and
+`BASE_URL` changes, different between installs. `base_url` is configuration — every unconfigured
+install reports `http://localhost:8787` — so the app records `instance_id` at sign-in and prefers it
+when checking another address of the signed-in server (#437). Absent on older servers; the app then
+falls back to comparing `base_url`, and refuses a placeholder one.
+
+When capability `session_proof` is true, an address can prove it holds this phone's session without
+being sent the token:
+
+```http
+POST /api/mobile/session-proof
+Content-Type: application/json
+
+{"device_id": 42, "nonce": "<base64url of 32 fresh random bytes>"}
+```
+
+Send **no** `Authorization` header. Always `200 {"proof": "<base64url, unpadded>", "instance_id": "…"}`;
+an unknown, revoked or expired `device_id` gets a non-matching proof rather than an error. The client
+computes:
+
+```text
+key      = lowercase hex SHA-256 of the UTF-8 token, as its 64 ASCII bytes (not the 32 raw bytes)
+msg      = "ttsroad-session-proof" + 0x00 + the decoded nonce bytes
+expected = base64url-without-padding(HMAC-SHA256(key, msg))
+```
+
+compares it in constant time, and accepts the address only if the proof matches **and**
+`instance_id` is the recorded one; only then does it call `/api/mobile/me` there with the token.
+`422` for a nonce outside 16–64 bytes or a non-positive `device_id`; `429` with `Retry-After` (30
+requests per 15 minutes per IP, and while that IP is login-throttled) — a refusal, never a reason to
+send the token instead. Sessions without a stored `device_id` fall back to the identity comparison.
 
 ## Mobile API
 
@@ -125,7 +162,8 @@ Success response:
   "server": {
     "name": "TTSRoad",
     "base_url": "https://ttsroad.example.com",
-    "api_version": 1
+    "api_version": 1,
+    "instance_id": "3f0c9a52-7d1e-4f63-9a0b-2c4e8d6b1f70"
   }
 }
 ```
@@ -133,7 +171,7 @@ Success response:
 Store `token` in DataStore. Never log it.
 
 `device_id` identifies this token among the account's mobile sessions; store it so the device list
-can mark the current row. `expires_at` is when the token lapses **if it goes unused** — tokens last
+can mark the current row, and so another address can be asked for a session proof. `expires_at` is when the token lapses **if it goes unused** — tokens last
 90 days, and every authenticated request silently renews the expiry. Store it for display only. Do
 not build a refresh loop around the absolute timestamp: an app in daily use will never reach it, and
 a client that pre-emptively signed out on it would be wrong far more often than right.

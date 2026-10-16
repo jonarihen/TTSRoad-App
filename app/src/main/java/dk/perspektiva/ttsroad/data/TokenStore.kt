@@ -54,6 +54,13 @@ data class SessionState(
      * before this existed, or on a server that does not report one.
      */
     val serverIdentity: String? = null,
+    /**
+     * The server's random, persisted `instance_id` (#437), recorded at sign-in or at the last
+     * address check. Preferred over [serverIdentity] when checking another address, because unlike
+     * `base_url` it is not configuration two installs can share. Null for a session signed in to a
+     * server before 1.5.7, or before this was recorded.
+     */
+    val serverInstanceId: String? = null,
     /** The account's id as the server numbered it at sign-in, when known. */
     val userId: Int? = null,
 ) {
@@ -88,17 +95,28 @@ interface SessionStore {
     suspend fun clearToken()
 
     /**
-     * Put [address] in use for [owner]'s session, keeping its token, and record [serverIdentity].
-     * The address being left joins [SessionState.alternateUrls].
+     * Put [address] in use for [owner]'s session, keeping its token, and record [serverIdentity] and
+     * [serverInstanceId] — each only when non-null; null keeps what is recorded. The address being
+     * left joins [SessionState.alternateUrls].
      *
      * Returns false and changes nothing unless [owner] is still the live session — a sign-out or a
      * different sign-in while the address was being checked must not have its address replaced.
      * The caller has already checked [address]; this only stores the result.
      */
-    suspend fun useAddress(owner: SessionState, address: String, serverIdentity: String): Boolean = false
+    suspend fun useAddress(
+        owner: SessionState,
+        address: String,
+        serverIdentity: String?,
+        serverInstanceId: String? = null,
+    ): Boolean = false
 
     /** As [useAddress], but only saves [address] among the alternates; the address in use stays. */
-    suspend fun rememberAddress(owner: SessionState, address: String, serverIdentity: String): Boolean = false
+    suspend fun rememberAddress(
+        owner: SessionState,
+        address: String,
+        serverIdentity: String?,
+        serverInstanceId: String? = null,
+    ): Boolean = false
 
     /** Drop [address] from the saved alternates. Never touches the address in use. */
     suspend fun forgetAddress(address: String) = Unit
@@ -129,6 +147,7 @@ class TokenStore(
         val AlternateUrls = stringPreferencesKey("alternate_urls")
         val ServerIdentity = stringPreferencesKey("server_identity")
         val UserId = intPreferencesKey("user_id")
+        val ServerInstanceId = stringPreferencesKey("server_instance_id")
     }
 
     val session: Flow<SessionState> = context.sessionDataStore.data
@@ -154,6 +173,7 @@ class TokenStore(
                 expiresAt = prefs[Keys.ExpiresAt],
                 alternateUrls = decodeAlternates(prefs[Keys.AlternateUrls]),
                 serverIdentity = prefs[Keys.ServerIdentity],
+                serverInstanceId = prefs[Keys.ServerInstanceId],
                 userId = prefs[Keys.UserId],
             )
         }
@@ -165,16 +185,26 @@ class TokenStore(
             val address = normalizeBaseUrl(baseUrl)
             val reported = DownloadCacheKeys.serverIdentity(response.server?.baseUrl)
             val previousIdentity = prefs[Keys.ServerIdentity]
+            val reportedInstance = normalizeInstanceId(response.server?.instanceId)
+            val previousInstance = prefs[Keys.ServerInstanceId]
             // Saved addresses were confirmed to be this server. They survive signing in again at
             // the same address (an expired token, a password change) unless the server now names
             // itself differently; signing in anywhere else starts the list over, so another
             // server's addresses are never offered here. The account is not part of it: no saved
             // address is sent a token without being checked again, as whoever is signed in then.
-            val keepAddresses = sameServerAddress(prefs[Keys.ServerUrl], address) &&
-                (reported == null || previousIdentity == null || reported == previousIdentity)
+            // Two instance ids settle it on their own (#437): a server whose BASE_URL was corrected
+            // is still the same server, and one reinstalled behind the same BASE_URL is not.
+            val sameServer = if (reportedInstance != null && previousInstance != null) {
+                reportedInstance == previousInstance
+            } else {
+                reported == null || previousIdentity == null || reported == previousIdentity
+            }
+            val keepAddresses = sameServerAddress(prefs[Keys.ServerUrl], address) && sameServer
             if (!keepAddresses) prefs.remove(Keys.AlternateUrls)
             val identity = reported ?: previousIdentity?.takeIf { keepAddresses }
             identity?.let { prefs[Keys.ServerIdentity] = it } ?: prefs.remove(Keys.ServerIdentity)
+            val instance = reportedInstance ?: previousInstance?.takeIf { keepAddresses }
+            instance?.let { prefs[Keys.ServerInstanceId] = it } ?: prefs.remove(Keys.ServerInstanceId)
             prefs[Keys.UserId] = response.user.id
             prefs[Keys.ServerUrl] = address
             prefs[Keys.Token] = sealForStorage(response.token)
@@ -220,20 +250,35 @@ class TokenStore(
         }
     }
 
-    override suspend fun useAddress(owner: SessionState, address: String, serverIdentity: String): Boolean =
+    override suspend fun useAddress(
+        owner: SessionState,
+        address: String,
+        serverIdentity: String?,
+        serverInstanceId: String?,
+    ): Boolean =
         editOwnedSession(owner) { prefs, live ->
             val next = normalizeBaseUrl(address)
             prefs[Keys.AlternateUrls] = encodeAlternates(alternatesAfterSwitch(live.serverUrl, live.alternateUrls, next))
             prefs[Keys.ServerUrl] = next
-            prefs[Keys.ServerIdentity] = serverIdentity
+            recordIdentity(prefs, serverIdentity, serverInstanceId)
         }
 
-    override suspend fun rememberAddress(owner: SessionState, address: String, serverIdentity: String): Boolean =
+    override suspend fun rememberAddress(
+        owner: SessionState,
+        address: String,
+        serverIdentity: String?,
+        serverInstanceId: String?,
+    ): Boolean =
         editOwnedSession(owner) { prefs, live ->
             val added = normalizeBaseUrl(address)
             prefs[Keys.AlternateUrls] = encodeAlternates(alternatesAfterRemember(live.serverUrl, live.alternateUrls, added))
-            prefs[Keys.ServerIdentity] = serverIdentity
+            recordIdentity(prefs, serverIdentity, serverInstanceId)
         }
+
+    private fun recordIdentity(prefs: MutablePreferences, serverIdentity: String?, serverInstanceId: String?) {
+        serverIdentity?.let { prefs[Keys.ServerIdentity] = it }
+        normalizeInstanceId(serverInstanceId)?.let { prefs[Keys.ServerInstanceId] = it }
+    }
 
     override suspend fun forgetAddress(address: String): Unit = sessionMutation.withLock {
         context.sessionDataStore.edit { prefs ->

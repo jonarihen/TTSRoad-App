@@ -71,6 +71,11 @@ data class ServerInfo(
     val name: String = "TTSRoad",
     @param:Json(name = "base_url") val baseUrl: String? = null,
     @param:Json(name = "api_version") val apiVersion: Int = 1,
+    /**
+     * A random UUID the server minted on first start (#437): stable across restarts and `BASE_URL`
+     * changes, different between installs. Absent on servers before 1.5.7.
+     */
+    @param:Json(name = "instance_id") val instanceId: String? = null,
 )
 
 data class LibraryResponse(
@@ -89,6 +94,8 @@ data class LibraryResponse(
     @param:Json(name = "updated_since") val updatedSince: String? = null,
     val delta: Boolean = false,
     val deleted: List<Int> = emptyList(),
+    /** The server's own description, including its `instance_id` on 1.5.7 and later. */
+    val server: ServerInfo? = null,
 )
 
 data class ChaptersResponse(
