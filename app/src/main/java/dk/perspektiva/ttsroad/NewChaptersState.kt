@@ -158,6 +158,7 @@ internal fun rememberNewChapters(
             readySeen = null
             return@LaunchedEffect
         }
+        var followsAsked = false
         while (currentCoroutineContext().isActive) {
             if (!ownsSession()) return@LaunchedEffect
             state.isLoading = true
@@ -173,8 +174,14 @@ internal fun rememberNewChapters(
                         state.error = null
                         state.isUnsupported = false
                         state.loadedOnce = true
-                        if (state.followsAnything == null) {
+                        // Asked once per explicit load, not once per poll: a failing or slow
+                        // library endpoint left this null, and every minute asked again for the
+                        // whole library (#322). Unknown stays null, which the empty note reads as
+                        // "follows something"; the next refresh tries again.
+                        if (state.followsAnything == null && !followsAsked) {
+                            followsAsked = true
                             state.followsAnything = runCatching { repository.library().fictions.isNotEmpty() }
+                                .onFailure { if (it is CancellationException) throw it }
                                 .getOrNull()
                         }
                         if (!ownsSession()) return@LaunchedEffect

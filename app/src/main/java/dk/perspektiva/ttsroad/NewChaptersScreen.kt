@@ -141,7 +141,7 @@ internal fun NewChaptersScreen(
                 Unit
             } else if (rows.isEmpty()) {
                 MetaText(
-                    chapterNotificationsEmptyNote(followsAnything = state.followsAnything == true),
+                    chapterNotificationsEmptyNote(followsAnything = state.followsAnything != false),
                     color = AarisColor.Muted,
                 )
             } else {
