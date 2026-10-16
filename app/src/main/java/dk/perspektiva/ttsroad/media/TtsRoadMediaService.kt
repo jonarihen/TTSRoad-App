@@ -85,7 +85,9 @@ import dk.perspektiva.ttsroad.player.SleepTimerStop
 import dk.perspektiva.ttsroad.widget.NowPlayingSnapshot
 import dk.perspektiva.ttsroad.widget.NowPlayingStore
 import dk.perspektiva.ttsroad.widget.NowPlayingWidget
+import dk.perspektiva.ttsroad.widget.WidgetRedrawKey
 import dk.perspektiva.ttsroad.widget.nowPlayingSnapshotOf
+import dk.perspektiva.ttsroad.widget.widgetRedrawKey
 import dk.perspektiva.ttsroad.player.ServerBreadcrumbIntervalMs
 import dk.perspektiva.ttsroad.player.breadcrumbsToPrune
 import dk.perspektiva.ttsroad.player.shouldWriteBreadcrumb
@@ -174,6 +176,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var lastBreadcrumbAt: Long? = null
     private var lastBreadcrumbPruneAt: Long? = null
 
+    // What the launcher was last asked to draw; see widgetRedrawKey (#338).
+    private var lastWidgetRedraw: WidgetRedrawKey? = null
+
     private val sessionAudioAuth = dk.perspektiva.ttsroad.core.SessionAudioAuth()
 
     // Every assignment comes from a real session (the session collector, a bound queue, recovery),
@@ -257,6 +262,8 @@ class TtsRoadMediaService : MediaLibraryService() {
                 if (sessionIdentity != lastSessionIdentity) {
                     lastSessionIdentity = sessionIdentity
                     librarySessionGeneration++
+                    // A different account's widget is a different picture, whatever its key says.
+                    lastWidgetRedraw = null
                     // The car searches and browses off this memo. Never serve one account's
                     // library — or its spoken-search results — to another, or to nobody.
                     val previousFictionIds = lastLibrary?.fictions?.map { it.id }.orEmpty()
@@ -273,6 +280,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     // Ordered against the publishes: a tick captured just before the sign-out must
                     // not put the previous account's book back on the home screen.
                     val generation = nowPlayingStore.nextGeneration()
+                    lastWidgetRedraw = null
                     withContext(Dispatchers.IO) { nowPlayingStore.clearAt(generation) }
                     runCatching { NowPlayingWidget().updateAll(this@TtsRoadMediaService) }
                 }
@@ -520,6 +528,10 @@ class TtsRoadMediaService : MediaLibraryService() {
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(true)
+            // Streaming with the screen off is the normal case — in bed, or in a pocket — and
+            // without a Wi-Fi lock the radio drops into power save and the buffer runs dry (#338).
+            // NETWORK holds a partial wake lock and a Wi-Fi lock only while playing or buffering.
+            .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
     }
 
@@ -1009,10 +1021,15 @@ class TtsRoadMediaService : MediaLibraryService() {
             updatedAt = now,
         )
         val generation = nowPlayingStore.nextGeneration()
+        // The note is cheap and is written every time; a launcher redraw decodes a cover and wakes
+        // the home screen, so it only happens when something it would show has changed (#338).
+        val redraw = widgetRedrawKey(current)
+        val visibleChange = redraw == null || redraw != lastWidgetRedraw
+        lastWidgetRedraw = redraw
         withContext(Dispatchers.IO) {
             nowPlayingStore.publish(generation, current, stoppedAt = now)
         }
-        runCatching { NowPlayingWidget().updateAll(this) }
+        if (visibleChange) runCatching { NowPlayingWidget().updateAll(this) }
     }
 
     private fun recordHistory(mediaItem: MediaItem, position: Long) {

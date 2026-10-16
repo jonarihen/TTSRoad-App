@@ -14,6 +14,9 @@
     <!-- Volume boost: attaching a LoudnessEnhancer to the player's audio session needs this.
          Normal permission, granted at install, so there is nothing to request at runtime. -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- ExoPlayer's WAKE_MODE_NETWORK: a partial wake lock and a Wi-Fi lock while playing, so a
+         stream does not stall when the screen is off. Normal permission, granted at install. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- In-app self-updater: install a downloaded APK from GitHub Releases. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
