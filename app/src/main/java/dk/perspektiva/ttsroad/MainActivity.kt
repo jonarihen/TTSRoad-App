@@ -364,6 +364,7 @@ import dk.perspektiva.ttsroad.ui.ErrorDetails
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
+import dk.perspektiva.ttsroad.ui.labelCase
 import dk.perspektiva.ttsroad.ui.ReaderPalette
 import dk.perspektiva.ttsroad.ui.readerPalette
 import kotlin.math.roundToInt
@@ -416,7 +417,10 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(nightMode) {
                 AarisColor.palette = if (nightMode) AarisPalette.Night else AarisPalette.Standard
             }
-            TtsRoadTheme {
+            val readableText by remember {
+                playbackPreferences.prefs.map { it.readableText }.distinctUntilChanged()
+            }.collectAsStateWithLifecycle(initialValue = false)
+            TtsRoadTheme(readableText = readableText) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = AarisColor.Bg,
@@ -819,7 +823,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
     ) {
-        MetaText(text = "// Operator Console", color = AarisColor.Accent)
+        MetaText(text = "// Sign in", color = AarisColor.Accent)
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = "TTSROAD",
@@ -831,7 +835,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         OutlinedTextField(
             value = serverUrl,
             onValueChange = { serverUrl = it },
-            label = { Text("SERVER URL") },
+            label = { Text(labelCase("Server address")) },
             placeholder = { Text("https://ttsroad.example.com") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -848,7 +852,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text("USERNAME") },
+            label = { Text(labelCase("Username")) },
             placeholder = { Text("The username you were given") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -857,7 +861,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("PASSWORD") },
+            label = { Text(labelCase("Password")) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -878,7 +882,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             OutlinedTextField(
                 value = deviceName,
                 onValueChange = { deviceName = it },
-                label = { Text("DEVICE NAME (OPTIONAL)") },
+                label = { Text(labelCase("Phone name (optional)")) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 supportingText = { MetaText(text = "How this phone is listed under Device sessions") },
@@ -889,10 +893,12 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             OutlinedTextField(
                 value = totpCode,
                 onValueChange = { totpCode = it },
-                label = { Text("2FA CODE") },
+                label = { Text(labelCase("Sign-in code")) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                supportingText = { MetaText(text = "From your authenticator app, or a recovery code") },
+                supportingText = {
+                    MetaText(text = "The code from your authenticator app, or a recovery code")
+                },
             )
         }
         notice?.let {
@@ -939,12 +945,14 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
-                when {
-                    isBusy && twoFactorRequired -> "VERIFYING"
-                    isBusy -> "SIGNING IN"
-                    twoFactorRequired -> "VERIFY"
-                    else -> "SIGN IN"
-                },
+                labelCase(
+                    when {
+                        isBusy && twoFactorRequired -> "Checking code"
+                        isBusy -> "Signing in"
+                        twoFactorRequired -> "Check code"
+                        else -> "Sign in"
+                    },
+                ),
             )
         }
     }
@@ -958,7 +966,7 @@ internal fun AppTopBar(title: String, canGoBack: Boolean, onBack: () -> Unit) {
         TopAppBar(
             title = {
                 Text(
-                    text = title.uppercase(),
+                    text = labelCase(title),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleLarge,
@@ -966,7 +974,7 @@ internal fun AppTopBar(title: String, canGoBack: Boolean, onBack: () -> Unit) {
             },
             navigationIcon = {
                 if (canGoBack) {
-                    TextButton(onClick = onBack) { Text("BACK") }
+                    TextButton(onClick = onBack) { Text(labelCase("Back")) }
                 }
             },
             actions = {},
@@ -1040,7 +1048,7 @@ internal fun PrimaryNavigationBar(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         NavigationTabLabel(
-                            text = root.label,
+                            text = labelCase(root.sentenceLabel),
                             color = if (isSelected) AarisColor.Accent else AarisColor.Muted,
                         )
                         if (badge > 0) NavigationCountBadge(badge)
@@ -4795,6 +4803,13 @@ internal fun SettingsScreen(
                         onCheckedChange = null,
                     )
                 }
+
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+
+                ReadableTextSetting(
+                    enabled = prefs.readableText,
+                    onEnabledChange = { scope.launch { preferences.setReadableText(it) } },
+                )
 
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
@@ -10514,7 +10529,7 @@ internal fun PlaybackSkipsSetting(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            MetaText(text = "SKIP ADVERTS AND DISCLAIMERS")
+            MetaText(text = "Skip adverts and disclaimers")
             Spacer(modifier = Modifier.height(2.dp))
             MetaText(
                 text = "Jumps over timed non-story sections while playing. If scrubbing while paused, " +

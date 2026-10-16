@@ -65,6 +65,11 @@ data class PlaybackPrefs(
      */
     val nightMode: Boolean = false,
     /**
+     * Labels in sentence case, in the system sans, at 14 sp or more, instead of small mono capitals
+     * (#359). A device setting like [nightMode]: it is about this reader and this screen.
+     */
+    val readableText: Boolean = false,
+    /**
      * Whether a headset's or a car's next/previous keys seek by [skipIntervalMs] rather than change
      * chapter (#336). Earbuds send those for a double and a triple tap, and a whole chapter is a lot
      * to lose to a tap made half asleep. Device-only, like the skip interval it uses.
@@ -183,6 +188,7 @@ class PlaybackPreferences(private val context: Context) {
         val AutoMarkPlayed = booleanPreferencesKey("auto_mark_played")
         val SkipAdSegments = booleanPreferencesKey("skip_ad_segments")
         val NightMode = booleanPreferencesKey("night_mode")
+        val ReadableText = booleanPreferencesKey("readable_text")
         val HeadsetButtonsSeek = booleanPreferencesKey("headset_buttons_seek")
     }
 
@@ -204,6 +210,7 @@ class PlaybackPreferences(private val context: Context) {
                 autoMarkPlayed = stored[Keys.AutoMarkPlayed] ?: DefaultAutoMarkPlayed,
                 skipAdSegments = stored[Keys.SkipAdSegments] ?: DefaultSkipAdSegments,
                 nightMode = stored[Keys.NightMode] ?: false,
+                readableText = stored[Keys.ReadableText] ?: false,
                 headsetButtonsSeek = stored[Keys.HeadsetButtonsSeek] ?: DefaultHeadsetButtonsSeek,
             )
         }
@@ -244,6 +251,10 @@ class PlaybackPreferences(private val context: Context) {
 
     suspend fun setNightMode(enabled: Boolean) {
         context.playbackDataStore.edit { it[Keys.NightMode] = enabled }
+    }
+
+    suspend fun setReadableText(enabled: Boolean) {
+        context.playbackDataStore.edit { it[Keys.ReadableText] = enabled }
     }
 
     suspend fun setHeadsetButtonsSeek(enabled: Boolean) {

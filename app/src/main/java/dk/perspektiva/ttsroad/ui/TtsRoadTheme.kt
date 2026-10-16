@@ -30,10 +30,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -264,16 +267,56 @@ private val AarisTypography = Typography(
     ),
 )
 
+/**
+ * The "Readable text" setting (#359): labels in the case they were written, in the system sans,
+ * at 14 sp or more.
+ *
+ * Small grey mono capitals are the AARIS look and the hardest style there is to read — capitals
+ * lose the word shapes a reader recognises, and a fixed-pitch face at 11 sp spreads them further.
+ * Off by default, so the design stays what it is for everyone who has not asked.
+ */
+val LocalReadableText = staticCompositionLocalOf { false }
+
+/** The smallest label the readable setting draws: 14 sp, the floor #359 asks for. */
+internal val ReadableLabelSize = 14.sp
+
+private val ReadableLabel = TextStyle(
+    fontFamily = FontFamily.Default,
+    fontWeight = FontWeight.Medium,
+    fontSize = ReadableLabelSize,
+    lineHeight = 20.sp,
+    letterSpacing = 0.sp,
+)
+
+private val ReadableTypography = AarisTypography.copy(
+    bodyMedium = AarisTypography.bodyMedium.copy(fontSize = ReadableLabelSize, lineHeight = 20.sp),
+    labelLarge = ReadableLabel.copy(fontWeight = FontWeight.SemiBold, fontSize = 15.sp),
+    labelMedium = ReadableLabel,
+    labelSmall = ReadableLabel,
+)
+
 @Composable
-fun TtsRoadTheme(content: @Composable () -> Unit) {
+fun TtsRoadTheme(readableText: Boolean = false, content: @Composable () -> Unit) {
     val palette = AarisColor.palette
-    MaterialTheme(
-        colorScheme = remember(palette) { aarisColorScheme() },
-        shapes = AarisShapes,
-        typography = AarisTypography,
-        content = content,
-    )
+    CompositionLocalProvider(LocalReadableText provides readableText) {
+        MaterialTheme(
+            colorScheme = remember(palette) { aarisColorScheme() },
+            shapes = AarisShapes,
+            typography = if (readableText) ReadableTypography else AarisTypography,
+            content = content,
+        )
+    }
 }
+
+/**
+ * [text] as a label shows it: in capitals for the AARIS look, or as written under readable text.
+ *
+ * Write the label in sentence case and let this decide. A literal already in capitals cannot be
+ * turned back into sentence case without guessing which words are acronyms.
+ */
+@Composable
+@ReadOnlyComposable
+fun labelCase(text: String): String = if (LocalReadableText.current) text else text.uppercase()
 
 /**
  * Mono uppercase "meta" label (section kickers, field captions, status text).
@@ -287,13 +330,16 @@ fun MetaText(
     /** Caps free-form text — a server error message is not written to fit a list row. */
     maxLines: Int = Int.MAX_VALUE,
 ) {
+    val readable = LocalReadableText.current
     Text(
-        text = text.uppercase(),
+        text = labelCase(text),
         modifier = modifier.then(
             // The `//` is the AARIS kicker mark, drawn for the eye; spoken it is "slash slash" in
             // front of every section label (#355). Screen readers get the words alone.
             if (text.startsWith(KickerMark)) {
-                Modifier.clearAndSetSemantics { this.text = AnnotatedString(spokenMetaText(text)) }
+                Modifier.clearAndSetSemantics {
+                    this.text = AnnotatedString(spokenMetaText(text, uppercase = !readable))
+                }
             } else {
                 Modifier
             },
@@ -301,20 +347,24 @@ fun MetaText(
         color = color,
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
-        style = TextStyle(
-            fontFamily = MonoFamily,
-            fontWeight = FontWeight.Medium,
-            fontSize = 11.sp,
-            letterSpacing = 1.3.sp,
-        ),
+        style = if (readable) {
+            ReadableLabel
+        } else {
+            TextStyle(
+                fontFamily = MonoFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 11.sp,
+                letterSpacing = 1.3.sp,
+            )
+        },
     )
 }
 
 private const val KickerMark = "//"
 
 /** What a screen reader is given for a [MetaText]: the visible text without its `//` kicker mark. */
-internal fun spokenMetaText(text: String): String =
-    text.removePrefix(KickerMark).trimStart().uppercase()
+internal fun spokenMetaText(text: String, uppercase: Boolean = true): String =
+    text.removePrefix(KickerMark).trimStart().let { if (uppercase) it.uppercase() else it }
 
 /** Mono uppercase bordered chip — the AARIS `.tag`. Used for fiction tags/genres. */
 @Composable
@@ -325,17 +375,21 @@ fun AarisTag(
     color: Color = AarisColor.Muted,
 ) {
     Text(
-        text = text.uppercase(),
+        text = labelCase(text),
         modifier = modifier
             .border(1.dp, if (color == AarisColor.Muted) AarisColor.Line else color)
             .padding(horizontal = 8.dp, vertical = 4.dp),
         color = color,
-        style = TextStyle(
-            fontFamily = MonoFamily,
-            fontWeight = FontWeight.Medium,
-            fontSize = 10.sp,
-            letterSpacing = 1.2.sp,
-        ),
+        style = if (LocalReadableText.current) {
+            ReadableLabel
+        } else {
+            TextStyle(
+                fontFamily = MonoFamily,
+                fontWeight = FontWeight.Medium,
+                fontSize = 10.sp,
+                letterSpacing = 1.2.sp,
+            )
+        },
     )
 }
 
@@ -486,9 +540,9 @@ fun <T> AarisChoiceRow(
  * A `//` line that is the first thing in a scrolling screen is a section header wearing the wrong
  * clothes, and should become one of these.
  *
- * @param kicker the ordinal or mnemonic, rendered after a `§`. Uppercased for you.
- * @param title the section name. Uppercased for you.
- * @param actionLabel optional trailing action — "Refresh", "Browse all". Uppercased for you.
+ * @param kicker the ordinal or mnemonic, rendered after a `§`. Cased for you by [labelCase].
+ * @param title the section name. Cased for you by [labelCase].
+ * @param actionLabel optional trailing action — "Refresh", "Browse all". Cased for you by [labelCase].
  */
 @Composable
 fun SectionHeader(
@@ -504,18 +558,18 @@ fun SectionHeader(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            MetaText(text = "§ ${kicker.uppercase()}", color = AarisColor.Accent)
+            MetaText(text = "§ $kicker", color = AarisColor.Accent)
             if (actionLabel != null && onAction != null) {
                 TextButton(
                     onClick = onAction,
                     modifier = Modifier.heightIn(min = MinTouchTargetSize),
                 ) {
-                    Text(actionLabel.uppercase())
+                    Text(labelCase(actionLabel))
                 }
             }
         }
         Text(
-            text = title.uppercase(),
+            text = labelCase(title),
             style = MaterialTheme.typography.titleLarge,
         )
         Spacer(modifier = Modifier.height(8.dp))
