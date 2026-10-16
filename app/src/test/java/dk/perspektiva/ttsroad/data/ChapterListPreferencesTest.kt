@@ -40,4 +40,11 @@ class ChapterListPreferencesTest {
         // or everyone's saved filter silently resets on upgrade.
         assertEquals(ChapterFilter.Unplayed, chapterFilterFromStored("Unplayed"))
     }
+
+    @Test
+    fun `an empty store sorts oldest first and a stored direction is kept`() {
+        assertEquals(true, chapterSortAscendingFromStored(null))
+        assertEquals(false, chapterSortAscendingFromStored(false))
+        assertEquals(true, chapterSortAscendingFromStored(true))
+    }
 }
