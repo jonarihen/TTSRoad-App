@@ -1,5 +1,7 @@
 package dk.perspektiva.ttsroad.data
 
+import android.content.Context
+
 /**
  * Keeps the phone's copy of the shared settings in step with the account.
  *
@@ -17,6 +19,7 @@ class AccountPreferenceSync(
     private val playbackPreferences: PlaybackPreferences,
     private val readerPreferences: ReaderPreferenceStore,
     private val chapterListPreferences: ChapterListPreferences,
+    private val unsynced: UnsyncedPreferenceKeys,
 ) {
     /** What the phone currently shows, in the vocabulary the account shares. */
     private suspend fun localSnapshot(): SyncedPreferences {
@@ -44,7 +47,14 @@ class AccountPreferenceSync(
     suspend fun pull(): SyncedPreferences? {
         val server = repository.accountPreferences() ?: return null
         val local = localSnapshot()
-        val reconciled = reconcileAccountPreferences(server, local)
+        // A key changed while its PATCH could not go out is owed to the account, not taken from it
+        // (#453): the server still holds the value the user changed away from.
+        val owed = unsynced.current()
+        if (owed.isNotEmpty()) {
+            val patch = local.asPatch().filterKeys { it in owed }
+            if (repository.updateAccountPreferences(patch) != null) unsynced.remove(patch.keys)
+        }
+        val reconciled = reconcileAccountPreferences(server - owed, local)
 
         // Only what actually moved. Writing an unchanged value would wake every collector on the
         // DataStore and recompose the screens reading it for no reason.
@@ -77,45 +87,90 @@ class AccountPreferenceSync(
 
     // The push half. Each writes the local store first and then tells the account, so the setting
     // takes effect on this phone whether or not the server is reachable — and a failed PATCH is
-    // silent for the same reason [pull] is: the local value is already correct.
+    // silent for the same reason [pull] is: the local value is already correct. It is remembered,
+    // though, so the next [pull] sends it rather than reverting it.
+
+    /** Marked before the call, so a 401 or a process death mid-PATCH still leaves the key owed. */
+    private suspend fun push(changes: Map<String, Any?>) {
+        unsynced.add(changes.keys)
+        if (repository.updateAccountPreferences(changes) != null) unsynced.remove(changes.keys)
+    }
 
     suspend fun setChapterFilter(filter: ChapterFilter) {
         chapterListPreferences.setFilter(filter)
-        repository.updateAccountPreferences(chapterFilterPatch(filter))
+        push(chapterFilterPatch(filter))
     }
 
     suspend fun setAutoMarkPlayed(enabled: Boolean) {
         playbackPreferences.setAutoMarkPlayed(enabled)
-        repository.updateAccountPreferences(autoMarkPlayedPatch(enabled))
+        push(autoMarkPlayedPatch(enabled))
     }
 
     suspend fun setSleepTimerDefaultMinutes(minutes: Int) {
         playbackPreferences.setSleepTimerDefaultMinutes(minutes)
-        repository.updateAccountPreferences(sleepTimerDefaultPatch(minutes))
+        push(sleepTimerDefaultPatch(minutes))
     }
 
     suspend fun setSkipAdSegments(enabled: Boolean) {
         playbackPreferences.setSkipAdSegments(enabled)
-        repository.updateAccountPreferences(skipAdSegmentsPatch(enabled))
+        push(skipAdSegmentsPatch(enabled))
     }
 
     suspend fun setReaderFontScale(scale: Float) {
         readerPreferences.setFontScale(scale)
-        repository.updateAccountPreferences(readerFontScalePatch(scale))
+        push(readerFontScalePatch(scale))
     }
 
     suspend fun setReaderLineHeight(height: Float) {
         readerPreferences.setLineHeight(height)
-        repository.updateAccountPreferences(readerLineHeightPatch(height))
+        push(readerLineHeightPatch(height))
     }
 
     suspend fun setReaderTheme(theme: ReaderTheme) {
         readerPreferences.setTheme(theme)
-        repository.updateAccountPreferences(readerThemePatch(theme))
+        push(readerThemePatch(theme))
     }
 
     suspend fun setReaderHighlight(granularity: HighlightGranularity) {
         readerPreferences.setHighlight(granularity)
-        repository.updateAccountPreferences(readerHighlightPatch(granularity))
+        push(readerHighlightPatch(granularity))
+    }
+}
+
+/** Every key this client syncs, as the account would store [this]. */
+private fun SyncedPreferences.asPatch(): Map<String, Any?> =
+    chapterFilterPatch(chapterFilter) +
+        autoMarkPlayedPatch(autoMarkPlayed) +
+        sleepTimerDefaultPatch(sleepTimerDefaultMinutes) +
+        readerFontScalePatch(readerFontScale) +
+        readerLineHeightPatch(readerLineHeight) +
+        readerThemePatch(readerTheme) +
+        readerHighlightPatch(readerHighlight) +
+        skipAdSegmentsPatch(skipAdSegments)
+
+/**
+ * Account preference keys changed on this phone that the account has not accepted yet (#453).
+ *
+ * Device-wide like the local stores they shadow: the value is this phone's, whichever account the
+ * next successful push reaches.
+ */
+class UnsyncedPreferenceKeys(context: Context) {
+    private val prefs = context.getSharedPreferences("account_preferences_unsynced", Context.MODE_PRIVATE)
+
+    @Synchronized
+    fun current(): Set<String> = prefs.getStringSet(Key, null).orEmpty().toSet()
+
+    @Synchronized
+    fun add(keys: Set<String>) {
+        prefs.edit().putStringSet(Key, current() + keys).apply()
+    }
+
+    @Synchronized
+    fun remove(keys: Set<String>) {
+        prefs.edit().putStringSet(Key, current() - keys).apply()
+    }
+
+    private companion object {
+        const val Key = "keys"
     }
 }
