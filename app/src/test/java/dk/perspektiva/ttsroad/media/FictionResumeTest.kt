@@ -96,4 +96,26 @@ class FictionResumeTest {
         assertEquals(item.requestMetadata.mediaUri, row.requestMetadata.mediaUri)
         assertFalse(row.mediaId == item.mediaId)
     }
+
+    @Test
+    fun `a caught-up fiction replays its last chapter from the top, not from its end`() {
+        // #451: auto-advance saves a finished chapter at its duration. Resuming a caught-up serial
+        // lands on that chapter, and starting there would end it at once and skip on.
+        val last = resumeChapterIn(listOf(chapter(1, played = true), chapter(2, position = 600.0, played = true)))!!
+
+        assertEquals(2, last.resolvedChapterId)
+        assertEquals(0.0, last.startPositionSeconds, 0.0)
+        assertNull(TtsRoadMediaItems.chapter(last, serverUrl = "https://server.example.com")!!.mediaMetadata.extras?.get("position_seconds"))
+    }
+
+    @Test
+    fun `a chapter left in its last twenty seconds starts over, an ordinary one resumes`() {
+        assertEquals(0.0, chapter(1, position = 585.0).startPositionSeconds, 0.0)
+        assertEquals(300.0, chapter(1, position = 300.0).startPositionSeconds, 0.0)
+        assertEquals(
+            300.0,
+            TtsRoadMediaItems.chapter(chapter(1, position = 300.0), serverUrl = "https://server.example.com")!!.mediaMetadata.extras!!.getDouble("position_seconds"),
+            0.0,
+        )
+    }
 }

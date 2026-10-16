@@ -57,6 +57,6 @@ internal fun offlineResume(
         ?.takeIf { it.chapterId > 0 && it.chapterId == chapter.resolvedChapterId }
         ?.positionMs
         ?.takeIf { it > 0L }
-    val fromLibrary = chapter.resolvedPositionSeconds.takeIf { it > 0.0 }?.let { (it * 1000).toLong() }
+    val fromLibrary = chapter.startPositionSeconds.takeIf { it > 0.0 }?.let { (it * 1000).toLong() }
     return OfflineResume.Play(item, fromNote ?: fromLibrary ?: 0L)
 }
