@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.core.ServerUrls
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,7 +10,7 @@ class TtsRoadApplicationTest {
     @Test
     fun `image authorization is allowed for the signed-in server origin`() {
         assertTrue(
-            isSameOrigin(
+            ServerUrls.isSameOrigin(
                 "https://ttsroad.example.com/cover/book.jpg",
                 "https://ttsroad.example.com/",
             ),
@@ -19,7 +20,7 @@ class TtsRoadApplicationTest {
     @Test
     fun `image authorization is rejected for an external cover host`() {
         assertFalse(
-            isSameOrigin(
+            ServerUrls.isSameOrigin(
                 "https://www.royalroadcdn.com/public/covers-full/book.jpg",
                 "https://ttsroad.example.com/",
             ),
@@ -28,9 +29,9 @@ class TtsRoadApplicationTest {
 
     @Test
     fun `image authorization requires matching scheme and port`() {
-        assertFalse(isSameOrigin("http://ttsroad.example.com/cover/book.jpg", "https://ttsroad.example.com/"))
+        assertFalse(ServerUrls.isSameOrigin("http://ttsroad.example.com/cover/book.jpg", "https://ttsroad.example.com/"))
         assertFalse(
-            isSameOrigin(
+            ServerUrls.isSameOrigin(
                 "https://ttsroad.example.com:8443/cover/book.jpg",
                 "https://ttsroad.example.com/",
             ),
@@ -39,6 +40,6 @@ class TtsRoadApplicationTest {
 
     @Test
     fun `invalid server URL cannot receive image authorization`() {
-        assertFalse(isSameOrigin("https://ttsroad.example.com/cover/book.jpg", "not a URL"))
+        assertFalse(ServerUrls.isSameOrigin("https://ttsroad.example.com/cover/book.jpg", "not a URL"))
     }
 }
