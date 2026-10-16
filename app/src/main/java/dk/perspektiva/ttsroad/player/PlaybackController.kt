@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.player
 
+import androidx.annotation.VisibleForTesting
 import android.content.ComponentName
 import android.content.Context
 import android.os.Looper
@@ -305,7 +306,9 @@ class PlaybackController internal constructor(
         publishState(controller)
     }
 
-    fun reportedPositionMs(): Long? = controller?.currentPosition?.coerceAtLeast(0L)
+    /** Test probe: null exactly when no controller is installed. */
+    @VisibleForTesting
+    internal fun reportedPositionMs(): Long? = controller?.currentPosition?.coerceAtLeast(0L)
 
     @MainThread
     internal fun readAlongSample(): ReadAlongPlaybackSample? {

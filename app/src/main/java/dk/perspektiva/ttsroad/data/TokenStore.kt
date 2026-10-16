@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.data
 
+import androidx.annotation.VisibleForTesting
 import android.content.Context
 import android.util.Log
 import androidx.datastore.core.DataStore
@@ -298,7 +299,9 @@ class TokenStore(
         true
     }
 
-    suspend fun clearAll(): Unit = sessionMutation.withLock {
+    /** Test fixture reset; sign-out goes through the session-owned paths above. */
+    @VisibleForTesting
+    internal suspend fun clearAll(): Unit = sessionMutation.withLock {
         context.sessionDataStore.edit { it.clear() }
     }
 

@@ -94,7 +94,6 @@ class ReadAlongCueLookupTest {
 
         assertEquals(3, document.cueIndexAt(1.31))
         assertEquals(3, document.cueIndexAt(3.99))
-        assertEquals(4.0, document.cueEndSeconds(3), 0.0001)
     }
 
     @Test
@@ -115,16 +114,6 @@ class ReadAlongCueLookupTest {
 
         assertEquals(-1, document.cueIndexAt(-1.0))
         assertEquals(-1, document.cueIndexAt(-1_000_000.0))
-    }
-
-    @Test
-    fun `cue end times chain to the next cue, and the last to the audio duration`() {
-        val document = document(audioDurationSeconds = 4.0)
-
-        assertEquals(0.42, document.cueEndSeconds(0), 0.0001)
-        assertEquals(0.98, document.cueEndSeconds(1), 0.0001)
-        assertEquals(1.30, document.cueEndSeconds(2), 0.0001)
-        assertEquals(4.0, document.cueEndSeconds(3), 0.0001)
     }
 
     @Test

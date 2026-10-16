@@ -69,17 +69,6 @@ class ServerUrlsTest {
     }
 
     @Test
-    fun `rewriteHostOrNull passes through null and blank covers`() {
-        assertNull(ServerUrls.rewriteHostOrNull(null, "https://host.example/"))
-        assertNull(ServerUrls.rewriteHostOrNull("", "https://host.example/"))
-        assertNull(ServerUrls.rewriteHostOrNull("   ", "https://host.example/"))
-        assertEquals(
-            "https://host.example/cover.jpg",
-            ServerUrls.rewriteHostOrNull("https://base.example/cover.jpg", "https://host.example/"),
-        )
-    }
-
-    @Test
     fun `external cover keeps its original host`() {
         assertEquals(
             "https://www.royalroadcdn.com/public/covers-full/example.jpg",

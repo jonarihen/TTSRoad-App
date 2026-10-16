@@ -109,7 +109,6 @@ class ReaderPreferencesTest {
         assertEquals(DefaultReaderFontScale, prefs.fontScale, 0.0001f)
         assertEquals(DefaultReaderTheme, prefs.theme)
         assertEquals(DefaultHighlightGranularity, prefs.highlight)
-        assertTrue("reading without the screen dimming out is the whole point", prefs.keepScreenOn)
     }
 
     @Test

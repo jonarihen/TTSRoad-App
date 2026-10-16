@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.data
 
+import androidx.annotation.VisibleForTesting
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
@@ -175,7 +176,8 @@ class ReadAlongFileStore(
     fun size(): Int = cachedFiles().size
 
     /** How many documents are held for downloaded chapters, and so exempt from the bound. */
-    fun pinnedSize(): Int = pinnedFiles().size
+    @VisibleForTesting
+    internal fun pinnedSize(): Int = pinnedFiles().size
 
     /**
      * Drop the least recently used chapters. Last-modified is the recency signal: a fresh body

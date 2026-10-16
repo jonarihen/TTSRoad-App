@@ -205,7 +205,6 @@ data class FictionSummary(
     @param:Json(name = "rating_count") val ratingCount: Int? = null,
     @param:Json(name = "total_chapters") val totalChapters: Int = 0,
     @param:Json(name = "done_chapters") val doneChapters: Int = 0,
-    @param:Json(name = "pending_chapters") val pendingChapters: Int = 0,
     @param:Json(name = "error_chapters") val errorChapters: Int = 0,
     @param:Json(name = "processing_chapters") val processingChapters: Int = 0,
     /**
@@ -511,7 +510,6 @@ data class ChapterSummary(
     @param:Json(name = "cover_image_url") val coverImageUrl: String? = null,
     @param:Json(name = "resume_seconds") val resumeSeconds: Double? = null,
     @param:Json(name = "resume_time_label") val resumeTimeLabel: String? = null,
-    @param:Json(name = "resume_label") val resumeLabel: String? = null,
 ) {
     val resolvedChapterId: Int
         get() = id.takeIf { it > 0 } ?: apiChapterId ?: 0
@@ -675,7 +673,6 @@ data class AudioHash(
      * a whole library the first time it met an older server.
      */
     @param:Json(name = "audio_sha256") val audioSha256: String? = null,
-    @param:Json(name = "audio_filesize") val audioFileSize: Long = 0L,
     @param:Json(name = "updated_at") val updatedAt: String? = null,
 )
 
@@ -726,8 +723,6 @@ data class MaintenanceResponse(
     @param:Json(name = "excluded_count") val excludedCount: Int? = null,
     /** Fictions touched by the library-wide retry. */
     val fictions: Int? = null,
-    /** True when `poll` re-ingested the whole chapter list rather than the recent tail. */
-    @param:Json(name = "full_ingest") val fullIngest: Boolean = false,
     /** How many chapters a partial poll re-read, when it took that branch. */
     @param:Json(name = "partial_sync") val partialSync: Int? = null,
     /** Set by `apply-chapter-filter` only, and only when there was no filter to apply. */
@@ -1074,7 +1069,6 @@ data class SearchHit(
 }
 
 const val SearchKindFiction: String = "fiction"
-const val SearchKindChapter: String = "chapter"
 const val SearchKindText: String = "text"
 
 /**
@@ -1223,16 +1217,13 @@ data class PronunciationReport(
     val id: Int = 0,
     @param:Json(name = "fiction_id") val fictionId: Int = 0,
     @param:Json(name = "fiction_title") val fictionTitle: String? = null,
-    @param:Json(name = "fiction_slug") val fictionSlug: String? = null,
     @param:Json(name = "chapter_id") val chapterId: Int = 0,
     @param:Json(name = "chapter_number") val chapterNumber: Double? = null,
     @param:Json(name = "chapter_title") val chapterTitle: String? = null,
     @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
     val word: String? = null,
     val note: String? = null,
-    @param:Json(name = "reported_by") val reportedBy: String? = null,
     val resolved: Boolean = false,
-    @param:Json(name = "resolved_at") val resolvedAt: String? = null,
     @param:Json(name = "created_at") val createdAt: String? = null,
 )
 
@@ -1312,7 +1303,6 @@ data class PlaybackSyncAccepted(
 data class PlaybackSyncRejected(
     @param:Json(name = "chapter_id") val chapterId: Int = 0,
     val reason: String = "",
-    @param:Json(name = "server_updated_at") val serverUpdatedAt: String? = null,
 )
 
 data class PlaybackSyncResponse(
@@ -1450,8 +1440,6 @@ data class MobileVoice(
  */
 data class ListeningStatsResponse(
     @param:Json(name = "api_version") val apiVersion: Int = 1,
-    /** When the server computed this. Not the last time anything was listened to. */
-    @param:Json(name = "generated_at") val generatedAt: String? = null,
     /** Echoed back, and authoritative: the server clamps out-of-range values rather than guessing. */
     val weeks: Int = 0,
     val stats: ListeningStats = ListeningStats(),
@@ -1484,10 +1472,8 @@ data class ListeningStats(
     @param:Json(name = "books_finished") val booksFinished: Int = 0,
     val words: Long = 0L,
     @param:Json(name = "words_label") val wordsLabel: String = "",
-    @param:Json(name = "words_exact_label") val wordsExactLabel: String = "",
     val pages: Long = 0L,
     @param:Json(name = "pages_label") val pagesLabel: String = "",
-    @param:Json(name = "words_per_page") val wordsPerPage: Int = 0,
     /**
      * Chapters heard whose word count has not been backfilled yet.
      *
@@ -1659,7 +1645,6 @@ data class ChapterNotificationEntry(
     val dismissible: Boolean = false,
     val playable: Boolean = false,
     @param:Json(name = "created_at") val createdAt: String? = null,
-    @param:Json(name = "ready_at") val readyAt: String? = null,
     val fiction: ChapterNotificationFiction = ChapterNotificationFiction(),
     val chapter: ChapterNotificationChapter = ChapterNotificationChapter(),
     val kind: String = "chapter",

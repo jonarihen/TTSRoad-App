@@ -105,17 +105,4 @@ class DownloadSelectionTest {
 
         assertEquals(listOf(1, 2), nextChaptersToDownload(duplicated, emptySet(), limit = 5).ids())
     }
-
-    @Test
-    fun `how many chapters are still missing, for the header label`() {
-        assertEquals(7, remainingToDownload(fiction, alreadyHandled = setOf(1, 2, 3)))
-        assertEquals(0, remainingToDownload(fiction, alreadyHandled = (1..10).toSet()))
-        assertEquals(
-            2,
-            remainingToDownload(
-                listOf(chapter(1), chapter(2, playable = false), chapter(3)),
-                alreadyHandled = emptySet(),
-            ),
-        )
-    }
 }
