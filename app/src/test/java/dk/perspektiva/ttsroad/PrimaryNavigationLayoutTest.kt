@@ -4,12 +4,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -152,13 +158,46 @@ class PrimaryNavigationLayoutTest {
                     canOpenLogs = false,
                     canOpenNewChapters = true,
                     unreadNewChapters = 3,
+                    playableNewChapters = 1,
                 )
             }
         }
 
-        // Counted including chapters still converting: the whole point is that a chapter you were
-        // told about stays counted until it can actually be played.
-        compose.onNodeWithText("New chapters (3)").assertExists()
+        // Converting chapters stay counted until they can be played, but apart from the playable
+        // ones, so the row does not promise three things to listen to when there is one (#346).
+        compose.onNodeWithText("New chapters (1 ready · 2 waiting)").assertExists()
+    }
+
+    @Test
+    fun `listening tab wears a badge for playable new chapters only`() {
+        var badges by mutableStateOf(mapOf(AppRoot.Listening to 0))
+        compose.setContent {
+            TtsRoadTheme {
+                PrimaryNavigationBar(selected = AppRoot.Home, onSelect = {}, badges = badges)
+            }
+        }
+
+        compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertDoesNotExist()
+
+        compose.runOnIdle { badges = mapOf(AppRoot.Listening to 2) }
+        compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertIsDisplayed()
+            .assertTextEquals("2")
+        compose.onNodeWithContentDescription("2 new chapters ready").assertExists()
+        // The label still fits beside it on a narrow phone.
+        compose.onNodeWithText("LISTENING").assertIsDisplayed()
+
+        compose.runOnIdle { badges = mapOf(AppRoot.Listening to 250) }
+        compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertTextEquals("99+")
+    }
+
+    @Test
+    fun `new chapters row title separates ready from waiting`() {
+        assertEquals("New chapters", newChaptersRowTitle(unread = 0, playable = 0))
+        assertEquals("New chapters (2 ready)", newChaptersRowTitle(unread = 2, playable = 2))
+        assertEquals("New chapters (3 waiting)", newChaptersRowTitle(unread = 3, playable = 0))
+        assertEquals("New chapters (1 ready · 2 waiting)", newChaptersRowTitle(unread = 3, playable = 1))
+        // A stale local list can briefly hold more playable rows than the server's count.
+        assertEquals("New chapters (1 ready)", newChaptersRowTitle(unread = 1, playable = 4))
     }
 
     @Test

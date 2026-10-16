@@ -65,6 +65,28 @@ class NewChaptersState internal constructor() {
     val rows: List<ChapterNotificationEntry> get() = visibleNotifications(notifications)
 
     val hasClearable: Boolean get() = ready > 0
+
+    /**
+     * Rows with audio, read off the wire's `playable` rather than derived from the state name.
+     * What the navigation badge counts (#346): [unread] includes chapters still converting, which
+     * would promise more than the list can deliver.
+     */
+    val playable: Int get() = rows.count { it.playable }
+}
+
+/**
+ * "New chapters (2 ready · 3 waiting)". Split so the row does not present converting chapters as
+ * things to listen to (#346); "waiting" rather than "converting" because a failed conversion is
+ * counted here too.
+ */
+internal fun newChaptersRowTitle(unread: Int, playable: Int): String {
+    val ready = playable.coerceIn(0, unread.coerceAtLeast(0))
+    val waiting = unread - ready
+    val parts = listOfNotNull(
+        "$ready ready".takeIf { ready > 0 },
+        "$waiting waiting".takeIf { waiting > 0 },
+    )
+    return if (parts.isEmpty()) "New chapters" else "New chapters (${parts.joinToString(" · ")})"
 }
 
 /**

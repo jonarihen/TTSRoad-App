@@ -968,9 +968,18 @@ internal fun AppTopBar(title: String, canGoBack: Boolean, onBack: () -> Unit) {
     }
 }
 
-/** AARIS-shaped bottom navigation: four equal, square-edged, 56 dp tab targets. */
+/**
+ * AARIS-shaped bottom navigation: four equal, square-edged, 56 dp tab targets.
+ *
+ * [badges] puts a count beside a tab's label — today only Listening, for new chapters that can be
+ * played (#346). Zero draws nothing.
+ */
 @Composable
-internal fun PrimaryNavigationBar(selected: AppRoot, onSelect: (AppRoot) -> Unit) {
+internal fun PrimaryNavigationBar(
+    selected: AppRoot,
+    onSelect: (AppRoot) -> Unit,
+    badges: Map<AppRoot, Int> = emptyMap(),
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1011,17 +1020,46 @@ internal fun PrimaryNavigationBar(selected: AppRoot, onSelect: (AppRoot) -> Unit
                             .height(2.dp)
                             .background(if (isSelected) AarisColor.Accent else Color.Transparent),
                     )
-                    Text(
-                        text = root.label,
+                    val badge = badges[root] ?: 0
+                    Row(
                         modifier = Modifier.padding(vertical = 18.dp),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (isSelected) AarisColor.Accent else AarisColor.Muted,
-                        maxLines = 1,
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = root.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (isSelected) AarisColor.Accent else AarisColor.Muted,
+                            maxLines = 1,
+                        )
+                        if (badge > 0) NavigationCountBadge(badge)
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * A square accent count, the AARIS stand-in for a Material badge. Capped at 99+ so it never
+ * pushes a tab label out of a narrow phone's quarter of the bar.
+ *
+ * The spoken form says what is counted; the digits alone would read as part of the tab's name.
+ */
+@Composable
+private fun NavigationCountBadge(count: Int) {
+    val spoken = if (count == 1) "1 new chapter ready" else "$count new chapters ready"
+    Text(
+        text = if (count > 99) "99+" else count.toString(),
+        modifier = Modifier
+            .testTag("nav-badge")
+            .semantics { contentDescription = spoken }
+            .background(AarisColor.Accent)
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+        style = MaterialTheme.typography.labelSmall,
+        color = AarisColor.Bg,
+        maxLines = 1,
+    )
 }
 
 /** The mini player belongs above navigation, so the two never compete for the system-bar inset. */
@@ -1030,10 +1068,11 @@ internal fun AppBottomBar(
     selected: AppRoot,
     onSelect: (AppRoot) -> Unit,
     miniPlayer: (@Composable () -> Unit)? = null,
+    badges: Map<AppRoot, Int> = emptyMap(),
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         miniPlayer?.invoke()
-        PrimaryNavigationBar(selected = selected, onSelect = onSelect)
+        PrimaryNavigationBar(selected = selected, onSelect = onSelect, badges = badges)
     }
 }
 
@@ -1117,6 +1156,8 @@ private fun MainScaffold(
             AppBottomBar(
                 selected = selectedRoot,
                 onSelect = onRootChange,
+                // Playable only: a converting chapter is a promise, not something to go and hear.
+                badges = mapOf(AppRoot.Listening to newChapters.playable),
                 miniPlayer = if (playerState.hasMedia && screen != AppScreen.Player) {
                     {
                         MiniPlayerBar(
@@ -1167,6 +1208,7 @@ private fun MainScaffold(
                     onOpenLogs = { onScreenChange(AppScreen.Logs) },
                     onOpenNewChapters = { onScreenChange(AppScreen.NewChapters) },
                     unreadNewChapters = newChapters.unread,
+                    playableNewChapters = newChapters.playable,
                 )
 
                 is AppScreen.Fiction -> FictionScreen(
@@ -4080,6 +4122,7 @@ private fun ListeningScreen(
     onOpenLogs: () -> Unit,
     onOpenNewChapters: () -> Unit,
     unreadNewChapters: Int,
+    playableNewChapters: Int,
 ) {
     val context = LocalContext.current
     val capabilities by repository.currentCapabilities.collectAsStateWithLifecycle()
@@ -4099,6 +4142,7 @@ private fun ListeningScreen(
         canOpenLogs = canReadServerLogs(capabilities, session.isAdmin),
         canOpenNewChapters = canUseChapterNotifications(capabilities, session, capabilitiesResolved),
         unreadNewChapters = unreadNewChapters,
+        playableNewChapters = playableNewChapters,
         onOpenPlayer = onOpenPlayer,
         onOpenBookmarks = onOpenBookmarks,
         onOpenPronunciationReports = onOpenPronunciationReports,
@@ -4122,6 +4166,8 @@ internal fun ListeningScreenBody(
     canOpenNewChapters: Boolean = false,
     /** Everything unresolved, converting chapters included. Zero draws no count at all. */
     unreadNewChapters: Int = 0,
+    /** Of those, how many can be played now — the part of the count worth going to the list for. */
+    playableNewChapters: Int = 0,
     onOpenPlayer: () -> Unit = {},
     onOpenBookmarks: () -> Unit = {},
     onOpenPronunciationReports: () -> Unit = {},
@@ -4191,11 +4237,7 @@ internal fun ListeningScreenBody(
                         // The count is in the title rather than a badge: this is a list of rows,
                         // and one of them wearing a badge the others cannot is a shape the screen
                         // does not otherwise have.
-                        title = if (unreadNewChapters > 0) {
-                            "New chapters ($unreadNewChapters)"
-                        } else {
-                            "New chapters"
-                        },
+                        title = newChaptersRowTitle(unread = unreadNewChapters, playable = playableNewChapters),
                         subtitle = "Chapters pulled on serials you follow, until they can be played",
                         enabled = true,
                         onClick = onOpenNewChapters,
