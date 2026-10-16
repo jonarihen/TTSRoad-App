@@ -38,6 +38,7 @@ import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
 import dk.perspektiva.ttsroad.ui.ThinProgress
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -62,6 +63,7 @@ internal fun NewChaptersScreen(
     val library by repository.currentCapabilities.collectAsStateWithLifecycle()
     var actionError by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
     var busyId by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<Int?>(null) }
+    var clearing by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
 
     fun refresh() {
         state.refreshRequest += 1
@@ -79,15 +81,29 @@ internal fun NewChaptersScreen(
         SectionHeader(
             kicker = "09",
             title = "New chapters",
-            actionLabel = if (state.hasClearable) "Clear ${state.ready} ready" else null,
-            onAction = if (state.hasClearable) {
+            actionLabel = if (state.hasClearable && !clearing) "Clear ${state.ready} ready" else null,
+            onAction = if (state.hasClearable && !clearing) {
                 {
+                    // Caught here, not left to the scope: a dropped connection or a 500 must read as
+                    // an inline error, never as an uncaught exception that takes the process down
+                    // (#345). Success hands the reload to the poller rather than writing a second
+                    // copy of the list from here, so the rows, the counts and the "already seen"
+                    // set stay one answer.
                     scope.launch {
-                        repository.dismissReadChapterNotifications()
-                        repository.chapterNotifications()?.let { fresh ->
-                            state.notifications = fresh.notifications
-                            state.unread = fresh.unread
-                            state.ready = fresh.ready
+                        clearing = true
+                        actionError = null
+                        try {
+                            runCatching { repository.dismissReadChapterNotifications() }
+                                .onSuccess { cleared ->
+                                    if (!cleared) actionError = "Could not clear the ready chapters"
+                                }
+                                .onFailure {
+                                    if (it is CancellationException) throw it
+                                    actionError = it.message ?: "Could not clear the ready chapters"
+                                }
+                            refresh()
+                        } finally {
+                            clearing = false
                         }
                     }
                 }
