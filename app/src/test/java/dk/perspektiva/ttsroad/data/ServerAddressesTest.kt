@@ -21,6 +21,29 @@ class ServerAddressesTest {
     }
 
     @Test
+    fun `a scheme-less address matches nothing, not even itself, in every ownership check`() {
+        // The audio check used to guess https:// for it while progress and addresses did not (#457).
+        assertFalse(sameServerAddress("home.example", "https://home.example/"))
+        assertFalse(sameServerAddress("home.example", "home.example"))
+        assertFalse(
+            dk.perspektiva.ttsroad.media.sameAudioServer(
+                dk.perspektiva.ttsroad.core.AudioAuthSnapshot("home.example"),
+                dk.perspektiva.ttsroad.core.AudioAuthSnapshot("https://home.example/"),
+            ),
+        )
+        assertFalse(isAudioUnderServer("https://home.example/audio/a.mp3", "home.example"))
+    }
+
+    @Test
+    fun `audio belongs to a server only on its origin and under its path prefix`() {
+        assertTrue(isAudioUnderServer("https://Home.Example:443/audio/a.mp3", "https://home.example"))
+        assertTrue(isAudioUnderServer("https://home.example/tts/audio/a.mp3", "https://home.example/tts/"))
+        assertFalse(isAudioUnderServer("https://home.example/audio/a.mp3", "https://home.example/tts/"))
+        assertFalse(isAudioUnderServer("http://home.example/audio/a.mp3", "https://home.example/"))
+        assertFalse(isAudioUnderServer("https://home.example/covers/a.jpg", "https://home.example/"))
+    }
+
+    @Test
     fun `switching moves the address being left to the front and drops the one now in use`() {
         val after = alternatesAfterSwitch(
             current = "https://lan.example/",
