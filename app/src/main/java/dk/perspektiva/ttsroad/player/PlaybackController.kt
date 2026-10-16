@@ -224,7 +224,7 @@ class PlaybackController internal constructor(
         val serverUrl = tokenStore.current().serverUrl
         val item = TtsRoadMediaItems.chapter(chapter, fiction, serverUrl) ?: return
         val controller = controllerOrNull() ?: return
-        val startPositionMs = chapter.resolvedPositionSeconds
+        val startPositionMs = chapter.startPositionSeconds
             .takeIf { it > 0.0 }
             ?.let { (it * 1000).roundToLong() }
             ?: 0L
@@ -264,7 +264,7 @@ class PlaybackController internal constructor(
             .coerceAtLeast(0)
         // A "jump back" passes the exact historical position; otherwise resume where the server says.
         val startPositionMs = startPositionMsOverride
-            ?: built[startIndex].first.resolvedPositionSeconds
+            ?: built[startIndex].first.startPositionSeconds
                 .takeIf { it > 0.0 }
                 ?.let { (it * 1000).roundToLong() }
             ?: 0L

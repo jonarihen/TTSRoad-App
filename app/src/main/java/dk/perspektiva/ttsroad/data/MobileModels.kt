@@ -535,6 +535,20 @@ data class ChapterSummary(
     val resolvedIsPlayed: Boolean
         get() = playback?.isPlayed ?: false
 
+    /**
+     * Where playing this chapter should start, in seconds. A played chapter keeps the position it
+     * finished at (auto-advance saves the duration, a bulk mark stores it too), so starting there
+     * would end it at once and skip on (#451): it, and one within the last twenty seconds — the
+     * player's `PlayedThreshold.TailMs` — start from the top instead.
+     */
+    val startPositionSeconds: Double
+        get() {
+            val position = resolvedPositionSeconds
+            val duration = audioDuration?.takeIf { it > 0.0 }
+            if (resolvedIsPlayed || (duration != null && position >= duration - 20.0)) return 0.0
+            return position
+        }
+
     /** A chapter whose conversion failed, and which therefore has a reason worth reading. */
     val hasError: Boolean
         get() = status == ChapterStatus.Error

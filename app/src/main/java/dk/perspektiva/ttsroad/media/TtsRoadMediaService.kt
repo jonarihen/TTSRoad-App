@@ -1347,7 +1347,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
         val startIndex = built.indexOfFirst { it.first.resolvedChapterId == resolvedStart }
             .coerceAtLeast(0)
-        val startPositionMs = built[startIndex].first.resolvedPositionSeconds
+        val startPositionMs = built[startIndex].first.startPositionSeconds
             .takeIf { it > 0.0 }
             ?.let { (it * 1000).toLong() }
             ?: 0L

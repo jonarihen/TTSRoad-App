@@ -172,7 +172,7 @@ object TtsRoadMediaItems {
             putInt("fiction_id", chapter.resolvedFictionId)
             putInt("chapter_id", chapter.resolvedChapterId)
             chapter.displayNumber?.let { putDouble("display_number", it) }
-            chapter.resolvedPositionSeconds.takeIf { it > 0.0 }?.let { putDouble("position_seconds", it) }
+            chapter.startPositionSeconds.takeIf { it > 0.0 }?.let { putDouble("position_seconds", it) }
             putCompletion(chapter)
         }
         val fictionTitle = fiction?.title ?: chapter.resolvedFictionTitle
