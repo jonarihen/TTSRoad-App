@@ -37,13 +37,56 @@ internal fun crashReportingEnabled(configured: String?): Boolean =
  * shows up as `https://ttsroad.example.com`, `http://192.168.1.20:8000` and with assorted paths
  * appended — redacting only the exact configured string would miss most occurrences.
  *
+ * The bare host is redacted too, with or without its port. OkHttp's most common network errors
+ * name the host with no scheme at all — `Unable to resolve host "home.example.com"`, `Hostname
+ * home.example.com not verified`, `Failed to connect to home.example.com/203.0.113.4:8000` — and the
+ * address it resolved to, printed straight after the host, is redacted along with it.
+ *
  * Returns [text] unchanged when nothing is signed in, which is also the case where there is no
  * address to leak.
  */
 internal fun redactServerUrl(text: String?, serverUrl: String?): String? {
     if (text.isNullOrEmpty()) return text
     val origin = originOf(serverUrl) ?: return text
-    return text.replace(origin, RedactedServer, ignoreCase = true)
+    var redacted = text.replace(origin, RedactedServer, ignoreCase = true)
+    val host = hostOf(origin) ?: return redacted
+    for (form in setOf(host, host.removeSurrounding("[", "]"))) {
+        redacted = bareHostPattern(form).replace(redacted, RedactedServer)
+    }
+    return ResolvedAddressAfterRedaction.replace(redacted, RedactedServer)
+}
+
+/**
+ * [host] standing on its own, optionally with a `:port`.
+ *
+ * Bounded so a longer name that merely contains it — `tts.example.com` inside
+ * `mytts.example.com.cdn.net` — is left alone, while a host ending a sentence (`...example.com.`)
+ * or quoted (`"example.com"`) is still caught.
+ */
+private fun bareHostPattern(host: String): Regex = Regex(
+    "(?<![A-Za-z0-9.-])" + Regex.escape(host) + "(?::\\d+)?(?![A-Za-z0-9-]|\\.[A-Za-z0-9])",
+    RegexOption.IGNORE_CASE,
+)
+
+/**
+ * The resolved address OkHttp prints after the host — `<server>/203.0.113.4:8000`, or an IPv6
+ * literal — once the host itself has been replaced. A path such as `<server>/api/...` never
+ * matches: it neither starts with a dotted quad nor carries a colon.
+ */
+private val ResolvedAddressAfterRedaction = Regex(
+    Regex.escape(RedactedServer) +
+        "/(?:\\d{1,3}(?:\\.\\d{1,3}){3}|\\[?[0-9A-Fa-f]*:[0-9A-Fa-f:.%]*]?)(?::\\d+)?",
+)
+
+/** Host of an origin from [originOf], without user info or port; IPv6 literals keep brackets. */
+private fun hostOf(origin: String): String? {
+    val authority = origin.substringAfter("://").substringAfterLast('@')
+    val host = if (authority.startsWith("[")) {
+        authority.substringBefore(']') + "]"
+    } else {
+        authority.substringBefore(':')
+    }
+    return host.takeIf { it.isNotEmpty() && it != "[]" }
 }
 
 /**

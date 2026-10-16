@@ -116,4 +116,57 @@ class CrashReportingTest {
             ),
         )
     }
+
+    @Test
+    fun `the bare host in an unresolved host error is redacted`() {
+        assertEquals(
+            "java.net.UnknownHostException: Unable to resolve host \"$RedactedServer\": No address associated with hostname",
+            redactServerUrl(
+                "java.net.UnknownHostException: Unable to resolve host \"home.example.com\": No address associated with hostname",
+                "https://home.example.com",
+            ),
+        )
+    }
+
+    @Test
+    fun `the host and the address it resolved to are redacted from a connect failure`() {
+        assertEquals(
+            "Failed to connect to $RedactedServer",
+            redactServerUrl(
+                "Failed to connect to home.example.com/203.0.113.4:8000",
+                "http://home.example.com:8000",
+            ),
+        )
+    }
+
+    @Test
+    fun `a bare IP server is redacted with and without its port`() {
+        val serverUrl = "http://100.64.0.5:8000"
+
+        assertEquals("failed to connect to /$RedactedServer", redactServerUrl("failed to connect to /100.64.0.5", serverUrl))
+        assertEquals("timeout at $RedactedServer.", redactServerUrl("timeout at 100.64.0.5:8000.", serverUrl))
+    }
+
+    @Test
+    fun `a certificate error naming the host is redacted case-insensitively`() {
+        assertEquals(
+            "Hostname $RedactedServer not verified",
+            redactServerUrl("Hostname Home.Example.com not verified", "https://home.example.com/"),
+        )
+    }
+
+    @Test
+    fun `a longer name that only contains the host is left alone`() {
+        val text = "Failed to load https://cdn.home.example.com.mirror.net/cover.jpg and myhome.example.com"
+
+        assertEquals(text, redactServerUrl(text, "https://home.example.com"))
+    }
+
+    @Test
+    fun `a path after a redacted origin is not mistaken for a resolved address`() {
+        assertEquals(
+            "GET $RedactedServer/api/mobile/fictions",
+            redactServerUrl("GET https://home.example.com/api/mobile/fictions", "https://home.example.com"),
+        )
+    }
 }
