@@ -140,6 +140,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
@@ -9801,6 +9802,9 @@ private fun CoverFill(imageUrl: String?, fallback: String, modifier: Modifier, b
             text = fallback.trim().take(1).uppercase().ifBlank { "T" },
             style = MaterialTheme.typography.displaySmall,
             color = AarisColor.Accent,
+            // Decoration behind the artwork (#355): the title beside it is the real label, and a
+            // stray capital read before every title is noise.
+            modifier = Modifier.clearAndSetSemantics {},
         )
         if (model != null) {
             AsyncImage(
@@ -9827,6 +9831,9 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
             text = fallback.trim().take(1).uppercase().ifBlank { "T" },
             style = MaterialTheme.typography.headlineSmall,
             color = AarisColor.Accent,
+            // Decoration behind the artwork (#355): the title beside it is the real label, and a
+            // stray capital read before every title is noise.
+            modifier = Modifier.clearAndSetSemantics {},
         )
         if (model != null) {
             AsyncImage(
