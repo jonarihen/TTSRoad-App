@@ -37,7 +37,3 @@ fun nextChaptersToDownload(
         .take(limit)
         .toList()
 }
-
-/** How many chapters a "download all" would still have to fetch — the header's subtitle. */
-fun remainingToDownload(chapters: List<ChapterSummary>, alreadyHandled: Set<Int>): Int =
-    nextChaptersToDownload(chapters, alreadyHandled, limit = Int.MAX_VALUE).size

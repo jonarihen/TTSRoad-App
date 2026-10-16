@@ -3,7 +3,6 @@ package dk.perspektiva.ttsroad.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
@@ -43,7 +42,6 @@ data class ReaderPrefs(
     val lineHeight: Float = DefaultReaderLineHeight,
     val theme: ReaderTheme = DefaultReaderTheme,
     val highlight: HighlightGranularity = DefaultHighlightGranularity,
-    val keepScreenOn: Boolean = true,
 )
 
 /**
@@ -159,7 +157,6 @@ class LocalReaderPreferences(private val context: Context) : ReaderPreferenceSto
         val LineHeight = floatPreferencesKey("reader_line_height")
         val Theme = stringPreferencesKey("reader_theme")
         val Highlight = stringPreferencesKey("reader_highlight")
-        val KeepScreenOn = booleanPreferencesKey("reader_keep_screen_on")
     }
 
     override val prefs: Flow<ReaderPrefs> = context.readerDataStore.data
@@ -174,7 +171,6 @@ class LocalReaderPreferences(private val context: Context) : ReaderPreferenceSto
                 ),
                 theme = readerThemeOf(stored[Keys.Theme]),
                 highlight = highlightGranularityOf(stored[Keys.Highlight]),
-                keepScreenOn = stored[Keys.KeepScreenOn] ?: true,
             )
         }
 
@@ -194,10 +190,6 @@ class LocalReaderPreferences(private val context: Context) : ReaderPreferenceSto
 
     override suspend fun setHighlight(granularity: HighlightGranularity) {
         context.readerDataStore.edit { it[Keys.Highlight] = granularity.name }
-    }
-
-    suspend fun setKeepScreenOn(enabled: Boolean) {
-        context.readerDataStore.edit { it[Keys.KeepScreenOn] = enabled }
     }
 }
 

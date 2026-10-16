@@ -85,13 +85,6 @@ data class ReadAlongDocument(
         return found
     }
 
-    /** A cue ends where the next one starts; the last runs to the end of the audio. */
-    fun cueEndSeconds(index: Int): Double {
-        cues.getOrNull(index + 1)?.let { return it.startSeconds }
-        val start = cues.getOrNull(index)?.startSeconds ?: 0.0
-        return maxOf(audioDurationSeconds, start)
-    }
-
     fun highlightAt(positionSeconds: Double): ReadAlongHighlight {
         val cueIndex = cueIndexAt(positionSeconds)
         if (cueIndex < 0) return ReadAlongHighlight.None

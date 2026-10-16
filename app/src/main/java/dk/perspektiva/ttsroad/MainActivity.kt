@@ -10191,9 +10191,8 @@ private fun ReaderScreen(
             audioRecentlyActive = false
         }
     }
-    DisposableEffect(prefs.keepScreenOn, sleepTimerState.isFading, audioRecentlyActive) {
+    DisposableEffect(sleepTimerState.isFading, audioRecentlyActive) {
         view.keepScreenOn = shouldKeepReaderScreenOn(
-            preferenceEnabled = prefs.keepScreenOn,
             sleepTimerFading = sleepTimerState.isFading,
             audioRecentlyActive = audioRecentlyActive,
         )

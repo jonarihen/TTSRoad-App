@@ -18,10 +18,9 @@ import kotlin.math.roundToInt
  * The sleep timer's fade wins over both: the fade means the listener is on their way out.
  */
 fun shouldKeepReaderScreenOn(
-    preferenceEnabled: Boolean,
     sleepTimerFading: Boolean,
     audioRecentlyActive: Boolean,
-): Boolean = preferenceEnabled && !sleepTimerFading && audioRecentlyActive
+): Boolean = !sleepTimerFading && audioRecentlyActive
 
 /**
  * How long the reader keeps holding the screen after playback stops. Past this the system's own
