@@ -38,9 +38,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.text
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -286,7 +289,15 @@ fun MetaText(
 ) {
     Text(
         text = text.uppercase(),
-        modifier = modifier,
+        modifier = modifier.then(
+            // The `//` is the AARIS kicker mark, drawn for the eye; spoken it is "slash slash" in
+            // front of every section label (#355). Screen readers get the words alone.
+            if (text.startsWith(KickerMark)) {
+                Modifier.clearAndSetSemantics { this.text = AnnotatedString(spokenMetaText(text)) }
+            } else {
+                Modifier
+            },
+        ),
         color = color,
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
@@ -298,6 +309,12 @@ fun MetaText(
         ),
     )
 }
+
+private const val KickerMark = "//"
+
+/** What a screen reader is given for a [MetaText]: the visible text without its `//` kicker mark. */
+internal fun spokenMetaText(text: String): String =
+    text.removePrefix(KickerMark).trimStart().uppercase()
 
 /** Mono uppercase bordered chip — the AARIS `.tag`. Used for fiction tags/genres. */
 @Composable

@@ -80,11 +80,12 @@ class ServerSearchResultsLayoutTest {
     fun `every group heading is reachable`() {
         renderResults()
 
-        // Uppercased because that is what MetaText renders — the AARIS label style, not a typo.
+        // Uppercased because that is what MetaText renders — the AARIS label style, not a typo — and
+        // without the `//` kicker mark, which is drawn but not given to screen readers (#355).
         for ((id, title) in listOf(
-            "fictions" to "// FICTIONS (3)",
-            "chapters" to "// CHAPTER TITLES (8)",
-            "text" to "// IN THE TEXT (8)",
+            "fictions" to "FICTIONS (3)",
+            "chapters" to "CHAPTER TITLES (8)",
+            "text" to "IN THE TEXT (8)",
         )) {
             compose.onNodeWithTag(GridTag).performScrollToKey("search-heading-$id")
             compose.onNodeWithText(title).assertIsDisplayed()
@@ -121,7 +122,7 @@ class ServerSearchResultsLayoutTest {
         )
 
         compose.onNodeWithTag(GridTag).performScrollToKey("search-hit-text-0")
-        compose.onNodeWithText("// IN THE TEXT (1)").assertIsDisplayed()
+        compose.onNodeWithText("IN THE TEXT (1)").assertIsDisplayed()
     }
 
     private fun renderResults(
