@@ -199,10 +199,45 @@ class NewChaptersUiTest {
         compose.onNodeWithText("DISMISS").assertIsDisplayed().assertIsEnabled()
     }
 
+    @Test
+    fun `a failed play is shown inline instead of vanishing`() {
+        val entry = ChapterNotificationEntry(
+            id = 10,
+            state = "ready",
+            playable = true,
+            dismissible = true,
+            fiction = ChapterNotificationFiction(id = 7, title = "Test Serial"),
+            chapter = ChapterNotificationChapter(id = 101, title = "The Arrival", chapterNumber = 1.0),
+        )
+        showEntry(entry, onPlay = { throw java.io.IOException("Server unreachable") })
+
+        compose.onNodeWithText("PLAY").performClick()
+
+        compose.onNodeWithText("Server unreachable").assertIsDisplayed()
+        compose.onNodeWithText("RETRY").assertIsDisplayed()
+        // The row is usable again once the attempt has finished.
+        compose.onNodeWithText("PLAY").assertIsEnabled()
+    }
+
+    @Test
+    fun `a failed open is shown inline instead of vanishing`() {
+        val entry = ChapterNotificationEntry(
+            id = 10,
+            state = "pulled",
+            fiction = ChapterNotificationFiction(id = 7, title = "Test Serial"),
+            chapter = ChapterNotificationChapter(id = 101, title = "The Arrival", chapterNumber = 1.0),
+        )
+        showEntry(entry, onOpenFiction = { error("Fiction is gone") })
+
+        compose.onNodeWithText("Test Serial").performClick()
+
+        compose.onNodeWithText("Fiction is gone").assertIsDisplayed()
+    }
+
     private fun showEntry(
         entry: ChapterNotificationEntry,
-        onPlay: (ChapterNotificationEntry) -> Unit = {},
-        onOpenFiction: (ChapterNotificationEntry) -> Unit = {},
+        onPlay: suspend (ChapterNotificationEntry) -> Unit = {},
+        onOpenFiction: suspend (ChapterNotificationEntry) -> Unit = {},
     ): NewChaptersState {
         val state = NewChaptersState().apply {
             isLoading = false

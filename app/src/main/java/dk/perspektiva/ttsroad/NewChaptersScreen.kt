@@ -56,8 +56,8 @@ internal fun NewChaptersScreen(
     padding: PaddingValues,
     state: NewChaptersState,
     repository: TtsRoadRepository,
-    onPlay: (ChapterNotificationEntry) -> Unit,
-    onOpenFiction: (ChapterNotificationEntry) -> Unit,
+    onPlay: suspend (ChapterNotificationEntry) -> Unit,
+    onOpenFiction: suspend (ChapterNotificationEntry) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val library by repository.currentCapabilities.collectAsStateWithLifecycle()
@@ -149,13 +149,29 @@ internal fun NewChaptersScreen(
                     NewChapterRow(
                         entry = entry,
                         busy = busyId == entry.id,
+                        // Awaited here rather than fired into another scope, so a failure lands
+                        // on this screen as an inline error instead of vanishing (#348).
                         onPlay = {
-                            runCatching { onPlay(entry) }
-                                .onFailure { actionError = it.message ?: "Could not play that chapter" }
+                            scope.launch {
+                                busyId = entry.id
+                                actionError = null
+                                runCatching { onPlay(entry) }
+                                    .onFailure {
+                                        if (it is CancellationException) throw it
+                                        actionError = it.message ?: "Could not play that chapter"
+                                    }
+                                busyId = null
+                            }
                         },
                         onOpen = {
-                            runCatching { onOpenFiction(entry) }
-                                .onFailure { actionError = it.message ?: "Could not open that fiction" }
+                            scope.launch {
+                                actionError = null
+                                runCatching { onOpenFiction(entry) }
+                                    .onFailure {
+                                        if (it is CancellationException) throw it
+                                        actionError = it.message ?: "Could not open that fiction"
+                                    }
+                            }
                         },
                         onDismiss = {
                             scope.launch {
