@@ -8,6 +8,7 @@ import dk.perspektiva.ttsroad.data.ChapterListPreferences
 import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.LibraryCache
+import dk.perspektiva.ttsroad.data.LibrarySnapshotStore
 import dk.perspektiva.ttsroad.data.LocalReaderPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.ReadAlongFileStore
@@ -137,6 +138,8 @@ object ServiceLocator {
                     // too when it is running; this covers sign-out with the service already gone.
                     if (previous != null && key == null) {
                         NowPlayingStore(context).clear()
+                        // The offline copy of the library is this account's too (#327).
+                        LibrarySnapshotStore(context.applicationContext).clear()
                         runCatching { NowPlayingWidget().updateAll(context) }
                     }
                     previous = key
@@ -267,7 +270,11 @@ object ServiceLocator {
 
     fun libraryCache(context: Context): LibraryCache =
         libraryCache ?: synchronized(this) {
-            libraryCache ?: LibraryCache(repository(context)).also { libraryCache = it }
+            libraryCache ?: LibraryCache(
+                repository = repository(context),
+                snapshots = LibrarySnapshotStore(context.applicationContext),
+                accountKey = { historyAccountKey(tokenStore(context).current()) },
+            ).also { libraryCache = it }
         }
 
     fun updateManager(): UpdateManager =

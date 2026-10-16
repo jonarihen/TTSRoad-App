@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * A loaded thing, plus whether it is currently being reloaded.
@@ -50,7 +51,13 @@ data class Cached<T>(
  * Lifetime is the process, not the composition, so it is a [dk.perspektiva.ttsroad.core.ServiceLocator]
  * singleton like the other shared state. [clear] exists because that lifetime outlives a session.
  */
-class LibraryCache(private val repository: TtsRoadRepository) {
+class LibraryCache(
+    private val repository: TtsRoadRepository,
+    /** Where a loaded library is kept for an offline cold start (#327). Null keeps it in memory only. */
+    private val snapshots: LibrarySnapshotStore? = null,
+    /** The signed-in account's key for [snapshots]; null when signed out. */
+    private val accountKey: suspend () -> String? = { null },
+) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _library = MutableStateFlow(Cached<LibraryResponse>())
@@ -97,6 +104,18 @@ class LibraryCache(private val repository: TtsRoadRepository) {
     private fun chapterState(fictionId: Int) =
         chapterStates.getOrPut(fictionId) { MutableStateFlow(Cached()) }
 
+    private suspend fun writeSnapshot(library: LibraryResponse) {
+        val store = snapshots ?: return
+        val key = accountKey() ?: return
+        withContext(Dispatchers.IO) { store.write(key, library) }
+    }
+
+    private suspend fun readSnapshot(): StoredLibrary? {
+        val store = snapshots ?: return null
+        val key = accountKey() ?: return null
+        return runCatching { withContext(Dispatchers.IO) { store.read(key) } }.getOrNull()
+    }
+
     /** Load only if nothing has been loaded yet — the "opening this screen" path. */
     fun ensureLibrary() {
         if (_library.value.hasContent || libraryJob?.isActive == true) return
@@ -109,11 +128,22 @@ class LibraryCache(private val repository: TtsRoadRepository) {
         libraryJob = scope.launch {
             _library.value = _library.value.copy(isRefreshing = true, error = null, errorDetails = null)
             _library.value = runCatching { refreshedLibrary() }.fold(
-                onSuccess = { Cached(value = it) },
+                onSuccess = { library ->
+                    runCatching { writeSnapshot(library) }
+                    Cached(value = library)
+                },
                 onFailure = { failure ->
                     // Keep the stale content: a failed refresh should not throw away a library the
                     // user can still read and play from.
-                    _library.value.failedWith(failure, "Could not load library")
+                    val current = _library.value
+                    if (current.hasContent) return@fold current.failedWith(failure, "Could not load library")
+                    // Nothing in memory, as on a cold start offline: last time's library from disk,
+                    // with the reason it is not fresh shown above it (#327).
+                    val stored = readSnapshot()
+                        ?: return@fold current.failedWith(failure, "Could not load library")
+                    current.copy(value = stored.library).failedWith(failure, "Could not load library").let {
+                        it.copy(error = storedLibraryNotice(stored.savedAt, it.error))
+                    }
                 },
             )
         }

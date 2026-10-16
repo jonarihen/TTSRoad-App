@@ -50,6 +50,8 @@ import dk.perspektiva.ttsroad.data.ChapterSkips
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
+import dk.perspektiva.ttsroad.download.ChapterDownloadState
+import dk.perspektiva.ttsroad.data.LibrarySnapshotStore
 import dk.perspektiva.ttsroad.data.DefaultHeadsetButtonsSeek
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSleepTimerMinutes
@@ -68,6 +70,7 @@ import dk.perspektiva.ttsroad.data.normalizeBaseUrl
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.player.BreadcrumbPruneIntervalMs
 import dk.perspektiva.ttsroad.player.InProcessPlayer
+import dk.perspektiva.ttsroad.player.historyAccountKey
 import dk.perspektiva.ttsroad.player.NetworkReturnWatcher
 import dk.perspektiva.ttsroad.player.shouldRecoverOnNetworkReturn
 import dk.perspektiva.ttsroad.player.PendingProgressStore
@@ -109,6 +112,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -122,6 +127,9 @@ const val PlaybackFeedbackMessage = "message"
 // See TtsRoadMediaService.speechLoadControl.
 private const val SpeechMinBufferMs = 120_000
 private const val SpeechMaxBufferMs = 300_000
+
+// How long an offline resume waits for the download index to load (#327).
+private const val DownloadIndexWaitMs = 2_000L
 
 @OptIn(UnstableApi::class)
 class TtsRoadMediaService : MediaLibraryService() {
@@ -137,6 +145,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var sleepTimer: SleepTimerController
     private lateinit var fictionSpeeds: FictionSpeedPreferences
     private lateinit var nowPlayingStore: NowPlayingStore
+    private lateinit var librarySnapshots: LibrarySnapshotStore
     private var playbackSessionGeneration = 0L
     private var playbackSessionActive = false
 
@@ -227,6 +236,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         pendingProgress = ServiceLocator.pendingProgress(this)
         progressSync = ServiceLocator.progressSync(this)
         nowPlayingStore = NowPlayingStore(this)
+        librarySnapshots = LibrarySnapshotStore(this)
         // When the app's own discovery for the signed-in server succeeds (after a sign-in, or once
         // the network is back), a backlog that waited on it can go out without waiting for playback.
         serviceScope.launch {
@@ -1240,8 +1250,25 @@ class TtsRoadMediaService : MediaLibraryService() {
         if (!sessionStillCurrent(session)) return null
         if (loaded != null) {
             if (loaded != lastLibrary) searchCacheGeneration++
+            // Kept on disk for a cold start with no network (#327). Only when something other than
+            // the cursor moved: a delta that changed nothing is not worth rewriting the file.
+            val changed = loaded.copy(serverTime = null) != lastLibrary?.copy(serverTime = null)
             lastLibrary = loaded
             lastLibraryCursor = nextCursor
+            if (changed) {
+                val key = historyAccountKey(tokenStore.current())
+                withContext(Dispatchers.IO) { librarySnapshots.write(key, loaded) }
+            }
+        } else if (lastLibrary == null) {
+            // A fresh process with no network: last time's library rather than nothing, so the car
+            // can still browse and resume (#327). No cursor, so the next load that works is a full one.
+            val key = historyAccountKey(tokenStore.current())
+            val stored = withContext(Dispatchers.IO) { librarySnapshots.read(key) }
+            if (stored != null && sessionStillCurrent(session)) {
+                searchCacheGeneration++
+                lastLibrary = stored.library
+                lastLibraryCursor = null
+            }
         }
         return loaded ?: lastLibrary
     }
@@ -1360,7 +1387,41 @@ class TtsRoadMediaService : MediaLibraryService() {
         // timestamp to re-sort on, so the server's order is the contract (#330).
         val chapter = library.continueListening.firstOrNull() ?: return null
         val fictionId = chapter.resolvedFictionId.takeIf { it > 0 } ?: return null
-        return buildFictionQueue(fictionId, chapter.resolvedChapterId, session)
+        buildFictionQueue(fictionId, chapter.resolvedChapterId, session)?.let { return it }
+        if (!sessionStillCurrent(session)) return null
+        return offlineResumeQueue(chapter, library)
+    }
+
+    /**
+     * The fiction's chapters could not be fetched — offline, most likely, with the library read from
+     * disk (#327). Plays the chapter alone if it is downloaded; otherwise fails with a message that
+     * says why, rather than the generic "nothing to resume".
+     */
+    private suspend fun offlineResumeQueue(
+        chapter: ChapterSummary,
+        library: LibraryResponse,
+    ): MediaSession.MediaItemsWithStartPosition {
+        val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
+        val downloads = ServiceLocator.offlineDownloads(this).downloads
+        // The download index loads asynchronously at process start, and a cold start from the car
+        // is exactly when it may not have yet. A phone with no downloads just waits this long.
+        val known = downloads.value.ifEmpty {
+            withTimeoutOrNull(DownloadIndexWaitMs) { downloads.first { it.isNotEmpty() } }.orEmpty()
+        }
+        val note = withContext(Dispatchers.IO) { nowPlayingStore.read() }
+        return when (
+            val resume = offlineResume(
+                chapter = chapter,
+                fiction = fiction,
+                serverUrl = serverUrl(),
+                isDownloaded = { known[it]?.state == ChapterDownloadState.Downloaded },
+                note = note,
+            )
+        ) {
+            is OfflineResume.Play ->
+                MediaSession.MediaItemsWithStartPosition(listOf(resume.item), 0, resume.startPositionMs)
+            is OfflineResume.Unavailable -> throw UnsupportedOperationException(resume.message)
+        }
     }
 
     @OptIn(UnstableApi::class)
