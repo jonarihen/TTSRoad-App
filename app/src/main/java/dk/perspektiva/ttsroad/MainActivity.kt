@@ -389,7 +389,9 @@ class MainActivity : ComponentActivity() {
         ServiceLocator.offlineDownloads(this).resumeUnfinished()
         val startOnPlayer = consumeOpenPlayer(intent)
         notificationRoutes.accept(intent)
-        acceptShare(intent)
+        // A restore after process death hands back the original SEND intent: consuming it in-process
+        // does not survive that, and accepting it again would reopen the add sheet for an old share.
+        if (savedInstanceState == null) acceptShare(intent)
         val tokenStore = ServiceLocator.tokenStore(this)
         val recoveryCodesOwner = recoveryCodesOwner(
             repository = ServiceLocator.repository(this),
