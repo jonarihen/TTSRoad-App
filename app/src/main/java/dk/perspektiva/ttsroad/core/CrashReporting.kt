@@ -111,3 +111,50 @@ private inline fun String.indexOfFirst(start: Int, predicate: (Char) -> Boolean)
     for (i in start until length) if (predicate(this[i])) return i
     return length
 }
+
+/** How many signed-in servers redaction keeps remembering after the user has moved on from them. */
+internal const val RememberedServerLimit = 8
+
+/**
+ * [text] with every server in [serverUrls] redacted — the current one and those signed in to
+ * before it, whose addresses still turn up in stale breadcrumbs, cached URLs and old queue items.
+ */
+internal fun redactServerUrls(text: String?, serverUrls: Collection<String>): String? =
+    serverUrls.fold(text) { redacted, server -> redactServerUrl(redacted, server) }
+
+/**
+ * [known] with [serverUrl] moved to the front, capped at [RememberedServerLimit]. Origins only, so
+ * one server reached with assorted paths is remembered once; blank or scheme-less input is ignored.
+ */
+internal fun rememberServer(known: List<String>, serverUrl: String?): List<String> {
+    val origin = originOf(serverUrl) ?: return known
+    return (listOf(origin) + known.filterNot { it.equals(origin, ignoreCase = true) })
+        .take(RememberedServerLimit)
+}
+
+/**
+ * The host a configured DSN reports to — `sentry.example.com` from
+ * `https://<public-key>@sentry.example.com/<project>`, with its port if it has one — or null when there is no DSN. The public key
+ * is left out: it is what lets anyone submit events, and the point is only to say *where* reports go.
+ */
+internal fun crashReportingHost(configured: String?): String? {
+    val origin = originOf(crashReportingDsn(configured)) ?: return null
+    return origin.substringAfter("://").substringAfterLast('@').takeIf { it.isNotEmpty() }
+}
+
+/**
+ * The line Settings shows, so it is visible whether *this* APK — perhaps one the updater
+ * installed — reports crashes anywhere, and where.
+ */
+internal fun crashReportingStatus(configured: String?, enabledOnDevice: Boolean): String {
+    val host = crashReportingHost(configured) ?: return "Off (not configured in this build)"
+    return if (enabledOnDevice) "On → $host" else "Off on this phone (build reports to $host)"
+}
+
+/**
+ * [data] with every string value passed through [redact]. Breadcrumb data carries the HTTP
+ * integration's `url`, OkHttp's `host`, navigation routes and the like — the same address the
+ * message redaction removes, in a field it never looked at.
+ */
+internal fun redactStringValues(data: Map<String, Any?>, redact: (String) -> String?): Map<String, Any?> =
+    data.mapValues { (_, value) -> if (value is String) redact(value) ?: value else value }

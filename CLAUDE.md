@@ -117,7 +117,9 @@ on purpose: the SDK's ContentProvider would otherwise start before `core/CrashRe
 the redaction, and the first events of a session would carry the server's address. Do not re-enable
 it. The signed-in server's origin is stripped from messages, exceptions, request URLs and
 breadcrumbs before sending — a self-hosted address is usually a home address, and it is not
-diagnostic data even on your own instance.
+diagnostic data even on your own instance. Redaction covers the last few servers signed in to
+(persisted), bare hosts and breadcrumb `data` values too. Settings → About shows whether this build
+has a DSN and where it reports, and a configured build can be switched off there at runtime.
 
 Emulator hitting a backend on the same host: `http://10.0.2.2:8000`. Cleartext HTTP is enabled in
 the debug build only (`app/src/debug/`).
