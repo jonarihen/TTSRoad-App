@@ -91,6 +91,7 @@ class AccountPreferenceMappingTest {
         assertTrue(serverHidePlayed(ChapterFilter.Unplayed))
         assertTrue(!serverHidePlayed(ChapterFilter.All))
         assertTrue(!serverHidePlayed(ChapterFilter.Ready))
+        assertTrue(serverHidePlayed(ChapterFilter.UnplayedReady))
     }
 
     @Test
@@ -100,7 +101,14 @@ class AccountPreferenceMappingTest {
         assertEquals(ChapterFilter.Ready, chapterFilterFromServer(false, ChapterFilter.Ready))
         assertEquals(ChapterFilter.All, chapterFilterFromServer(false, ChapterFilter.All))
         assertEquals(ChapterFilter.All, chapterFilterFromServer(false, ChapterFilter.Unplayed))
-        assertEquals(ChapterFilter.Unplayed, chapterFilterFromServer(true, ChapterFilter.Ready))
+        assertEquals(ChapterFilter.Ready, chapterFilterFromServer(false, ChapterFilter.UnplayedReady))
+    }
+
+    @Test
+    fun `hide played on keeps the local ready switch`() {
+        assertEquals(ChapterFilter.UnplayedReady, chapterFilterFromServer(true, ChapterFilter.Ready))
+        assertEquals(ChapterFilter.Unplayed, chapterFilterFromServer(true, ChapterFilter.All))
+        assertEquals(ChapterFilter.UnplayedReady, chapterFilterFromServer(true, ChapterFilter.UnplayedReady))
     }
 
     @Test
