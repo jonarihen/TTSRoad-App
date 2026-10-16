@@ -23,7 +23,9 @@ private val AtomicFile.lock: Any get() = pathLocks.getOrPut(baseFile.absolutePat
 /**
  * Replace the file's contents with [text], or leave the previous contents in place.
  *
- * Throws on failure, like the I/O it wraps; callers decide whether a lost write matters.
+ * Throws when the write itself fails. [AtomicFile.finishWrite] only logs a failed sync, close or
+ * rename, so a write that fails at that last step is lost silently; callers already treat a lost
+ * write as survivable.
  */
 internal fun AtomicFile.writeUtf8(text: String) {
     synchronized(lock) {
@@ -44,7 +46,13 @@ internal fun AtomicFile.readUtf8OrNull(): String? =
         runCatching { if (baseFile.isFile) readFully().toString(Charsets.UTF_8) else null }.getOrNull()
     }
 
-/** Delete the file and any write debris next to it. */
+/**
+ * Delete the file and any write debris next to it — including the `.tmp` sibling the hand-rolled
+ * writes before #317 used, which a kill mid-write could leave holding the previous account's data.
+ */
 internal fun AtomicFile.deleteUnderLock() {
-    synchronized(lock) { delete() }
+    synchronized(lock) {
+        delete()
+        java.io.File(baseFile.parentFile, "${baseFile.name}.tmp").delete()
+    }
 }
