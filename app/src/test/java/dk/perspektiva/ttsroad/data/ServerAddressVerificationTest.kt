@@ -210,6 +210,38 @@ class ServerAddressVerificationTest {
     }
 
     @Test
+    fun `a server on the default localhost BASE_URL is refused before the token goes anywhere`() = runTest {
+        val store = signedIn(identity = "localhost:8787")
+        val repository = TtsRoadRepository(store)
+        // Even a candidate that would echo the same placeholder must never be asked for /me.
+        away.enqueue(capabilities("http://localhost:8787"))
+        away.enqueue(me())
+
+        val result = repository.verifyServerAddress(awayUrl, ServerAddressAction.Use)
+
+        assertFalse((result as ServerAddressResult.Refused).tokenSent)
+        assertTrue(result.message, result.message.contains("BASE_URL"))
+        assertEquals(0, away.requestCount)
+        assertEquals(homeUrl, store.current().serverUrl)
+    }
+
+    @Test
+    fun `a legacy session whose server reports a loopback identity is refused without the token`() = runTest {
+        val store = signedIn(identity = null)
+        val repository = TtsRoadRepository(store)
+        home.enqueue(capabilities("http://127.0.0.1:8000"))
+        away.enqueue(capabilities("http://127.0.0.1:8000"))
+        away.enqueue(me())
+
+        val result = repository.verifyServerAddress(awayUrl, ServerAddressAction.Remember)
+
+        assertFalse((result as ServerAddressResult.Refused).tokenSent)
+        assertNull(home.next().getHeader("Authorization"))
+        assertEquals(0, away.requestCount)
+        assertEquals(emptyList<String>(), store.current().alternateUrls)
+    }
+
+    @Test
     fun `a 401 at the candidate is not the session ending`() = runTest {
         val store = signedIn()
         val repository = TtsRoadRepository(store)

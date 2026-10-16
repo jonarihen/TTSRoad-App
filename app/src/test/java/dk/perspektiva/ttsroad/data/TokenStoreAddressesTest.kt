@@ -3,6 +3,8 @@ package dk.perspektiva.ttsroad.data
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.test.runTest
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,6 +115,42 @@ class TokenStoreAddressesTest {
 
         assertEquals(listOf("https://ts.example/"), store.current().alternateUrls)
         assertEquals("guest", store.current().username)
+    }
+
+    @Test
+    fun `a password change rotates the token and keeps the saved addresses, identity and account id`() = runTest {
+        val server = MockWebServer().apply { start() }
+        try {
+            val address = server.url("/").toString()
+            store.saveLogin(address, login("old-token"))
+            store.rememberAddress(store.current(), "https://ts.example", "tts.example")
+            val repository = TtsRoadRepository(store)
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"api_version":1,"server":{"name":"TTSRoad","base_url":"https://tts.example"},
+                       "capabilities":{"account_security":true},"limits":{}}""",
+                ),
+            )
+            repository.refreshCurrentCapabilities()
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"api_version":1,"status":"ok","token":"fresh-token","token_type":"bearer",
+                       "device_id":19,"user":{"id":1,"username":"admin","is_admin":false}}""",
+                ),
+            )
+
+            val result = repository.changePassword("old pass", "a much better pass")
+
+            assertEquals(AccountActionResult.Done(Unit), result)
+            val session = store.current()
+            assertEquals("fresh-token", session.token)
+            assertEquals(address, session.serverUrl)
+            assertEquals(listOf("https://ts.example/"), session.alternateUrls)
+            assertEquals("tts.example", session.serverIdentity)
+            assertEquals(1, session.userId)
+        } finally {
+            server.shutdown()
+        }
     }
 
     @Test

@@ -580,6 +580,15 @@ class TtsRoadRepository(
                 "checked against it. Connect over the current address and try again; if this keeps " +
                 "happening, the server is too old to support more than one address.",
         )
+        if (isPlaceholderIdentity(expected)) {
+            // The backend's default BASE_URL is http://localhost:8787, and every instance left on
+            // it reports the same identity: matching it would prove nothing, so the token stays.
+            return@withContext ServerAddressResult.Refused(
+                "This server identifies itself as $expected, which every server left on default " +
+                    "settings shares, so another address cannot be confirmed as this one. Set BASE_URL " +
+                    "on the server to its real address, then try again. Your sign-in was not sent anywhere.",
+            )
+        }
 
         val reported = try {
             DownloadCacheKeys.serverIdentity(api(candidate).capabilities().server?.baseUrl)
@@ -1400,9 +1409,13 @@ class TtsRoadRepository(
                         // The password response intentionally carries credentials, not server
                         // discovery metadata. Preserve the name already shown in Settings instead of
                         // letting saveLogin replace a branded server name with its default.
+                        //
+                        // No base_url: the server did not report one here, and the address in use
+                        // is not the server's identity. Passing it would read as a different server
+                        // and wipe the saved addresses (#372); null keeps the recorded identity.
                         server = ServerInfo(
                             name = currentSession.serverName,
-                            baseUrl = currentSession.serverUrl,
+                            baseUrl = null,
                         ),
                     ),
                 )

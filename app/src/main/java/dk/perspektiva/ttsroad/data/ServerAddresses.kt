@@ -69,6 +69,24 @@ private fun distinctAddresses(addresses: List<String>): List<String> {
     return kept
 }
 
+/**
+ * Whether [identity] (`DownloadCacheKeys.serverIdentity` form: authority plus path prefix) names
+ * no particular machine: loopback or unspecified. The backend's default `BASE_URL` is
+ * `http://localhost:8787`, so every instance left unconfigured reports the same identity, and
+ * matching it would confirm nothing about which server answered.
+ */
+internal fun isPlaceholderIdentity(identity: String?): Boolean {
+    val authority = identity?.trim()?.lowercase()?.substringBefore('/') ?: return true
+    val host = if (authority.startsWith("[")) {
+        authority.substringAfter('[').substringBefore(']')
+    } else {
+        authority.substringAfterLast('@').substringBefore(':')
+    }
+    return host.isEmpty() || host == "localhost" || host.endsWith(".localhost") ||
+        host.startsWith("127.") || host == "0.0.0.0" || host == "::1" || host == "::" ||
+        host == "0:0:0:0:0:0:0:1" || host == "0:0:0:0:0:0:0:0"
+}
+
 /** Stored as one string: addresses never contain a newline, and DataStore has no string-list type. */
 internal fun encodeAlternates(alternates: List<String>): String = alternates.joinToString("\n")
 

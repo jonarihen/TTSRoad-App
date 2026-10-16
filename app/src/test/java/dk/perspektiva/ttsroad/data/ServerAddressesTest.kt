@@ -65,6 +65,18 @@ class ServerAddressesTest {
     }
 
     @Test
+    fun `loopback and unspecified identities name no particular server`() {
+        listOf(
+            "localhost:8787", "localhost", "app.localhost", "127.0.0.1:8000", "127.1.2.3/ttsroad",
+            "0.0.0.0:8787", "[::1]:8787", "[::]", "", "  ", null,
+        ).forEach { assertTrue("$it", isPlaceholderIdentity(it)) }
+        listOf(
+            "tts.example", "tts.example:8443/ttsroad", "192.168.1.10:8000", "[fd7a:115c::1]:443",
+            "server.tailnet.ts.net", "localhost.example.com",
+        ).forEach { assertFalse("$it", isPlaceholderIdentity(it)) }
+    }
+
+    @Test
     fun `the stored form round-trips and ignores blanks`() {
         val list = listOf("https://a.example/", "http://10.0.0.5:8000/")
         assertEquals(list, decodeAlternates(encodeAlternates(list)))
