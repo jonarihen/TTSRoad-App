@@ -9,12 +9,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import dk.perspektiva.ttsroad.data.ChapterNotificationEntry
 import dk.perspektiva.ttsroad.data.ServerCapabilities
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
-import dk.perspektiva.ttsroad.data.newlyReady
-import dk.perspektiva.ttsroad.data.readyNotificationText
 import dk.perspektiva.ttsroad.data.visibleNotifications
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -97,9 +98,13 @@ internal fun newChaptersRowTitle(unread: Int, playable: Int): String {
  * anybody has opened the list. A poller owned by the screen would only find out about a new chapter
  * while you were already looking at the place it would be shown.
  *
- * The notification fires **only** on the pulled → ready transition, and never on the first look of
- * a session — see [newlyReady]. A chapter that was already ready when the app started is not news,
- * and announcing it would re-announce the backlog on every cold start.
+ * The notification fires **only** on the pulled → ready transition, compared against what this
+ * account last saw — persisted by [NewChapterSeenStore] and shared with [NewChapterPollJob], so a
+ * chapter that became ready while the app was closed is still announced (#344). The first look for
+ * an account with no record stays silent — see [newlyReady] — so a backlog is never announced.
+ *
+ * Polls only while the activity is STARTED; with the app in the background or closed, the
+ * periodic [NewChapterPollJob] takes over.
  *
  * Gated on the session as well as the capability. Discovery is unauthenticated, so a capable server
  * reports `notifications: true` while the login form is still on screen; polling there would fail
@@ -152,16 +157,25 @@ internal fun rememberNewChapters(
             latestSession?.token == owner.token
     }
     val notifier = remember(context) { NewChapterNotifier(context.applicationContext) }
-
-    // Which notices were already ready last time we looked. Null until the first successful load,
-    // which is what makes that load silent.
-    var readySeen by remember(state) { mutableStateOf<Set<Int>?>(null) }
+    // Which notices were already ready last time anything looked — on disk, shared with the
+    // background job, so a chapter that became ready while the app was closed is still news on the
+    // next cold start (#344). No record for this account reads as null, which keeps that first
+    // look silent and the backlog unannounced.
+    val seenStore = remember(context) { NewChapterSeenStore(context) }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     // Created up front rather than at the first post, so somebody can turn this off in system
     // settings *before* being interrupted rather than only in response to it.
     LaunchedEffect(session?.serverUrl, session?.token, capabilities.notifications, capabilities.follows, capabilitiesResolved) {
         if (lifetime.changed(session, capabilities, capabilitiesResolved)) notifier.clear()
-        if (available) notifier.ensureChannel()
+        if (available) {
+            notifier.ensureChannel()
+            // The poll that runs with the app closed. Scheduled here, behind the same gate as the
+            // in-app poll, so it never runs for a signed-out phone or an incapable server.
+            NewChapterPollJob.schedule(context.applicationContext)
+        } else if (session != null && !session.isLoggedIn) {
+            NewChapterPollJob.cancel(context.applicationContext)
+        }
     }
 
     LaunchedEffect(state, state.refreshRequest) {
@@ -177,53 +191,58 @@ internal fun rememberNewChapters(
             state.isUnsupported = false
             state.isLoading = false
             state.error = null
-            readySeen = null
+            // Only an actual sign-out clears the record. "Unavailable" is also the state of every
+            // cold start before capabilities resolve, and clearing then would make the first look
+            // silent again — which is the bug the record exists to fix.
+            if (session != null && !session.isLoggedIn) seenStore.clear()
             return@LaunchedEffect
         }
         var followsAsked = false
-        while (currentCoroutineContext().isActive) {
-            if (!ownsSession()) return@LaunchedEffect
-            state.isLoading = true
-            runCatching { repository.chapterNotifications() }
-                .onSuccess { response ->
-                    if (!ownsSession()) return@LaunchedEffect
-                    if (response != null) {
-                        val (fresh, seen) = newlyReady(response.notifications, readySeen)
-                        readySeen = seen
-                        state.notifications = response.notifications
-                        state.unread = response.unread
-                        state.ready = response.ready
-                        state.error = null
-                        state.isUnsupported = false
-                        state.loadedOnce = true
-                        // Asked once per explicit load, not once per poll: a failing or slow
-                        // library endpoint left this null, and every minute asked again for the
-                        // whole library (#322). Unknown stays null, which the empty note reads as
-                        // "follows something"; the next refresh tries again.
-                        if (state.followsAnything == null && !followsAsked) {
-                            followsAsked = true
-                            state.followsAnything = runCatching { repository.library().fictions.isNotEmpty() }
-                                .onFailure { if (it is CancellationException) throw it }
-                                .getOrNull()
+        // Only while the activity is at least STARTED (#344). A stopped activity keeps its
+        // composition, and this loop used to poll every minute behind the home screen; the
+        // background job is what covers that time now. Returning to the app polls at once.
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (currentCoroutineContext().isActive) {
+                if (!ownsSession()) return@repeatOnLifecycle
+                state.isLoading = true
+                runCatching { repository.chapterNotifications() }
+                    .onSuccess { response ->
+                        if (!ownsSession()) return@repeatOnLifecycle
+                        if (response != null) {
+                            state.notifications = response.notifications
+                            state.unread = response.unread
+                            state.ready = response.ready
+                            state.error = null
+                            state.isUnsupported = false
+                            state.loadedOnce = true
+                            // Asked once per explicit load, not once per poll: a failing or slow
+                            // library endpoint left this null, and every minute asked again for the
+                            // whole library (#322). Unknown stays null, which the empty note reads as
+                            // "follows something"; the next refresh tries again.
+                            if (state.followsAnything == null && !followsAsked) {
+                                followsAsked = true
+                                state.followsAnything = runCatching { repository.library().fictions.isNotEmpty() }
+                                    .onFailure { if (it is CancellationException) throw it }
+                                    .getOrNull()
+                            }
+                            if (!ownsSession()) return@repeatOnLifecycle
+                            val owner = session ?: return@repeatOnLifecycle
+                            announceNewlyReady(response.notifications, owner, seenStore, notifier) { ownsSession() }
+                        } else {
+                            state.isUnsupported = true
+                            state.error = null
+                            state.loadedOnce = true
                         }
-                        if (!ownsSession()) return@LaunchedEffect
-                        readyNotificationText(fresh)?.let { (title, body) ->
-                            notifier.notifyReady(title, body, fresh.singleOrNull(), session)
-                        }
-                    } else {
-                        state.isUnsupported = true
-                        state.error = null
-                        state.loadedOnce = true
                     }
-                }
-                .onFailure {
-                    if (it is CancellationException) throw it
-                    if (!ownsSession()) return@LaunchedEffect
-                    state.error = it.message ?: "Could not check for new chapters"
-                    state.isUnsupported = false
-                }
-            state.isLoading = false
-            delay(PollIntervalMs)
+                    .onFailure {
+                        if (it is CancellationException) throw it
+                        if (!ownsSession()) return@repeatOnLifecycle
+                        state.error = it.message ?: "Could not check for new chapters"
+                        state.isUnsupported = false
+                    }
+                state.isLoading = false
+                delay(PollIntervalMs)
+            }
         }
     }
     return state
