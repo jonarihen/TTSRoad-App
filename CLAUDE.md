@@ -249,13 +249,18 @@ Three rules are load-bearing:
   answers 409 to a dismissal of a converting chapter, and a client that worked the rule out for
   itself would be a fourth opinion about something the server enforces. An unknown state parses as
   `Pulled`, never `Ready` — guessing the latter offers Play for audio that may not exist.
-- **The notification fires only on pulled → ready**, and `newlyReady` returns nothing on the first
-  look of a session. A chapter that was already ready when the app started is not news; announcing
-  it would re-announce the backlog on every cold start. Several at once collapse into one line.
-- **The poller is hoisted to `MainScaffold`**, not the screen: the badge and the notification are
-  driven by a poll that has to run whether or not the list was ever opened. It is gated on the
-  session as well as the capability, because discovery is unauthenticated and a capable server
-  reports `notifications: true` while the login form is still on screen.
+- **The notification fires only on pulled → ready**, and only for a transition since the last look
+  *recorded for this account*. `NewChapterSeenStore` persists the ready set per account (keyed by a
+  hash, never the token), so a chapter that became ready while the app was closed is still news on
+  the next cold start — but an account with no record yet reads as `null` and `newlyReady` stays
+  silent, so the backlog is never announced. Several at once collapse into one line. The in-app poll
+  and the background job both go through `announceNewlyReady`; do not add a third path.
+- **The poll runs whether or not the list was ever opened**: in-app it is hoisted to `MainScaffold`
+  (inside `repeatOnLifecycle(STARTED)`), and with the app closed `NewChapterPollJob`, a platform
+  `JobService` (no WorkManager dependency), checks every 30 min. Both are gated by
+  `canUseChapterNotifications` — session as well as capability, because discovery is unauthenticated
+  and a capable server reports `notifications: true` while the login form is still on screen. The
+  job unschedules itself on sign-out or a resolved "no".
 
 Its own notification channel (`ttsroad_new_chapters`), so "a chapter is ready" can be silenced
 without silencing the media session. **No FCM yet**: everything posted is a rendering of state the
