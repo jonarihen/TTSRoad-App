@@ -56,6 +56,9 @@ class MediaCachesTest {
     private var serverReachable = true
     private var upstreamReads = 0
 
+    /** Set when a test leaves a thread holding the streaming cache's monitor; release would hang. */
+    private var streamingCacheWedged = false
+
     private val body = ByteArray(4096) { (it % 251).toByte() }
 
     @Before
@@ -79,7 +82,7 @@ class MediaCachesTest {
     @After
     fun tearDown() {
         downloadCache.release()
-        streamingCache.release()
+        if (!streamingCacheWedged) streamingCache.release()
     }
 
     // --- the chain -------------------------------------------------------------------------
@@ -203,6 +206,27 @@ class MediaCachesTest {
             "a lowered cap should apply to what is already on disk",
             streamingCache.cacheSpace <= body.size.toLong(),
         )
+    }
+
+    @Test
+    fun `changing the cap while the cache calls back into the evictor does not deadlock`() {
+        readThroughChain(url = "https://ttsroad.example/audio/one.mp3")
+        readThroughChain(url = "https://ttsroad.example/audio/two.mp3")
+
+        // Stand in for a loader: SimpleCache holds its own monitor while it calls the evictor.
+        val loader = Thread {
+            synchronized(streamingCache) {
+                val settings = Thread { streamingEvictor.setMaxBytes(streamingCache, body.size.toLong()) }
+                    .apply { isDaemon = true; start() }
+                // Wait until Settings is parked on a monitor, then call back in as SimpleCache would.
+                while (settings.state != Thread.State.BLOCKED && settings.isAlive) Thread.sleep(1)
+                streamingEvictor.onStartFile(streamingCache, "three", 0L, 1L)
+            }
+        }.apply { isDaemon = true; start() }
+
+        loader.join(5_000)
+        streamingCacheWedged = loader.isAlive
+        assertFalse("the loader and setMaxBytes deadlocked", loader.isAlive)
     }
 
     @Test

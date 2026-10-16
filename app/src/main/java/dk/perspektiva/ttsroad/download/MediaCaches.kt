@@ -100,8 +100,8 @@ internal fun overflowBytes(currentSize: Long, requiredSpace: Long, maxBytes: Lon
  *
  * Otherwise this is deliberately the same policy: order spans by [CacheSpan.lastTouchTimestamp] and
  * drop the oldest until the write fits. `SimpleCache` calls every method here while holding its own
- * lock, so the accounting is single-threaded; [setMaxBytes] comes from elsewhere and takes the same
- * monitor.
+ * lock, so the accounting is single-threaded; [setMaxBytes] comes from elsewhere and takes the cache's
+ * lock first, then this one.
  */
 @OptIn(UnstableApi::class)
 class ResizableLruCacheEvictor(maxBytes: Long) : CacheEvictor {
@@ -129,11 +129,16 @@ class ResizableLruCacheEvictor(maxBytes: Long) : CacheEvictor {
      * [cache] is passed rather than held because the evictor is handed to `SimpleCache`'s
      * constructor, so it cannot be given the cache it belongs to until after that returns — and a
      * reference stored back afterwards is one more thing to get wrong at shutdown.
+     *
+     * The cache's monitor is taken before this one, in the order `SimpleCache` takes them when it
+     * calls back in. The other way round, a loader holding the cache and waiting for the evictor
+     * meets this thread holding the evictor and waiting in `removeSpan`, and playback freezes.
      */
-    @Synchronized
-    fun setMaxBytes(cache: Cache, bytes: Long) {
-        maxBytes = bytes.coerceAtLeast(0L)
-        evict(cache, requiredSpace = 0L)
+    fun setMaxBytes(cache: Cache, bytes: Long) = synchronized(cache) {
+        synchronized(this) {
+            maxBytes = bytes.coerceAtLeast(0L)
+            evict(cache, requiredSpace = 0L)
+        }
     }
 
     /** Needed: the eviction order is the touch order, so touches have to be reported. */
