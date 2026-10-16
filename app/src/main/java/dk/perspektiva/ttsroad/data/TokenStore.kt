@@ -181,6 +181,10 @@ class TokenStore(
 
     override suspend fun current(): SessionState = session.first()
 
+    /** Whether any token is stored, opened or not — a Keystore failure leaves one here (#448). */
+    suspend fun hasStoredToken(): Boolean =
+        context.sessionDataStore.data.first()[Keys.Token] != null
+
     override suspend fun saveLogin(baseUrl: String, response: LoginResponse): Unit = sessionMutation.withLock {
         context.sessionDataStore.edit { prefs ->
             val address = normalizeBaseUrl(baseUrl)
