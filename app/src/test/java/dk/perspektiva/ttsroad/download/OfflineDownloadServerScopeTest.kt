@@ -157,17 +157,32 @@ class OfflineDownloadServerScopeTest {
     }
 
     @Test
-    fun `hashes recorded before scoping are claimed by the first server to record`() {
-        record.merge(mapOf(42 to "legacy"))
+    fun `a hash recorded before scoping stays with the server that owns the bare download`() {
         signIn(serverA)
-        shadowOf(Looper.getMainLooper()).idle()
+        downloads.download(chapter(serverA), address(serverA))
+        submitRequests()
+        awaitDownloaded()
+        // What an install upgraded from before scoping holds: A's hash, under no server.
+        record.merge(mapOf(42 to "legacy-a"))
 
-        record.merge(mapOf(7 to "seven"), scope(serverA))
+        // B scans first. Its chapter 42 is the scoped one, so A's hash is not B's to claim or prune.
+        signIn(serverB)
+        assertTrue(downloads.applyKeepAhead(listOf(chapter(serverB)), 42, 2, 9, address(serverB)))
+        submitRequests()
+        awaitDownloaded()
+        serverHash = "hash-b"
+        scan()
+        assertEquals(mapOf(42 to "hash-b"), record.current(scope(serverB)))
+        assertEquals(mapOf(42 to "legacy-a"), record.current())
 
-        assertEquals(mapOf(7 to "seven", 42 to "legacy"), record.current(scope(serverA)))
-        assertTrue(record.current(scope(serverB)).isEmpty())
+        // A's chapter was re-converted meanwhile: A still compares against its own old hash.
+        signIn(serverA)
+        awaitDownloaded()
+        serverHash = "hash-a-reconverted"
+        scan()
+        assertEquals(setOf(42), scanner.staleChapters.value)
+        assertEquals(mapOf(42 to "legacy-a"), record.current(scope(serverA)))
         assertTrue(record.current().isEmpty())
-        assertEquals(record.current(scope(serverA)), AudioHashRecord(context).current(scope(serverA)))
     }
 
     private fun serving(body: ByteArray) = MockWebServer().apply {

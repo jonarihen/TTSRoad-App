@@ -324,7 +324,7 @@ object ServiceLocator {
                 replacementCompleted = { scope, chapterId, hash ->
                     staleDownloads(context).replacementCompleted(chapterId, hash, scope)
                 },
-                audioHashScope = { scope -> staleDownloads(context).useScope(scope) },
+                audioHashScope = { scope, legacyOwned -> staleDownloads(context).useScope(scope, legacyOwned) },
             ).also { offlineDownloads = it }
         }
 

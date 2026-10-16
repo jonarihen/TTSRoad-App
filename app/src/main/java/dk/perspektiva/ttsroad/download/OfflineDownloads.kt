@@ -111,7 +111,7 @@ class OfflineDownloads(
      * Told the scope the signed-in server's audio hashes live under, whenever it changes (#316):
      * hashes are per server for the same reason request ids are.
      */
-    private val audioHashScope: (String?) -> Unit = {},
+    private val audioHashScope: (scope: String?, legacyOwned: Set<Int>) -> Unit = { _, _ -> },
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val readerPinLock = Any()
@@ -186,6 +186,9 @@ class OfflineDownloads(
 
     /** Every row in the index, keyed by request id. Touched on the main thread only. */
     private var rows: Map<String, IndexedDownload> = emptyMap()
+
+    /** Whether [rows] holds the whole persisted index, not only what the manager reported so far. */
+    private var indexLoaded = false
 
     /** The signed-in server's rows: chapter id -> the request id it is downloaded under. */
     @Volatile
@@ -367,7 +370,6 @@ class OfflineDownloads(
                     cacheIdentities.forServer(current.serverUrl, discovered)
                     audioAuth = snapshot
                     readAlongSupported = discovered.discoveryBaseUrl == current.serverUrl && discovered.readAlong
-                    audioHashScope(activeHashScope())
                     republish()
                     val identity = cacheIdentities.advertisedForServer(current.serverUrl, discovered)
                     if (current.isLoggedIn) adoptServerIdentity(identity) else pendingMigration = null
@@ -860,9 +862,11 @@ class OfflineDownloads(
                         while (cursor.moveToNext()) add(cursor.download)
                     }
                 }
-            }.getOrDefault(emptyList())
+            }.getOrNull()
             withContext(Dispatchers.Main.immediate) {
-                publish(loaded.filter { it.request.id !in rows })
+                publish(loaded.orEmpty().filter { it.request.id !in rows })
+                // A failed read leaves [requestIdFor] asking the index itself.
+                if (loaded != null) indexLoaded = true
             }
             refreshCacheBytes()
         }
@@ -897,6 +901,8 @@ class OfflineDownloads(
         }
         visibleRequestIds = ids
         _downloads.value = visible
+        // Before scoping every download had a bare id, so a legacy hash is the bare row owner's.
+        audioHashScope(activeHashScope(), ids.filterValues { !isScopedDownloadId(it) }.keys)
     }
 
     /**
@@ -927,15 +933,26 @@ class OfflineDownloads(
         val bare = TtsRoadMediaIds.chapter(chapterId)
         if (identity == null) return bare
         val scoped = scopedDownloadId(chapterId, identity)
-        val index = DefaultDownloadIndex(databaseProvider)
-        // An unreadable index is the one case that cannot tell whose the bare row is, and only the
-        // scoped id is certain not to land on another server's.
-        val (bareRow, scopedRow) = runCatching { index.getDownload(bare) to index.getDownload(scoped) }
-            .getOrElse { return scoped }
+        val bareOwned: Boolean?
+        val scopedHeld: Boolean
+        if (indexLoaded) {
+            // Every index row is in memory once the index has loaded, so a tap or a keep-ahead pass
+            // on the main thread does not have to query SQLite to tell whose the bare id is.
+            bareOwned = rows[bare]?.let { ownedByActiveServer(it.owner, it.uri) }
+            scopedHeld = scoped in rows
+        } else {
+            val index = DefaultDownloadIndex(databaseProvider)
+            // An unreadable index is the one case that cannot tell whose the bare row is, and only
+            // the scoped id is certain not to land on another server's.
+            val (bareRow, scopedRow) = runCatching { index.getDownload(bare) to index.getDownload(scoped) }
+                .getOrElse { return scoped }
+            bareOwned = bareRow?.let { ownedByActiveServer(it.request) }
+            scopedHeld = scopedRow != null
+        }
         return when {
-            scopedRow != null -> scoped
-            bareRow == null -> if (identityMigration.isRetainedElsewhere(bare, retainedScope())) scoped else bare
-            ownedByActiveServer(bareRow.request) -> bare
+            scopedHeld -> scoped
+            bareOwned == null -> if (identityMigration.isRetainedElsewhere(bare, retainedScope())) scoped else bare
+            bareOwned -> bare
             else -> scoped
         }
     }
