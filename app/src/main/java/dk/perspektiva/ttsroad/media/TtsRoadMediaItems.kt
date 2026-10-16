@@ -21,10 +21,28 @@ object TtsRoadMediaIds {
     const val FictionPrefix = "fiction:"
     const val ChapterPrefix = "chapter:"
 
+    /**
+     * The "Resume: Chapter N" row at the top of a fiction's chapter list (#328). Its own prefix,
+     * not the chapter's id, so the same chapter can also appear further down the list without two
+     * rows sharing an id; it carries the fiction id, and the resume point is worked out on tap.
+     */
+    const val ResumePrefix = "resume:"
+
     fun fiction(fictionId: Int): String = "$FictionPrefix$fictionId"
     fun chapter(chapterId: Int): String = "$ChapterPrefix$chapterId"
     fun fictionId(mediaId: String): Int? = mediaId.removePrefix(FictionPrefix).toIntOrNull()
     fun chapterId(mediaId: String): Int? = mediaId.removePrefix(ChapterPrefix).toIntOrNull()
+    fun resume(fictionId: Int): String = "$ResumePrefix$fictionId"
+
+    /**
+     * The fiction a media id asks to start as a whole: a fiction node played directly, or a resume
+     * row. Null for anything else, including a chapter.
+     */
+    fun playableFictionId(mediaId: String): Int? = when {
+        mediaId.startsWith(FictionPrefix) -> mediaId.removePrefix(FictionPrefix).toIntOrNull()
+        mediaId.startsWith(ResumePrefix) -> mediaId.removePrefix(ResumePrefix).toIntOrNull()
+        else -> null
+    }
 }
 
 /**
@@ -120,7 +138,9 @@ object TtsRoadMediaItems {
             .setSubtitle(subtitle)
             .setArtist(fiction.author)
             .setIsBrowsable(true)
-            .setIsPlayable(false)
+            // Playable as well (#328): starting a book you are halfway through should not mean
+            // scrolling a 400-chapter list from a driver's seat. Played, it resumes.
+            .setIsPlayable(true)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS)
 
         ServerUrls.resolveCoverOrNull(fiction.coverImageUrl, serverUrl)
@@ -267,5 +287,22 @@ object TtsRoadMediaItems {
             minutes % 60L == 0L -> "${minutes / 60} h"
             else -> "${minutes / 60} h ${minutes % 60} min"
         }
+    }
+
+    /**
+     * "Resume: Chapter 212", the first row of a fiction's chapter list (#328).
+     *
+     * Built from the chapter's own item so it carries the same artwork, URI and extras — a
+     * controller that sends the item back whole gets the chapter's queue directly — under the
+     * fiction's resume id, which is what a controller that sends only the id resolves.
+     */
+    fun resumeRow(fictionId: Int, chapterItem: MediaItem): MediaItem {
+        val metadata = chapterItem.mediaMetadata.buildUpon()
+            .setTitle("Resume: ${chapterItem.mediaMetadata.title ?: "chapter"}")
+            .build()
+        return chapterItem.buildUpon()
+            .setMediaId(TtsRoadMediaIds.resume(fictionId))
+            .setMediaMetadata(metadata)
+            .build()
     }
 }

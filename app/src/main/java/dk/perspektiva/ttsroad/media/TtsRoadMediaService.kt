@@ -1300,18 +1300,21 @@ class TtsRoadMediaService : MediaLibraryService() {
      */
     private suspend fun buildFictionQueue(
         fictionId: Int,
-        startChapterId: Int,
+        startChapterId: Int?,
         session: Long = librarySessionGeneration,
     ): MediaSession.MediaItemsWithStartPosition? {
         val (fiction, chapters) = fictionChapters(fictionId) ?: return null
         val serverUrl = serverUrl()
+        // Null asks for the fiction's own resume point: a fiction played as a whole (#328).
+        val resolvedStart = startChapterId
+            ?: resumeChapterIn(chapters, continueChapterId(fictionId))?.resolvedChapterId
         if (!sessionStillCurrent(session)) return null
         val built = chapters.mapNotNull { chapter ->
             TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)?.let { chapter to it }
         }
         if (built.isEmpty()) return null
 
-        val startIndex = built.indexOfFirst { it.first.resolvedChapterId == startChapterId }
+        val startIndex = built.indexOfFirst { it.first.resolvedChapterId == resolvedStart }
             .coerceAtLeast(0)
         val startPositionMs = built[startIndex].first.resolvedPositionSeconds
             .takeIf { it > 0.0 }
@@ -1337,12 +1340,22 @@ class TtsRoadMediaService : MediaLibraryService() {
         val session = librarySessionGeneration
         val library = library() ?: return null
         val fiction = resolveSpokenFiction(library.fictions, query) ?: return null
-        return buildFictionQueue(fiction.id, resumeChapterId(library, fiction.id), session)
+        return buildFictionQueue(fiction.id, resumeChapterId(library, fiction.id).takeIf { it > 0 }, session)
     }
 
     /**
-     * Where to start a fiction the user asked for by name: wherever they left off, or the first
-     * chapter. 0 is a safe fallback — [buildFictionQueue] coerces an unmatched id to the start.
+     * The chapter the server's continue-listening list holds for [fictionId], from the library the
+     * car is already browsing. No fetch: when there is no memo, the chapter list alone decides.
+     */
+    private fun continueChapterId(fictionId: Int): Int? =
+        lastLibrary?.continueListening
+            ?.firstOrNull { it.resolvedFictionId == fictionId }
+            ?.resolvedChapterId
+
+    /**
+     * Where to start a fiction the user asked for by name: wherever they left off. 0 when the
+     * continue list does not have it, which the caller turns into the chapter list's own resume
+     * point (#328) rather than chapter 1.
      */
     private fun resumeChapterId(library: LibraryResponse, fictionId: Int): Int =
         library.continueListening
@@ -1606,6 +1619,19 @@ class TtsRoadMediaService : MediaLibraryService() {
                 val extras = single?.mediaMetadata?.extras
                 val fictionId = extras?.getInt("fiction_id", 0)?.takeIf { it > 0 }
                 val chapterId = extras?.getInt("chapter_id", 0)?.takeIf { it > 0 }
+
+                // A fiction node played directly, or its "Resume" row (#328). The car sends these
+                // back as a bare media id, so the id alone has to be enough.
+                val wholeFiction = single?.mediaId
+                    ?.let(TtsRoadMediaIds::playableFictionId)
+                    ?.takeIf { fictionId == null || chapterId == null }
+                if (wholeFiction != null) {
+                    val sessionAtRequest = service.librarySessionGeneration
+                    service.buildFictionQueue(wholeFiction, startChapterId = null, sessionAtRequest)
+                        ?.let { return@future it }
+                    throw UnsupportedOperationException("Could not load that fiction")
+                }
+
                 if (fictionId != null && chapterId != null) {
                     val sessionAtRequest = service.librarySessionGeneration
                     service.buildFictionQueue(fictionId, chapterId, sessionAtRequest)?.let {
@@ -1815,7 +1841,13 @@ class TtsRoadMediaService : MediaLibraryService() {
             val (fiction, chapters) = service.fictionChapters(fictionId) ?: return emptyList()
             val serverUrl = service.serverUrl()
             if (!service.sessionStillCurrent(session)) return emptyList()
-            return chapters.mapNotNull { TtsRoadMediaItems.chapter(it, fiction, serverUrl) }
+            val items = chapters.mapNotNull { TtsRoadMediaItems.chapter(it, fiction, serverUrl) }
+            // A 400-chapter list starts at chapter 1; where the listener actually is goes first,
+            // so it is one tap rather than a scroll while driving (#328).
+            val resume = resumeChapterIn(chapters, service.continueChapterId(fictionId))
+                ?.let { chapter -> TtsRoadMediaItems.chapter(chapter, fiction, serverUrl) }
+                ?: return items
+            return listOf(TtsRoadMediaItems.resumeRow(fictionId, resume)) + items
         }
 
         private fun page(items: List<MediaItem>, page: Int, pageSize: Int): List<MediaItem> {
