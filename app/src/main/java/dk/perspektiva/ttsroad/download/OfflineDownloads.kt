@@ -727,7 +727,8 @@ class OfflineDownloads(
     /**
      * Everything the download cache holds that no download record claims.
      *
-     * Runs once, when the download cache is first opened. An install upgraded from before the split
+     * Runs on every launch, once the manager is up; on any install that has already been swept it
+     * finds nothing. It exists for the first launch after an upgrade from before the split, which
      * carries a store with both kinds of audio in it and no way to tell them apart except this: the
      * index names every chapter someone asked for by name, and the rest is what playback left behind
      * on its way past. Those bytes are now unreachable — read-through looks in the streaming cache —
@@ -736,8 +737,12 @@ class OfflineDownloads(
      *
      * A failed index read aborts the whole sweep. An unopenable database answers "nothing is
      * downloaded", and acting on that would delete every download on the phone.
+     *
+     * The keys are read before the index: a download added in between then has its row in the index
+     * but no key in the snapshot. The other way round, its spans would look stranded mid-download.
      */
     private fun dropStrandedStreamSpans(cache: Cache) {
+        val keys = runCatching { cache.keys.toList() }.getOrNull() ?: return
         val indexed = runCatching {
             downloadManager.downloadIndex.getDownloads().use { cursor ->
                 buildSet<String?> {
@@ -747,7 +752,7 @@ class OfflineDownloads(
         }.getOrNull() ?: return
 
         runCatching {
-            strandedStreamKeys(cache.keys.toList(), indexed).forEach(cache::removeResource)
+            strandedStreamKeys(keys, indexed).forEach(cache::removeResource)
         }
         refreshCacheBytes()
     }

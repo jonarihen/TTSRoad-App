@@ -215,6 +215,22 @@ class MediaCachesTest {
     }
 
     @Test
+    fun `a download that starts while the migration reads the index keeps its spans`() {
+        val arriving = "/audio/arriving.mp3"
+        val index = object : DownloadIndex by downloadIndex {
+            override fun getDownloads(vararg states: Int): DownloadCursor {
+                // Its row lands after this read; its first span is already on disk.
+                writeInto(downloadCache, key = arriving)
+                return downloadIndex.getDownloads(*states)
+            }
+        }
+
+        assertTrue(DownloadIdentityMigration().migrate("ttsroad.example", index, downloadCache) {})
+
+        assertTrue("a download just starting was swept as orphaned", arriving in downloadCache.keys)
+    }
+
+    @Test
     fun `an index open failure retains every cached span and download record`() {
         assertFailedMigrationRetainsLibrary(object : DownloadIndex by downloadIndex {
             override fun getDownloads(vararg states: Int): DownloadCursor {

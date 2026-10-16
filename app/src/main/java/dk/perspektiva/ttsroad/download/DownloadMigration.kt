@@ -318,6 +318,8 @@ internal class DownloadIdentityMigration(
         rekey: (DownloadRequest) -> Unit,
     ): Boolean {
         if (!shouldAdoptIdentity(identity, incoming)) return true
+        // Before the index, so a request added while it is read cannot look orphaned below.
+        val cacheKeys = runCatching { cache.keys.toList() }.getOrNull() ?: return false
         val requests = runCatching {
             index.getDownloads().use { cursor ->
                 buildList {
@@ -359,7 +361,7 @@ internal class DownloadIdentityMigration(
         if (!dispatch(incoming, index, ids, isCurrent, rekey)) return false
         if (!isCurrent()) return false
         runCatching {
-            orphanedCacheKeys(cache.keys, indexed).forEach(cache::removeResource)
+            orphanedCacheKeys(cacheKeys, indexed).forEach(cache::removeResource)
         }
         synchronized(pendingLock) {
             // Anything still here is held behind another server's row; see [reconcile].
