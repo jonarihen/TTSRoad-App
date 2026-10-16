@@ -17,25 +17,38 @@ internal class FakeSessionStore(@Volatile private var state: SessionState) : Ses
             deviceId = response.deviceId,
             expiresAt = response.expiresAt,
             userId = response.user.id,
+            serverInstanceId = normalizeInstanceId(response.server?.instanceId) ?: state.serverInstanceId,
         )
     }
 
-    override suspend fun useAddress(owner: SessionState, address: String, serverIdentity: String): Boolean {
+    override suspend fun useAddress(
+        owner: SessionState,
+        address: String,
+        serverIdentity: String?,
+        serverInstanceId: String?,
+    ): Boolean {
         if (!state.isLoggedIn || state.serverUrl != owner.serverUrl || state.token != owner.token) return false
         val next = normalizeBaseUrl(address)
         state = state.copy(
             serverUrl = next,
             alternateUrls = alternatesAfterSwitch(state.serverUrl, state.alternateUrls, next),
-            serverIdentity = serverIdentity,
+            serverIdentity = serverIdentity ?: state.serverIdentity,
+            serverInstanceId = normalizeInstanceId(serverInstanceId) ?: state.serverInstanceId,
         )
         return true
     }
 
-    override suspend fun rememberAddress(owner: SessionState, address: String, serverIdentity: String): Boolean {
+    override suspend fun rememberAddress(
+        owner: SessionState,
+        address: String,
+        serverIdentity: String?,
+        serverInstanceId: String?,
+    ): Boolean {
         if (!state.isLoggedIn || state.serverUrl != owner.serverUrl || state.token != owner.token) return false
         state = state.copy(
             alternateUrls = alternatesAfterRemember(state.serverUrl, state.alternateUrls, normalizeBaseUrl(address)),
-            serverIdentity = serverIdentity,
+            serverIdentity = serverIdentity ?: state.serverIdentity,
+            serverInstanceId = normalizeInstanceId(serverInstanceId) ?: state.serverInstanceId,
         )
         return true
     }

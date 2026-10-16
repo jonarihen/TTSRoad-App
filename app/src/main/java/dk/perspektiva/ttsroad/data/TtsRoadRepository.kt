@@ -541,10 +541,18 @@ class TtsRoadRepository(
      * The order of the checks is the security property, so it is spelled out:
      *
      * 1. **Identity, without the token.** `/api/mobile/capabilities` at [address] is unauthenticated;
-     *    the `base_url` it reports must name the same server as the session's recorded identity
-     *    (or, for a session signed in before that was recorded, what the address in use reports
-     *    now). A different server, a server that does not say, a 404 or no answer all stop here,
-     *    and the token has gone nowhere.
+     *    the server it names must be the session's. When the session knows the server's random
+     *    `instance_id` (#437), that is what is compared, and the candidate must report the same one;
+     *    otherwise its `base_url` must match the recorded identity, which is refused outright when it
+     *    is a placeholder every unconfigured install shares. For a session signed in before either
+     *    was recorded, the address in use's own (unauthenticated) answer stands in. A different
+     *    server, a server that does not say, a 404 or no answer all stop here, and the token has
+     *    gone nowhere.
+     *
+     *    Then, when the candidate advertises `session_proof` and the session has a `device_id`, it
+     *    is challenged with a fresh nonce and must return the HMAC only a server holding this
+     *    session can compute, under the same `instance_id`. A wrong proof, a 429 or any failure
+     *    stops here too, still without the token. See [SessionProof].
      * 2. **Account, with the token.** Only then is `/api/mobile/me` called at [address] with the
      *    session's credential — sent by the same per-origin interceptor as every other call, tagged
      *    for that one origin, so a redirect elsewhere still carries nothing. It must answer as the
@@ -569,29 +577,44 @@ class TtsRoadRepository(
             return@withContext ServerAddressResult.Refused("That is the address already in use.")
         }
 
-        val expected = session.serverIdentity ?: try {
-            DownloadCacheKeys.serverIdentity(api(session.serverUrl).capabilities().server?.baseUrl)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
-        } ?: return@withContext ServerAddressResult.Refused(
-            "The server in use did not say which server it is, so another address cannot be " +
-                "checked against it. Connect over the current address and try again; if this keeps " +
-                "happening, the server is too old to support more than one address.",
-        )
-        if (isPlaceholderIdentity(expected)) {
+        // What the session knows about its server. Recorded at sign-in; for a session from before
+        // that, the address in use's last discovery answer (unauthenticated, already cached, so no
+        // request) fills the gap — and only when neither is known is the address in use asked now.
+        var inUse = cachedCapabilities(session.serverUrl)
+        var expectedInstance = session.serverInstanceId ?: inUse?.serverInstanceId
+        var expectedBase = session.serverIdentity ?: DownloadCacheKeys.serverIdentity(inUse?.serverBaseUrl)
+        if (expectedInstance == null && expectedBase == null) {
+            inUse = try {
+                ServerCapabilities.from(api(session.serverUrl).capabilities())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            expectedInstance = inUse?.serverInstanceId
+            expectedBase = DownloadCacheKeys.serverIdentity(inUse?.serverBaseUrl)
+        }
+        if (expectedInstance == null && expectedBase == null) {
+            return@withContext ServerAddressResult.Refused(
+                "The server in use did not say which server it is, so another address cannot be " +
+                    "checked against it. Connect over the current address and try again; if this keeps " +
+                    "happening, the server is too old to support more than one address.",
+            )
+        }
+        if (expectedInstance == null && isPlaceholderIdentity(expectedBase)) {
             // The backend's default BASE_URL is http://localhost:8787, and every instance left on
             // it reports the same identity: matching it would prove nothing, so the token stays.
+            // An instance id (#437) does not have this problem, which is why this is only reached
+            // on the base_url path.
             return@withContext ServerAddressResult.Refused(
-                "This server identifies itself as $expected, which every server left on default " +
+                "This server identifies itself as $expectedBase, which every server left on default " +
                     "settings shares, so another address cannot be confirmed as this one. Set BASE_URL " +
                     "on the server to its real address, then try again. Your sign-in was not sent anywhere.",
             )
         }
 
-        val reported = try {
-            DownloadCacheKeys.serverIdentity(api(candidate).capabilities().server?.baseUrl)
+        val offered = try {
+            ServerCapabilities.from(api(candidate).capabilities())
         } catch (e: CancellationException) {
             throw e
         } catch (e: HttpException) {
@@ -607,15 +630,46 @@ class TtsRoadRepository(
             val described = e.toUserFacingError("Could not reach that address")
             return@withContext ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.")
         }
-        if (reported != expected) {
+        val reportedInstance = offered.serverInstanceId
+        val reportedBase = DownloadCacheKeys.serverIdentity(offered.serverBaseUrl)
+        val sameIdentity = if (expectedInstance != null) {
+            // Not "fall back to base_url when the candidate leaves instance_id out": the same server
+            // reports the same id on every address, so an answer without one is not it — and an
+            // impostor could otherwise opt out of the stronger check by omitting a field.
+            reportedInstance == expectedInstance
+        } else {
+            reportedBase == expectedBase
+        }
+        if (!sameIdentity) {
+            val said = if (expectedInstance != null) reportedInstance else reportedBase
             return@withContext ServerAddressResult.Refused(
-                if (reported == null) {
+                if (said == null) {
                     "That address does not say which server it is, so it cannot be confirmed as this " +
                         "one. Your sign-in was not sent there."
                 } else {
                     "That address is a different server. Your sign-in was not sent there."
                 },
             )
+        }
+
+        // Proof of the session, still without the token (#437). An instance id is public — anything
+        // at the typed address can repeat it — but only the server holding this session can answer
+        // the challenge. A session with no device id (signed in before it was kept, or on a server
+        // that never sent one) cannot ask, and stops at the identity comparison above.
+        val deviceId = session.deviceId
+        if (deviceId != null) {
+            if (!offered.sessionProof && inUse?.sessionProof == true) {
+                // Same server, same features on every address: one that stops offering the proof
+                // when asked from elsewhere is not it.
+                return@withContext ServerAddressResult.Refused(
+                    "That address does not offer the check this server offers, so it cannot be " +
+                        "confirmed as this one. Your sign-in was not sent there.",
+                )
+            }
+            if (offered.sessionProof) {
+                proveSession(candidate, deviceId, session.token.orEmpty(), expectedInstance ?: reportedInstance)
+                    ?.let { return@withContext it }
+            }
         }
 
         val me = try {
@@ -647,8 +701,8 @@ class TtsRoadRepository(
 
         val stored = sessionMutation.withLock {
             when (action) {
-                ServerAddressAction.Remember -> tokenStore.rememberAddress(session, candidate, expected)
-                ServerAddressAction.Use -> tokenStore.useAddress(session, candidate, expected).also { switched ->
+                ServerAddressAction.Remember -> tokenStore.rememberAddress(session, candidate, expectedBase, expectedInstance ?: reportedInstance)
+                ServerAddressAction.Use -> tokenStore.useAddress(session, candidate, expectedBase, expectedInstance ?: reportedInstance).also { switched ->
                     if (switched) {
                         // Per-address caches: the stats and read-along owners include the address,
                         // and discovery is per address. The next refresh re-asks the new one.
@@ -666,6 +720,60 @@ class TtsRoadRepository(
         }
         if (action == ServerAddressAction.Use) refreshCurrentCapabilities(forceRefresh = true)
         ServerAddressResult.Done
+    }
+
+    /**
+     * Challenge [candidate] to prove it holds the session [deviceId] names, without sending
+     * [token] (#437). Null when it did; otherwise the refusal to return, with the token unsent.
+     *
+     * The request goes through the unauthenticated service and carries [NoAuthHeader], so no
+     * `Authorization` header can reach it. The answer must carry both the right HMAC for a nonce
+     * chosen here and now — so a recorded answer is worth nothing — and [expectedInstance].
+     */
+    private suspend fun proveSession(
+        candidate: String,
+        deviceId: Int,
+        token: String,
+        expectedInstance: String?,
+    ): ServerAddressResult.Refused? {
+        val nonce = SessionProof.newNonce()
+        val answer = try {
+            api(candidate).sessionProof(SessionProofRequest(deviceId, SessionProof.encodeNonce(nonce)))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            return ServerAddressResult.Refused(
+                if (e.code() == 429) {
+                    val wait = e.response()?.headers()?.get("Retry-After")?.trim()?.toLongOrNull()
+                    "That address is limiting how often it can be checked. " +
+                        (wait?.let { "Try again in ${waitDescription(it)}. " } ?: "Try again later. ") +
+                        "Your sign-in was not sent there."
+                } else {
+                    "${plainLanguageForStatus(e.code())} Your sign-in was not sent there."
+                },
+            )
+        } catch (e: Exception) {
+            val described = e.toUserFacingError("Could not reach that address")
+            return ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.")
+        }
+        val provedInstance = normalizeInstanceId(answer.instanceId)
+        if (!SessionProof.matches(token, nonce, answer.proof) ||
+            provedInstance == null ||
+            (expectedInstance != null && provedInstance != expectedInstance)
+        ) {
+            // A wrong proof means "not this server, or this session is no longer alive there" — the
+            // server answers an unknown or revoked device the same way, by design. Either way the
+            // token has no business going there.
+            return ServerAddressResult.Refused(
+                "That address could not prove it holds this sign-in, so it was not sent there.",
+            )
+        }
+        return null
+    }
+
+    private fun waitDescription(seconds: Long): String = when {
+        seconds <= 90 -> "${seconds.coerceAtLeast(1)} seconds"
+        else -> "${(seconds + 59) / 60} minutes"
     }
 
     /** Forget a saved address of this server. The address in use cannot be forgotten this way. */
@@ -1410,9 +1518,11 @@ class TtsRoadRepository(
                         // discovery metadata. Preserve the name already shown in Settings instead of
                         // letting saveLogin replace a branded server name with its default.
                         //
-                        // No base_url: the server did not report one here, and the address in use
-                        // is not the server's identity. Passing it would read as a different server
-                        // and wipe the saved addresses (#372); null keeps the recorded identity.
+                        // No base_url or instance_id: the server did not report them here, and the
+                        // address in use is not the server's identity. Passing it would read as a
+                        // different server and wipe the saved addresses (#372); null keeps the
+                        // recorded identity and instance id (#437). The new device_id is stored,
+                        // which is what a later session proof has to name.
                         server = ServerInfo(
                             name = currentSession.serverName,
                             baseUrl = null,

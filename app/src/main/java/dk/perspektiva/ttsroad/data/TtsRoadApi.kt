@@ -43,6 +43,11 @@ interface TtsRoadApi {
     @POST("api/mobile/login")
     suspend fun login(@Body request: LoginRequest): LoginResponse
 
+    /** Unauthenticated on purpose (#437): it is how an address is checked before the token goes there. */
+    @Headers("$NoAuthHeader: 1")
+    @POST("api/mobile/session-proof")
+    suspend fun sessionProof(@Body request: SessionProofRequest): SessionProofResponse
+
     @POST("api/mobile/logout")
     suspend fun logout(): LogoutResponse
 
