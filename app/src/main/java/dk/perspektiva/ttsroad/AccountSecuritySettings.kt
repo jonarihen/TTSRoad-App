@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -47,6 +48,8 @@ import dk.perspektiva.ttsroad.data.hasUnsavedRecoveryCodes
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.MetaText
+import dk.perspektiva.ttsroad.core.userMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /** Password and two-factor controls backed by the native account-security contract (#118). */
@@ -71,7 +74,6 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
     var authenticationCode by remember { mutableStateOf("") }
     var showReissueConfirmation by remember { mutableStateOf(false) }
     var showDisable by remember { mutableStateOf(false) }
-    var disablePassword by remember { mutableStateOf("") }
     val authenticationCodeFocus = remember { FocusRequester() }
 
     fun rejected(message: String) {
@@ -335,48 +337,102 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
     }
 
     if (showDisable) {
-        AlertDialog(
-            onDismissRequest = { if (!busy) showDisable = false },
-            title = { Text("Turn off two-factor authentication?") },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text("Enter your current password to remove the second factor.")
-                    PasswordField("Current password", disablePassword) { disablePassword = it }
-                    error?.let { MetaText(text = it, color = AarisColor.Danger) }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = !busy && disablePassword.isNotBlank(),
-                    onClick = {
-                        localBusy = true
-                        error = null
-                        scope.launch {
-                            when (val result = repository.disableTwoFactor(disablePassword)) {
-                                is AccountActionResult.Done -> {
-                                    showDisable = false
-                                    disablePassword = ""
-                                    status = TwoFactorStatus(enabled = false)
-                                    note = "Two-factor authentication is off."
-                                }
-                                is AccountActionResult.Refused -> rejected(result.message)
-                                AccountActionResult.Unsupported -> rejected(
-                                    "This server no longer offers two-factor changes.",
-                                )
+        DisableTwoFactorDialog(
+            busy = busy,
+            error = error,
+            onDismiss = { showDisable = false },
+            onDisable = { password, code ->
+                localBusy = true
+                error = null
+                scope.launch {
+                    // One attempt per tap, never retried: a wrong password or code counts against
+                    // the server's login throttle, and the server's own words say which it was.
+                    try {
+                        when (val result = repository.disableTwoFactor(password, code)) {
+                            is AccountActionResult.Done -> {
+                                showDisable = false
+                                status = TwoFactorStatus(enabled = false)
+                                note = "Two-factor authentication is off."
                             }
-                            localBusy = false
+                            is AccountActionResult.Refused -> rejected(result.message)
+                            AccountActionResult.Unsupported -> rejected(
+                                "This server no longer offers two-factor changes.",
+                            )
                         }
-                    },
-                ) { Text("TURN OFF") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDisable = false }, enabled = !busy) { Text("CANCEL") }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        rejected(e.userMessage("Could not turn off two-factor authentication"))
+                    } finally {
+                        localBusy = false
+                    }
+                }
             },
         )
     }
+}
+
+/**
+ * Asks for the password **and** a current second factor before the factor can be removed
+ * (TTSRoad#423): a stolen session plus a phished password must not be enough on their own.
+ *
+ * The fields live here rather than in the caller so that a dismissal forgets them — the password
+ * and a still-valid code should not sit in composition state after the dialog is gone.
+ */
+@Composable
+internal fun DisableTwoFactorDialog(
+    busy: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onDisable: (password: String, code: String) -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Turn off two-factor authentication?") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    "Enter your current password and a code from your authenticator app, " +
+                        "or one of your recovery codes.",
+                )
+                PasswordField("Current password", password) { password = it }
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it },
+                    label = { Text("Authenticator code or recovery code") },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Ascii,
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                        imeAction = ImeAction.Done,
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    MetaText(
+                        text = it,
+                        color = AarisColor.Danger,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy && password.isNotBlank() && code.isNotBlank(),
+                onClick = { onDisable(password, code.trim()) },
+            ) { Text("TURN OFF") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("CANCEL") }
+        },
+    )
 }
 
 @Composable

@@ -491,7 +491,7 @@ class TtsRoadRepository(
         }
         val fetched = capabilities(session.serverUrl, forceRefresh)
         val current = tokenStore.current()
-        if (current.serverUrl != session.serverUrl || current.token != session.token) return fetched
+        if (!current.isSameSession(session)) return fetched
         // A cache entry exists only after a successful response or a definitive old-server 404.
         // A transient failure with no earlier answer returns Baseline too, but stays unresolved:
         // treating that provisional value as proof of a shared catalogue could destroy a saved
@@ -1457,18 +1457,25 @@ class TtsRoadRepository(
         accountAction("The server would not issue new recovery codes.") { it.reissueRecoveryCodes() }
 
     /**
-     * Turn the factor off. Requires the password, not just the session.
+     * Turn the factor off. Requires the password and a current second factor, not just the session.
      *
      * A stolen token must not be enough to strip the factor that would have stopped it being
-     * useful, which is why the server asks and why this takes a password at all.
+     * useful, and neither should a stolen token plus a phished password (TTSRoad#423) — which is
+     * why this takes both. [code] is an authenticator code or a recovery code; the server spends
+     * it, so a wrong one counts against the login throttle and a refusal must not be retried.
      */
-    suspend fun disableTwoFactor(password: String): AccountActionResult<TwoFactorCodes> =
-        accountAction("Password is incorrect.") {
-            it.disableTwoFactor(TwoFactorDisableRequest(password = password))
+    suspend fun disableTwoFactor(password: String, code: String): AccountActionResult<TwoFactorCodes> =
+        accountAction("Password or code is incorrect.") {
+            it.disableTwoFactor(
+                TwoFactorDisableRequest(
+                    password = password,
+                    code = code.trim().takeIf { trimmed -> trimmed.isNotEmpty() },
+                ),
+            )
         }
 
     /**
-     * The shared shape of the four 2FA calls: capability gate, then a 400 read as an answer.
+     * The shared shape of the four 2FA calls: capability gate, then a 400 or 429 read as an answer.
      *
      * [fallback] is only used when the server refused without a `detail`, which it does not do for
      * any of these routes — but a client that showed nothing in that case would be worse than one
@@ -1482,10 +1489,15 @@ class TtsRoadRepository(
         return try {
             AccountActionResult.Done(withAuthorizedApi { call(it) })
         } catch (e: HttpException) {
-            if (e.code() != 400) throw e
-            AccountActionResult.Refused(
-                detailMessage(e.response()?.errorBody()?.string()) ?: fallback,
-            )
+            // 400 is the server's answer (wrong password, wrong code, or its throttle message);
+            // 429 is the throttle itself. Both are shown as-is and never retried — every retry of
+            // a wrong password or code is another strike against the account's login throttle.
+            val body = e.response()?.errorBody()?.string()
+            when (e.code()) {
+                400 -> AccountActionResult.Refused(detailMessage(body) ?: fallback)
+                429 -> AccountActionResult.Refused(detailMessage(body) ?: TooManyAttemptsMessage)
+                else -> throw e
+            }
         }
     }
 
@@ -2127,3 +2139,6 @@ class TtsRoadRepository(
         }
     }
 }
+
+/** Shown for a 429 from an account-security call that carried no `detail` of its own. */
+private const val TooManyAttemptsMessage = "Too many failed attempts. Wait a few minutes and try again."

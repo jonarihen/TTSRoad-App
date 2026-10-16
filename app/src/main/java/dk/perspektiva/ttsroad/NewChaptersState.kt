@@ -114,8 +114,7 @@ internal class ChapterNotificationLifetime {
     fun changed(current: SessionState?, capabilities: ServerCapabilities, resolved: Boolean): Boolean {
         if (current == null) return false
         val previous = session
-        val accountChanged = previous != null &&
-            (previous.serverUrl != current.serverUrl || previous.token != current.token)
+        val accountChanged = previous != null && !previous.isSameSession(current)
         session = current
         if (accountChanged) flags = null
         if (!current.isLoggedIn) return previous == null || accountChanged
@@ -149,9 +148,7 @@ internal fun rememberNewChapters(
         currentCoroutineContext().ensureActive()
         val owner = session ?: return false
         val live = latestCurrentSession()
-        return latestAvailable && live.isLoggedIn && live.serverUrl == owner.serverUrl &&
-            live.token == owner.token && latestSession?.serverUrl == owner.serverUrl &&
-            latestSession?.token == owner.token
+        return latestAvailable && live.isLoggedIn && live.isSameSession(owner) && owner.isSameSession(latestSession)
     }
     val notifier = remember(context) { NewChapterNotifier(context.applicationContext) }
     // Which notices were already ready last time anything looked — on disk, shared with the

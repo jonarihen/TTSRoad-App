@@ -28,7 +28,10 @@ enum class DownloadOrigin {
 }
 
 data class ChapterDownloadSpec(
-    /** Same string as the chapter's media id, so a row can look its own download up. */
+    /**
+     * The chapter's media id. [OfflineDownloads] swaps in [scopedDownloadId] when another server
+     * already holds that id, and maps rows back to media ids for everything that reads them.
+     */
     val id: String,
     /** Absolute URL on the host the user actually signed in to. */
     val url: String,
@@ -69,6 +72,23 @@ data class DownloadIds(
 
 private const val AutoMarker = "auto"
 private const val ReplacementMarker = "replace"
+
+/**
+ * Media3 keys its whole download index on the request id, and chapter ids are only unique per server
+ * (#316). The bare `chapter:<id>` stays with whichever server holds it first — every download made
+ * before this, and every one on a phone that only knows one server — and a second server whose
+ * chapter shares the number downloads under `chapter:<id>@<identity>` instead.
+ */
+private const val ScopedIdSeparator = '@'
+
+/** The request id [chapterId] downloads under on the server filed under [identity] when the bare id is taken. */
+fun scopedDownloadId(chapterId: Int, identity: String): String =
+    TtsRoadMediaIds.chapter(chapterId) + ScopedIdSeparator + identity
+
+fun isScopedDownloadId(id: String): Boolean = ScopedIdSeparator in id
+
+/** The chapter a download request id names, bare or scoped. */
+fun chapterIdOfDownload(id: String): Int? = TtsRoadMediaIds.chapterId(id.substringBefore(ScopedIdSeparator))
 
 /**
  * Build the download for [chapter], or null when there is nothing to download yet — a chapter still

@@ -64,6 +64,10 @@ object DownloadCacheKeys {
      */
     fun isScoped(key: String): Boolean = key.isNotBlank() && !key.startsWith("/")
 
+    /** The server identity a scoped [key] is filed under, or null for a bare 0.8.0 path key. */
+    fun identityOf(key: String): String? =
+        key.takeIf(::isScoped)?.substringBefore(Separator, missingDelimiterValue = "")?.takeIf { it.isNotEmpty() }
+
     /**
      * The identity to scope keys by for a server reporting [baseUrl], or null when it reports
      * nothing usable.

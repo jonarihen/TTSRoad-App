@@ -575,7 +575,7 @@ private fun TtsRoadApp(
                 load = { repository.chapters(it, playableOnly = true) },
                 stillAllowed = {
                     val current = tokenStore.current()
-                    current.serverUrl == owner.serverUrl && current.token == owner.token &&
+                    current.isSameSession(owner) &&
                         canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
                 },
                 playQueue = { response, chapterId ->
@@ -1328,7 +1328,7 @@ private fun MainScaffold(
                             load = { repository.chapters(it, playableOnly = true) },
                             stillAllowed = {
                                 val current = ServiceLocator.tokenStore(context).current()
-                                current.serverUrl == session.serverUrl && current.token == session.token &&
+                                current.isSameSession(session) &&
                                     canUseChapterNotifications(repository.currentCapabilities.value, current, repository.currentCapabilitiesResolved.value)
                             },
                             playQueue = { response, chapterId ->
@@ -5464,8 +5464,9 @@ internal fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MetaText(text = formatStorageSize(cacheBytes), color = AarisColor.Accent)
                     Text(
-                        text = "Every downloaded chapter is removed, along with the audio kept " +
-                            "from streaming. Playback progress is stored on the server and is " +
+                        text = "Every downloaded chapter on this phone is removed, from every " +
+                            "server you have signed in to, along with the audio kept from " +
+                            "streaming. Playback progress is stored on the server and is " +
                             "not affected.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = AarisColor.Muted,
