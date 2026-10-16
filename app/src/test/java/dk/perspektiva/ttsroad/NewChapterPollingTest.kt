@@ -166,6 +166,17 @@ class NewChapterPollingTest {
             context,
             repository = TtsRoadRepository(FakeSessionStore(signedOut)),
             currentSession = { signedOut },
+            hasStoredToken = { true },
+        )
+        // A stored token that could not be opened is a Keystore failure, not a sign-out (#448).
+        assertEquals(0, polls.get())
+        assertNotNull(scheduler.getPendingJob(NewChapterPollJob.JobId))
+
+        NewChapterPollJob.runCheck(
+            context,
+            repository = TtsRoadRepository(FakeSessionStore(signedOut)),
+            currentSession = { signedOut },
+            hasStoredToken = { false },
         )
         assertEquals(0, polls.get())
         assertNull(scheduler.getPendingJob(NewChapterPollJob.JobId))

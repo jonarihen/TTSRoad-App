@@ -35,7 +35,16 @@ class LastOpenedTokenTest {
         fail = false
 
         assertEquals("plain:enc1:a", cache.open("enc1:a"))
-        assertEquals(listOf("enc1:a", "enc1:a"), decrypted)
+        // Two attempts for the failed open, one for the successful one.
+        assertEquals(listOf("enc1:a", "enc1:a", "enc1:a"), decrypted)
+    }
+
+    @Test
+    fun `a single decrypt failure followed by success yields the token`() {
+        var failures = 1
+        val flaky = LastOpenedToken { stored -> if (failures-- > 0) null else "plain:$stored" }
+
+        assertEquals("plain:enc1:a", flaky.open("enc1:a"))
     }
 
     @Test

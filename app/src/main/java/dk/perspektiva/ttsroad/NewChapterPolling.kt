@@ -177,10 +177,13 @@ class NewChapterPollJob : JobService() {
             currentSession: suspend () -> SessionState = { ServiceLocator.tokenStore(context).current() },
             store: NewChapterSeenStore = NewChapterSeenStore(context),
             notifier: NewChapterNotifier = NewChapterNotifier(context.applicationContext),
+            hasStoredToken: suspend () -> Boolean = { ServiceLocator.tokenStore(context).hasStoredToken() },
         ) {
             val session = currentSession()
             if (!session.isLoggedIn) {
-                cancel(context)
+                // A token that is stored but could not be opened is a Keystore failure, not a
+                // sign-out: stay scheduled and let the next period try again (#448).
+                if (!hasStoredToken()) cancel(context)
                 return
             }
             repository.refreshCurrentCapabilities()

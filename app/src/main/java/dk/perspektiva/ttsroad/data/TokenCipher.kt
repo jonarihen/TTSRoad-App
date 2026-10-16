@@ -101,7 +101,8 @@ class KeystoreTokenCipher : TokenCipher {
  * nonce) or a sign-out (no value at all) is never answered from a stale entry.
  *
  * Only successful opens are remembered: a value that could not be opened is tried again next time,
- * in case the keystore failure was transient.
+ * in case the keystore failure was transient. A failure is also retried once on the spot, as a seal
+ * is — a one-off Keystore hiccup right after boot would otherwise read as signed out (#448).
  */
 internal class LastOpenedToken(private val decrypt: (String) -> String?) {
     private class Entry(val stored: String, val plaintext: String)
@@ -112,7 +113,7 @@ internal class LastOpenedToken(private val decrypt: (String) -> String?) {
 
     fun open(stored: String): String? {
         entry?.takeIf { it.stored == stored }?.let { return it.plaintext }
-        return decrypt(stored)?.also { entry = Entry(stored, it) }
+        return (decrypt(stored) ?: decrypt(stored))?.also { entry = Entry(stored, it) }
     }
 
     /** Record a value just sealed, so the first read after sign-in does not decrypt it again. */
