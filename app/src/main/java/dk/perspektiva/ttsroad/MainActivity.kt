@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -380,6 +381,7 @@ class MainActivity : ComponentActivity() {
         ServiceLocator.offlineDownloads(this).resumeUnfinished()
         val startOnPlayer = consumeOpenPlayer(intent)
         notificationRoutes.accept(intent)
+        acceptShare(intent)
         val tokenStore = ServiceLocator.tokenStore(this)
         val recoveryCodesOwner = recoveryCodesOwner(
             repository = ServiceLocator.repository(this),
@@ -424,6 +426,17 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         if (consumeOpenPlayer(intent)) openPlayerRequests.tryEmit(Unit)
         notificationRoutes.accept(intent)
+        acceptShare(intent)
+    }
+
+    /** A link shared in waits in [SharedFictionInbox]; TtsRoadApp routes it once it can (#347). */
+    private fun acceptShare(intent: Intent?) {
+        when (val shared = consumeSharedFictionLink(intent)) {
+            is SharedFictionLink.Link -> SharedFictionInbox.offer(shared.url)
+            SharedFictionLink.NotALink ->
+                Toast.makeText(this, SharedNotALinkMessage, Toast.LENGTH_LONG).show()
+            null -> Unit
+        }
     }
 
     companion object {
@@ -547,6 +560,39 @@ private fun TtsRoadApp(
             repository.currentCapabilitiesResolved.value
         },
     )
+    // A fiction shared in from the browser (#347): straight to Browse and the add sheet when this
+    // account can add one, held through sign-in when nobody is signed in yet.
+    val sharedLink by SharedFictionInbox.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(
+        sharedLink,
+        session?.isLoggedIn,
+        session?.isAdmin,
+        notificationCapabilitiesResolved,
+        notificationCapabilities.fictionManagement,
+    ) {
+        val url = sharedLink ?: return@LaunchedEffect
+        val action = sharedLinkAction(
+            link = SharedFictionLink.Link(url),
+            signedIn = session?.isLoggedIn == true,
+            capabilitiesResolved = notificationCapabilitiesResolved,
+            isAdmin = session?.isAdmin == true,
+            canAddByUrl = notificationCapabilities.fictionManagement,
+        )
+        when (action) {
+            SharedLinkAction.WaitForSignIn -> if (session != null) {
+                Toast.makeText(context, SharedSignInFirstMessage, Toast.LENGTH_LONG).show()
+            }
+
+            SharedLinkAction.OpenAddSheet -> backStack = backStack.switchToRoot(AppRoot.Browse)
+
+            SharedLinkAction.CannotAdd -> {
+                SharedFictionInbox.clear()
+                Toast.makeText(context, SharedCannotAddMessage, Toast.LENGTH_LONG).show()
+            }
+
+            SharedLinkAction.WaitForServer, SharedLinkAction.NotALink -> Unit
+        }
+    }
     val newChapters = rememberNewChapters(
         repository, session, notificationCapabilities, tokenStore::current,
         notificationCapabilitiesResolved, notificationRoutes.lifetime,
@@ -6784,6 +6830,13 @@ internal fun FictionsScreen(
         appliedBrowseSort = next
     }
 
+    // A shared link is taken by the add section, which is the grid's first row — bring it into
+    // composition, or a browse list scrolled far down would leave the link waiting unseen (#347).
+    val sharedLinkWaiting by SharedFictionInbox.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(sharedLinkWaiting) {
+        if (sharedLinkWaiting != null && gridState.firstVisibleItemIndex > 0) gridState.scrollToItem(0)
+    }
+
     LaunchedEffect(browseAll) {
         if (browseAll) cache.ensureBrowseAll() else cache.ensureLibrary()
     }
@@ -7527,6 +7580,17 @@ internal fun AddFictionSection(
     // process death is better than restoring a half-filled form whose URL field is also empty.
     var options by remember { mutableStateOf(AddFictionOptions()) }
     var voices by remember { mutableStateOf<List<MobileVoice>?>(null) }
+
+    // A fiction page shared in from the browser opens this sheet with its link filled in (#347).
+    val sharedLink by SharedFictionInbox.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(sharedLink, canAddByUrl) {
+        if (!canAddByUrl || sharedLink == null) return@LaunchedEffect
+        SharedFictionInbox.take()?.let { shared ->
+            url = shared
+            message = null
+            showAddSheet = true
+        }
+    }
 
     // Only once the sheet is open, and only on a server that has the catalogue: this is a few
     // hundred rows fetched to fill a control most adds never touch.
