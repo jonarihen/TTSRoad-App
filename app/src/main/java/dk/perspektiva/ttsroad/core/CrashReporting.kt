@@ -133,6 +133,15 @@ internal fun rememberServer(known: List<String>, serverUrl: String?): List<Strin
 }
 
 /**
+ * [known] with every address in [serverUrls] remembered, the first ending up at the front — the
+ * address in use, then the other addresses of the same server (#372). Those others are contacted
+ * when they are checked and switched to, so their names can reach a report as easily as the one in
+ * use does.
+ */
+internal fun rememberServers(known: List<String>, serverUrls: List<String>): List<String> =
+    serverUrls.asReversed().fold(known) { remembered, url -> rememberServer(remembered, url) }
+
+/**
  * The host a configured DSN reports to — `sentry.example.com` from
  * `https://<public-key>@sentry.example.com/<project>`, with its port if it has one — or null when there is no DSN. The public key
  * is left out: it is what lets anyone submit events, and the point is only to say *where* reports go.

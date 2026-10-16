@@ -17,7 +17,7 @@ class TtsRoadApplication : Application(), ImageLoaderFactory {
         ServiceLocator.init(this)
         // After the locator, because the redaction reads the signed-in server through it. Does
         // nothing at all unless a DSN was configured — see CrashReporting.
-        CrashReporter.start(this, ServiceLocator.tokenStore(this).session.map { it.serverUrl })
+        CrashReporter.start(this, ServiceLocator.tokenStore(this).session.map { it.knownAddresses })
     }
 
     /**

@@ -4585,6 +4585,8 @@ internal fun SettingsScreen(
             }
         }
 
+        ServerAddressSettings(session = session, repository = repository)
+
         if (capabilities.accountSecurity) {
             AccountSecuritySettings(repository = repository)
         }
