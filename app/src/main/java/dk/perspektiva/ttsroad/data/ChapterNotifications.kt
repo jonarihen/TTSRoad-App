@@ -66,6 +66,10 @@ fun ChapterNotificationEntry.detailLabel(): String {
  * that, every cold start would re-announce the whole backlog, which is exactly how a notification
  * channel gets muted.
  *
+ * The remembered set only grows (#452): the in-app poll and the background job fetch outside the
+ * announce lock, so an older response can land after a newer one, and dropping its missing ids would
+ * announce them a second time. Notice ids are one-shot, so a remembered id never needs forgetting.
+ *
  * Pure, so the rule is assertable without a notification manager or a network.
  */
 fun newlyReady(
@@ -75,7 +79,7 @@ fun newlyReady(
     val readyNow = notifications.filter { it.presentation == ChapterNotificationState.Ready }
     val ids = readyNow.map { it.id }.toSet()
     if (alreadySeen == null) return emptyList<ChapterNotificationEntry>() to ids
-    return readyNow.filter { it.id !in alreadySeen } to ids
+    return readyNow.filter { it.id !in alreadySeen } to (alreadySeen + ids)
 }
 
 /**
