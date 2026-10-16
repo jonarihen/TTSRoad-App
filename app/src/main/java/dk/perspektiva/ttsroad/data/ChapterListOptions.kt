@@ -6,10 +6,38 @@ package dk.perspektiva.ttsroad.data
  * The whole chapter list is already in memory once a fiction is loaded, so filtering, sorting and
  * bulk played-state updates all happen here rather than costing another round trip to the server.
  */
-enum class ChapterFilter(val label: String) {
-    All("All"),
-    Unplayed("Unplayed"),
-    Ready("Ready"),
+/**
+ * Which rows the chapter list shows, as two independent switches: hide played chapters, and hide
+ * chapters with no audio yet.
+ *
+ * An enum rather than two booleans because it is what is persisted and synced, and the stored name
+ * of every value that existed before the switches could be combined has to keep reading back as
+ * the same filter. [UnplayedReady] is the combination (#349): "what is left that I can play now" is
+ * the list someone working through a serial actually wants.
+ */
+enum class ChapterFilter(
+    val label: String,
+    /** Hide chapters already marked played. The server's `hide_played`. */
+    val unplayedOnly: Boolean,
+    /** Hide chapters the pipeline has not produced audio for yet. Local only. */
+    val readyOnly: Boolean,
+) {
+    All("All", unplayedOnly = false, readyOnly = false),
+    Unplayed("Unplayed", unplayedOnly = true, readyOnly = false),
+    Ready("Ready", unplayedOnly = false, readyOnly = true),
+    UnplayedReady("Unplayed + ready", unplayedOnly = true, readyOnly = true),
+    ;
+
+    /** This filter with the played switch set to [on] and the ready switch left alone. */
+    fun withUnplayedOnly(on: Boolean): ChapterFilter = of(unplayedOnly = on, readyOnly = readyOnly)
+
+    /** This filter with the ready switch set to [on] and the played switch left alone. */
+    fun withReadyOnly(on: Boolean): ChapterFilter = of(unplayedOnly = unplayedOnly, readyOnly = on)
+
+    companion object {
+        fun of(unplayedOnly: Boolean, readyOnly: Boolean): ChapterFilter =
+            entries.first { it.unplayedOnly == unplayedOnly && it.readyOnly == readyOnly }
+    }
 }
 
 /** A chapter is "ready" once the pipeline has produced audio for it — the same test the rows use. */
@@ -19,11 +47,8 @@ private val ChapterSummary.hasAudio: Boolean
 private val ChapterSummary.isPlayed: Boolean
     get() = playback?.isPlayed == true
 
-fun ChapterFilter.matches(chapter: ChapterSummary): Boolean = when (this) {
-    ChapterFilter.All -> true
-    ChapterFilter.Unplayed -> !chapter.isPlayed
-    ChapterFilter.Ready -> chapter.hasAudio
-}
+fun ChapterFilter.matches(chapter: ChapterSummary): Boolean =
+    (!unplayedOnly || !chapter.isPlayed) && (!readyOnly || chapter.hasAudio)
 
 /**
  * Order by [ChapterSummary.displayNumber]. Chapters without a number keep the server's order and
@@ -98,6 +123,20 @@ fun List<ChapterSummary>.chapterIdsBefore(chapterId: Int): List<Int> {
     val index = ordered.indexOfFirst { it.resolvedChapterId == chapterId }
     if (index <= 0) return emptyList()
     return ordered.take(index).mapNotNull { it.resolvedChapterId.takeIf { id -> id > 0 } }
+}
+
+/**
+ * Ids of [chapterId] and every chapter after it in reading order, regardless of the direction the
+ * list is currently sorted in. Empty when [chapterId] is not in the list.
+ *
+ * The undo for falling asleep with autoplay on: the player carried on through chapters nobody
+ * heard and marked them played, and the fix is "from here on, I have not heard these" (#349).
+ */
+fun List<ChapterSummary>.chapterIdsFrom(chapterId: Int): List<Int> {
+    val ordered = sortedByDisplayNumber(ascending = true)
+    val index = ordered.indexOfFirst { it.resolvedChapterId == chapterId }
+    if (index < 0) return emptyList()
+    return ordered.drop(index).mapNotNull { it.resolvedChapterId.takeIf { id -> id > 0 } }
 }
 
 /** Every markable chapter id in the list. */

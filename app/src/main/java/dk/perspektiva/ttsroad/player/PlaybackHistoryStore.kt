@@ -1,9 +1,13 @@
 package dk.perspektiva.ttsroad.player
 
 import android.content.Context
+import androidx.core.util.AtomicFile
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import dk.perspektiva.ttsroad.core.deleteUnderLock
+import dk.perspektiva.ttsroad.core.readUtf8OrNull
+import dk.perspektiva.ttsroad.core.writeUtf8
 import dk.perspektiva.ttsroad.data.normalizeBaseUrl
 import dk.perspektiva.ttsroad.data.SessionState
 import java.io.File
@@ -67,27 +71,18 @@ internal interface HistoryPersistence {
     fun delete()
 }
 
-/** The real one: a temp file renamed over the target, so a kill mid-write cannot truncate it. */
-internal class FileHistoryPersistence(private val file: File) : HistoryPersistence {
-    override fun read(): String? = runCatching { if (file.isFile) file.readText() else null }.getOrNull()
+/** The real one: an [AtomicFile], so a kill mid-write cannot truncate it. */
+internal class FileHistoryPersistence(file: File) : HistoryPersistence {
+    private val file = AtomicFile(file)
+
+    override fun read(): String? = file.readUtf8OrNull()
 
     override fun write(json: String) {
-        runCatching {
-            val tmp = File(file.parentFile, "${file.name}.tmp")
-            tmp.writeText(json)
-            if (!tmp.renameTo(file)) {
-                if (file.exists()) file.delete()
-                tmp.renameTo(file)
-            }
-        }
+        runCatching { file.writeUtf8(json) }
     }
 
     override fun delete() {
-        runCatching {
-            val tmp = File(file.parentFile, "${file.name}.tmp")
-            if (tmp.exists()) tmp.delete()
-            if (file.exists()) file.delete()
-        }
+        runCatching { file.deleteUnderLock() }
     }
 }
 

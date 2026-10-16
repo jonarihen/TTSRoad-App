@@ -290,6 +290,7 @@ import dk.perspektiva.ttsroad.data.audiobookExportRows
 import dk.perspektiva.ttsroad.data.canReadServerLogs
 import dk.perspektiva.ttsroad.data.canPickVoice
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
+import dk.perspektiva.ttsroad.data.chapterIdsFrom
 import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
 import dk.perspektiva.ttsroad.data.fictionNarrationPatch
@@ -369,8 +370,9 @@ import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
-import dk.perspektiva.ttsroad.update.renderReleaseNotes
+import dk.perspektiva.ttsroad.update.UpdatePreferences
 import dk.perspektiva.ttsroad.update.UpdateState
+import dk.perspektiva.ttsroad.update.shouldAnnounceUpdate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -622,8 +624,16 @@ private fun TtsRoadApp(
         }
     }
 
-    // Quietly check GitHub Releases for a newer build once per launch.
-    LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
+    // Quietly check GitHub Releases for a newer build once per launch — unless turned off in
+    // Settings (#369). A skipped or snoozed version is still found, but only Settings mentions it.
+    LaunchedEffect(Unit) {
+        val choices = UpdatePreferences.read(context)
+        if (choices.autoCheck) {
+            updateManager.check(BuildConfig.VERSION_NAME) { version ->
+                shouldAnnounceUpdate(version, choices, System.currentTimeMillis())
+            }
+        }
+    }
 
     CompositionLocalProvider(LocalServerUrl provides session?.serverUrl.orEmpty()) {
         when {
@@ -675,6 +685,15 @@ private fun TtsRoadApp(
         state = updateState,
         onDownload = { release -> updateManager.downloadAndInstall(context, release) },
         onDismiss = { updateManager.dismiss() },
+        onLater = {
+            UpdatePreferences.snooze(context)
+            updateManager.dismiss()
+        },
+        onSkip = { release ->
+            UpdatePreferences.skip(context, release.versionName)
+            updateManager.dismiss()
+        },
+        canInstallPackages = { context.packageManager.canRequestPackageInstalls() },
     )
 }
 
@@ -694,85 +713,6 @@ internal fun resolvedSession(
         }
     }
     return session
-}
-
-@Composable
-internal fun UpdateOverlay(
-    state: UpdateState,
-    onDownload: (ReleaseInfo) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    when (state) {
-        is UpdateState.Available -> {
-            // The note region takes a share of the actual window, capped for ordinary portrait
-            // phones. A fixed 320 dp cap still clipped the actions in landscape and short split
-            // screen windows once the title and dialog padding were counted.
-            val notesMaxHeight = (LocalConfiguration.current.screenHeightDp.dp * 0.42f)
-                .coerceIn(96.dp, 320.dp)
-            AlertDialog(
-                onDismissRequest = onDismiss,
-                containerColor = AarisColor.BgRaise,
-            title = { Text("UPDATE AVAILABLE", style = MaterialTheme.typography.titleLarge) },
-            text = {
-                // Bounded and scrollable rather than truncated. Release notes are the only thing
-                // in this dialog that says what the install actually changes, and `take(400)` cut
-                // them mid-sentence with nothing on screen admitting anything was missing — so a
-                // long entry ended in a severed word and the rest was simply unreachable.
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .heightIn(max = notesMaxHeight)
-                        .verticalScroll(rememberScrollState())
-                        .testTag("update-notes"),
-                ) {
-                    MetaText(text = "Version ${state.release.versionName}", color = AarisColor.Accent)
-                    if (state.release.notes.isNotBlank()) {
-                        Text(
-                            text = renderReleaseNotes(state.release.notes),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AarisColor.Muted,
-                            // Left, explicitly. Prose and bullet lists are read down a common left
-                            // edge; centring ragged lines costs the eye that edge on every line.
-                            textAlign = TextAlign.Start,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = { onDownload(state.release) }, shape = RectangleShape) {
-                    Text("DOWNLOAD & INSTALL")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) { Text("LATER") }
-            },
-        )
-        }
-
-        is UpdateState.Downloading -> AlertDialog(
-            onDismissRequest = {},
-            containerColor = AarisColor.BgRaise,
-            title = { Text("DOWNLOADING UPDATE", style = MaterialTheme.typography.titleLarge) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    LinearProgressIndicator(
-                        progress = { state.percent / 100f },
-                        color = AarisColor.Accent,
-                        trackColor = AarisColor.Line,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    MetaText(text = "${state.percent}%")
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = onDismiss) { Text("CANCEL") }
-            },
-        )
-
-        else -> Unit // Idle / Checking / UpToDate / Failed surface in Settings instead
-    }
 }
 
 @Composable
@@ -1651,7 +1591,9 @@ private fun FictionScreen(
     val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val filter by chapterListPrefs.filter
         .collectAsStateWithLifecycle(initialValue = ChapterFilter.All)
-    var ascending by remember(fiction.id) { mutableStateOf(true) }
+    // Remembered library-wide like the filter (#349); it used to reset to OLDEST on every visit.
+    val ascending by chapterListPrefs.sortAscending
+        .collectAsStateWithLifecycle(initialValue = true)
     // Keyed on the fiction, unlike the filter above: "which chapter was called X" is a question
     // about the book in front of you, and carrying the text to the next one would only hide it.
     var chapterQuery by remember(fiction.id) { mutableStateOf("") }
@@ -2049,7 +1991,9 @@ private fun FictionScreen(
                             query = chapterQuery,
                             onQuery = { chapterQuery = it },
                             onFilter = { scope.launch { accountPreferenceSync.setChapterFilter(it) } },
-                            onToggleSort = { ascending = !ascending },
+                            onToggleSort = {
+                                scope.launch { chapterListPrefs.setSortAscending(!ascending) }
+                            },
                             onJumpToCurrent = {
                                 scope.launch { listState.animateScrollToItem(currentRow + 1) }
                             },
@@ -2137,6 +2081,13 @@ private fun FictionScreen(
                     onMark = { ids ->
                         bulkTarget = null
                         mark(ids, played = true)
+                    },
+                    fromHereIds = remember(chapters, target) {
+                        chapters.chapterIdsFrom(target.resolvedChapterId)
+                    },
+                    onMarkUnplayed = { ids ->
+                        bulkTarget = null
+                        mark(ids, played = false)
                     },
                     onQueue = if (capabilities.queue) {
                         { playNext ->
@@ -2489,15 +2440,29 @@ internal fun ChapterListControls(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        ChapterFilter.entries.forEach { option ->
-            FilterChip(
-                selected = option == filter,
-                onClick = { onFilter(option) },
-                label = { Text(option.label) },
-                shape = RectangleShape,
-                modifier = Modifier.heightIn(min = MinTouchTargetSize),
-            )
-        }
+        // All clears both switches; Unplayed and Ready toggle independently, so the two can be on
+        // together (#349) — "what is left that I can play now".
+        FilterChip(
+            selected = filter == ChapterFilter.All,
+            onClick = { onFilter(ChapterFilter.All) },
+            label = { Text(ChapterFilter.All.label) },
+            shape = RectangleShape,
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        )
+        FilterChip(
+            selected = filter.unplayedOnly,
+            onClick = { onFilter(filter.withUnplayedOnly(!filter.unplayedOnly)) },
+            label = { Text(ChapterFilter.Unplayed.label) },
+            shape = RectangleShape,
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        )
+        FilterChip(
+            selected = filter.readyOnly,
+            onClick = { onFilter(filter.withReadyOnly(!filter.readyOnly)) },
+            label = { Text(ChapterFilter.Ready.label) },
+            shape = RectangleShape,
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        )
         TextButton(
             onClick = onToggleSort,
             modifier = Modifier.heightIn(min = MinTouchTargetSize),
@@ -2519,6 +2484,9 @@ private fun ChapterBulkSheet(
     allIds: List<Int>,
     onDismiss: () -> Unit,
     onMark: (List<Int>) -> Unit,
+    /** This chapter and every one after it in reading order — the undo for sleeping through them. */
+    fromHereIds: List<Int> = emptyList(),
+    onMarkUnplayed: ((List<Int>) -> Unit)? = null,
     /** Null on a server with no cross-library queue. `true` means "play it next". */
     onQueue: ((playNext: Boolean) -> Unit)? = null,
     /**
@@ -2570,6 +2538,22 @@ private fun ChapterBulkSheet(
             enabled = allIds.isNotEmpty(),
             onClick = { onMark(allIds) },
         )
+        // The reverse direction (#349): fell asleep with autoplay on and it ran through chapters
+        // nobody heard, or starting a series over.
+        onMarkUnplayed?.let { markUnplayed ->
+            AarisActionRow(
+                title = "Mark this and later as unplayed",
+                subtitle = "${fromHereIds.size} chapters",
+                enabled = fromHereIds.isNotEmpty(),
+                onClick = { markUnplayed(fromHereIds) },
+            )
+            AarisActionRow(
+                title = "Mark all as unplayed",
+                subtitle = "${allIds.size} chapters",
+                enabled = allIds.isNotEmpty(),
+                onClick = { markUnplayed(allIds) },
+            )
+        }
         onQueue?.let { queue ->
             // Only a chapter with audio can be queued — the server rejects the rest anyway, and
             // offering it would be offering something that silently does nothing.
@@ -5150,6 +5134,7 @@ internal fun SettingsScreen(
             ) {
                 SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
                 CrashReportingSetting()
+                AutoUpdateCheckSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->
                     MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
                 }
@@ -6336,6 +6321,7 @@ private fun updateStatusText(state: UpdateState): Pair<String, Boolean>? = when 
     is UpdateState.Available -> "Version ${state.release.versionName} available" to false
     is UpdateState.Downloading -> "Downloading ${state.percent}%" to false
     is UpdateState.Failed -> state.message to true
+    is UpdateState.Rejected -> state.message to true
     else -> null
 }
 
