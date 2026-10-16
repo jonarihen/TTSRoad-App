@@ -219,8 +219,8 @@ into one of those is welcome when you are already editing it; keep the composabl
 tests need it, in which case `internal`.
 
 Navigation is a hand-rolled `AppScreen` sealed interface in `nav/AppNavigation.kt`, held in
-`remember { mutableStateOf }` — the `navigation-compose` dependency is declared but genuinely
-unused, so there is no `NavHost` to find. There are no ViewModels and no `LoadState` type: each
+`remember { mutableStateOf }` — there is no `navigation-compose` dependency and no `NavHost` to
+find. There are no ViewModels and no `LoadState` type: each
 screen keeps its own `mutableStateOf` for data/loading/error and a local `refresh()`, and
 `RefreshablePane` renders the pull-to-refresh, inline error and progress bar around the result.
 

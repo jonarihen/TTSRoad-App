@@ -36,10 +36,12 @@ object ServerUrls {
     fun rewriteHostOrNull(url: String?, serverUrl: String?): String? =
         url?.takeIf { it.isNotBlank() }?.let { rewriteHost(it, serverUrl) }
 
-    fun rewriteAudioUrlOrNull(url: String?, serverUrl: String?): String? {
-        val value = url?.takeIf { it.isNotBlank() } ?: return null
-        return onServer(value, serverUrl)
-    }
+    /**
+     * [rewriteHostOrNull] for audio, except that it fails closed: with no usable [serverUrl] there is
+     * no host to stream from, so the answer is null rather than the server's own URL.
+     */
+    fun rewriteAudioUrlOrNull(url: String?, serverUrl: String?): String? =
+        url?.takeIf { it.isNotBlank() }?.let { onServer(it, serverUrl) }
 
     /**
      * Resolve a cover URL without rewriting third-party artwork onto the TTSRoad server.

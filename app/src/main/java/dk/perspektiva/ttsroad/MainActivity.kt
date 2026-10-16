@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.Forward5
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -290,6 +291,7 @@ import dk.perspektiva.ttsroad.data.audiobookExportRows
 import dk.perspektiva.ttsroad.data.canReadServerLogs
 import dk.perspektiva.ttsroad.data.canPickVoice
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
+import dk.perspektiva.ttsroad.data.chapterIdsFrom
 import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
 import dk.perspektiva.ttsroad.data.fictionNarrationPatch
@@ -369,8 +371,9 @@ import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
-import dk.perspektiva.ttsroad.update.renderReleaseNotes
+import dk.perspektiva.ttsroad.update.UpdatePreferences
 import dk.perspektiva.ttsroad.update.UpdateState
+import dk.perspektiva.ttsroad.update.shouldAnnounceUpdate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -622,8 +625,16 @@ private fun TtsRoadApp(
         }
     }
 
-    // Quietly check GitHub Releases for a newer build once per launch.
-    LaunchedEffect(Unit) { updateManager.check(BuildConfig.VERSION_NAME) }
+    // Quietly check GitHub Releases for a newer build once per launch — unless turned off in
+    // Settings (#369). A skipped or snoozed version is still found, but only Settings mentions it.
+    LaunchedEffect(Unit) {
+        val choices = UpdatePreferences.read(context)
+        if (choices.autoCheck) {
+            updateManager.check(BuildConfig.VERSION_NAME) { version ->
+                shouldAnnounceUpdate(version, choices, System.currentTimeMillis())
+            }
+        }
+    }
 
     CompositionLocalProvider(LocalServerUrl provides session?.serverUrl.orEmpty()) {
         when {
@@ -675,6 +686,15 @@ private fun TtsRoadApp(
         state = updateState,
         onDownload = { release -> updateManager.downloadAndInstall(context, release) },
         onDismiss = { updateManager.dismiss() },
+        onLater = {
+            UpdatePreferences.snooze(context)
+            updateManager.dismiss()
+        },
+        onSkip = { release ->
+            UpdatePreferences.skip(context, release.versionName)
+            updateManager.dismiss()
+        },
+        canInstallPackages = { context.packageManager.canRequestPackageInstalls() },
     )
 }
 
@@ -696,83 +716,18 @@ internal fun resolvedSession(
     return session
 }
 
+/**
+ * Why the login form is in front of the user: a failed attempt, or the server's word on why the
+ * session ended. A polite live region (#352): a blind user who pressed SIGN IN otherwise heard
+ * nothing at all, and the form simply seemed to hang.
+ */
 @Composable
-internal fun UpdateOverlay(
-    state: UpdateState,
-    onDownload: (ReleaseInfo) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    when (state) {
-        is UpdateState.Available -> {
-            // The note region takes a share of the actual window, capped for ordinary portrait
-            // phones. A fixed 320 dp cap still clipped the actions in landscape and short split
-            // screen windows once the title and dialog padding were counted.
-            val notesMaxHeight = (LocalConfiguration.current.screenHeightDp.dp * 0.42f)
-                .coerceIn(96.dp, 320.dp)
-            AlertDialog(
-                onDismissRequest = onDismiss,
-                containerColor = AarisColor.BgRaise,
-            title = { Text("UPDATE AVAILABLE", style = MaterialTheme.typography.titleLarge) },
-            text = {
-                // Bounded and scrollable rather than truncated. Release notes are the only thing
-                // in this dialog that says what the install actually changes, and `take(400)` cut
-                // them mid-sentence with nothing on screen admitting anything was missing — so a
-                // long entry ended in a severed word and the rest was simply unreachable.
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .heightIn(max = notesMaxHeight)
-                        .verticalScroll(rememberScrollState())
-                        .testTag("update-notes"),
-                ) {
-                    MetaText(text = "Version ${state.release.versionName}", color = AarisColor.Accent)
-                    if (state.release.notes.isNotBlank()) {
-                        Text(
-                            text = renderReleaseNotes(state.release.notes),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AarisColor.Muted,
-                            // Left, explicitly. Prose and bullet lists are read down a common left
-                            // edge; centring ragged lines costs the eye that edge on every line.
-                            textAlign = TextAlign.Start,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = { onDownload(state.release) }, shape = RectangleShape) {
-                    Text("DOWNLOAD & INSTALL")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) { Text("LATER") }
-            },
-        )
-        }
-
-        is UpdateState.Downloading -> AlertDialog(
-            onDismissRequest = {},
-            containerColor = AarisColor.BgRaise,
-            title = { Text("DOWNLOADING UPDATE", style = MaterialTheme.typography.titleLarge) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    LinearProgressIndicator(
-                        progress = { state.percent / 100f },
-                        color = AarisColor.Accent,
-                        trackColor = AarisColor.Line,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    MetaText(text = "${state.percent}%")
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = onDismiss) { Text("CANCEL") }
-            },
-        )
-
-        else -> Unit // Idle / Checking / UpToDate / Failed surface in Settings instead
-    }
+internal fun LoginNotice(text: String) {
+    Text(
+        text = text,
+        color = MaterialTheme.colorScheme.error,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }
 
 @Composable
@@ -895,7 +850,7 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         }
         notice?.let {
             Spacer(modifier = Modifier.height(12.dp))
-            Text(text = it, color = MaterialTheme.colorScheme.error)
+            LoginNotice(text = it)
             if (error != null) ErrorDetails(details = errorDetails)
         }
         Spacer(modifier = Modifier.height(20.dp))
@@ -1651,7 +1606,9 @@ private fun FictionScreen(
     val accountPreferenceSync = remember { ServiceLocator.accountPreferenceSync(context) }
     val filter by chapterListPrefs.filter
         .collectAsStateWithLifecycle(initialValue = ChapterFilter.All)
-    var ascending by remember(fiction.id) { mutableStateOf(true) }
+    // Remembered library-wide like the filter (#349); it used to reset to OLDEST on every visit.
+    val ascending by chapterListPrefs.sortAscending
+        .collectAsStateWithLifecycle(initialValue = true)
     // Keyed on the fiction, unlike the filter above: "which chapter was called X" is a question
     // about the book in front of you, and carrying the text to the next one would only hide it.
     var chapterQuery by remember(fiction.id) { mutableStateOf("") }
@@ -2049,7 +2006,9 @@ private fun FictionScreen(
                             query = chapterQuery,
                             onQuery = { chapterQuery = it },
                             onFilter = { scope.launch { accountPreferenceSync.setChapterFilter(it) } },
-                            onToggleSort = { ascending = !ascending },
+                            onToggleSort = {
+                                scope.launch { chapterListPrefs.setSortAscending(!ascending) }
+                            },
                             onJumpToCurrent = {
                                 scope.launch { listState.animateScrollToItem(currentRow + 1) }
                             },
@@ -2137,6 +2096,13 @@ private fun FictionScreen(
                     onMark = { ids ->
                         bulkTarget = null
                         mark(ids, played = true)
+                    },
+                    fromHereIds = remember(chapters, target) {
+                        chapters.chapterIdsFrom(target.resolvedChapterId)
+                    },
+                    onMarkUnplayed = { ids ->
+                        bulkTarget = null
+                        mark(ids, played = false)
                     },
                     onQueue = if (capabilities.queue) {
                         { playNext ->
@@ -2489,15 +2455,29 @@ internal fun ChapterListControls(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        ChapterFilter.entries.forEach { option ->
-            FilterChip(
-                selected = option == filter,
-                onClick = { onFilter(option) },
-                label = { Text(option.label) },
-                shape = RectangleShape,
-                modifier = Modifier.heightIn(min = MinTouchTargetSize),
-            )
-        }
+        // All clears both switches; Unplayed and Ready toggle independently, so the two can be on
+        // together (#349) — "what is left that I can play now".
+        FilterChip(
+            selected = filter == ChapterFilter.All,
+            onClick = { onFilter(ChapterFilter.All) },
+            label = { Text(ChapterFilter.All.label) },
+            shape = RectangleShape,
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        )
+        FilterChip(
+            selected = filter.unplayedOnly,
+            onClick = { onFilter(filter.withUnplayedOnly(!filter.unplayedOnly)) },
+            label = { Text(ChapterFilter.Unplayed.label) },
+            shape = RectangleShape,
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        )
+        FilterChip(
+            selected = filter.readyOnly,
+            onClick = { onFilter(filter.withReadyOnly(!filter.readyOnly)) },
+            label = { Text(ChapterFilter.Ready.label) },
+            shape = RectangleShape,
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        )
         TextButton(
             onClick = onToggleSort,
             modifier = Modifier.heightIn(min = MinTouchTargetSize),
@@ -2519,6 +2499,9 @@ private fun ChapterBulkSheet(
     allIds: List<Int>,
     onDismiss: () -> Unit,
     onMark: (List<Int>) -> Unit,
+    /** This chapter and every one after it in reading order — the undo for sleeping through them. */
+    fromHereIds: List<Int> = emptyList(),
+    onMarkUnplayed: ((List<Int>) -> Unit)? = null,
     /** Null on a server with no cross-library queue. `true` means "play it next". */
     onQueue: ((playNext: Boolean) -> Unit)? = null,
     /**
@@ -2570,6 +2553,22 @@ private fun ChapterBulkSheet(
             enabled = allIds.isNotEmpty(),
             onClick = { onMark(allIds) },
         )
+        // The reverse direction (#349): fell asleep with autoplay on and it ran through chapters
+        // nobody heard, or starting a series over.
+        onMarkUnplayed?.let { markUnplayed ->
+            AarisActionRow(
+                title = "Mark this and later as unplayed",
+                subtitle = "${fromHereIds.size} chapters",
+                enabled = fromHereIds.isNotEmpty(),
+                onClick = { markUnplayed(fromHereIds) },
+            )
+            AarisActionRow(
+                title = "Mark all as unplayed",
+                subtitle = "${allIds.size} chapters",
+                enabled = allIds.isNotEmpty(),
+                onClick = { markUnplayed(allIds) },
+            )
+        }
         onQueue?.let { queue ->
             // Only a chapter with audio can be queued — the server rejects the rest anyway, and
             // offering it would be offering something that silently does nothing.
@@ -2769,6 +2768,38 @@ private fun PlayerActionButton(
         modifier = Modifier.heightIn(min = MinTouchTargetSize),
     ) {
         Text(text = label, color = color, maxLines = 1, softWrap = false)
+    }
+}
+
+/**
+ * [PlayerActionButton]'s look for a two-state setting (#358). A `TextButton` can only say "button",
+ * so TalkBack heard "Skip silence on" while it was on and "Skip silence" — no state at all — while
+ * it was off. This is one toggleable node with the switch role: the spoken name is [name] (a
+ * content description wins over the text) and the on/off is announced as state, while the visible
+ * [label] keeps carrying it for sighted use.
+ */
+@Composable
+private fun PlayerToggleButton(
+    label: String,
+    name: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .heightIn(min = MinTouchTargetSize)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .semantics { contentDescription = name }
+            .padding(ButtonDefaults.TextButtonContentPadding),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (checked) AarisColor.Accent else MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }
 
@@ -3209,10 +3240,11 @@ internal fun PlayerScreenBody(
             )
             // Toggles in place rather than opening a sheet: it is a two-state setting, and the
             // label carries the state so nothing has to be opened to read it either.
-            PlayerActionButton(
+            PlayerToggleButton(
                 label = if (skipSilence) "SKIP SILENCE ON" else "SKIP SILENCE",
-                onClick = onToggleSkipSilence,
-                color = if (skipSilence) AarisColor.Accent else Color.Unspecified,
+                name = "Skip silence",
+                checked = skipSilence,
+                onCheckedChange = { onToggleSkipSilence() },
             )
         }
     }
@@ -3423,43 +3455,22 @@ private fun PlayerScreen(
             val speedFictionId = playerState.fictionId
             val isPinnedToBook = speedFictionId != null && fictionSpeeds.containsKey(speedFictionId)
             if (speedFictionId != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        MetaText(text = "Only for this book")
-                        Spacer(modifier = Modifier.height(2.dp))
-                        MetaText(
-                            text = if (isPinnedToBook) {
-                                "This book plays at ${formatSpeed(playerState.speed)} whatever the " +
-                                    "speed is elsewhere. Turning this off hands it back."
-                            } else {
-                                "Different narrators want different paces. On, the speed you pick " +
-                                    "applies here and nowhere else."
-                            },
-                            color = AarisColor.Dim,
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Switch(
-                        checked = isPinnedToBook,
-                        onCheckedChange = { pin ->
-                            if (pin) {
-                                // Pinned at whatever is playing now, so turning the switch on is
-                                // never itself a change in pace.
-                                playbackController.setSpeedForFiction(
-                                    speedFictionId,
-                                    playerState.speed,
-                                )
-                            } else {
-                                playbackController.clearSpeedForFiction(speedFictionId)
-                            }
-                        },
-                    )
-                }
+                PerBookSpeedSwitch(
+                    isPinned = isPinnedToBook,
+                    speedLabel = formatSpeed(playerState.speed),
+                    onPinnedChange = { pin ->
+                        if (pin) {
+                            // Pinned at whatever is playing now, so turning the switch on is
+                            // never itself a change in pace.
+                            playbackController.setSpeedForFiction(
+                                speedFictionId,
+                                playerState.speed,
+                            )
+                        } else {
+                            playbackController.clearSpeedForFiction(speedFictionId)
+                        }
+                    },
+                )
                 MetaText(
                     text = PreferenceScope.DevicePlayer,
                     color = AarisColor.Dim,
@@ -3467,36 +3478,22 @@ private fun PlayerScreen(
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             }
-            speedOptions(playerState.speed).forEach { preset ->
-                val selected = kotlin.math.abs(preset - playerState.speed) < 0.01f
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                // Which store the tap lands in is the switch's whole job: pinned,
-                                // it edits this book's override; otherwise the global speed.
-                                if (isPinnedToBook && speedFictionId != null) {
-                                    playbackController.setSpeedForFiction(speedFictionId, preset)
-                                } else {
-                                    playbackController.setSpeed(preset)
-                                }
-                                showSpeed = false
+            Column(modifier = Modifier.selectableGroup()) {
+                speedOptions(playerState.speed).forEach { preset ->
+                    SpeedOptionRow(
+                        label = formatSpeed(preset),
+                        selected = kotlin.math.abs(preset - playerState.speed) < 0.01f,
+                        onClick = {
+                            // Which store the tap lands in is the switch's whole job: pinned,
+                            // it edits this book's override; otherwise the global speed.
+                            if (isPinnedToBook && speedFictionId != null) {
+                                playbackController.setSpeedForFiction(speedFictionId, preset)
+                            } else {
+                                playbackController.setSpeed(preset)
                             }
-                            .padding(horizontal = 20.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = formatSpeed(preset),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = if (selected) AarisColor.Accent else AarisColor.Ink,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (selected) {
-                            MetaText(text = "Current", color = AarisColor.Accent)
-                        }
-                    }
-                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                            showSpeed = false
+                        },
+                    )
                 }
             }
             // Skip silence used to be a switch here as well as in Settings, because it changes how
@@ -3810,44 +3807,26 @@ private fun PlayerScreen(
                 }
             }
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-                MetaText(text = "// Fell asleep at (check your health app)", color = AarisColor.Muted)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedTextField(
-                        value = sleepTimeInput,
-                        onValueChange = {
-                            sleepTimeInput = it
-                            sleepTimeError = null
-                            farSleepMatch = null
-                        },
-                        placeholder = { Text("2349") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
-                    )
-                    Button(
-                        onClick = {
-                            val parsed = parseClockTime(sleepTimeInput)
-                            val target = parsed?.let { (h, m) -> resolveSleepTimestamp(h, m, now) }
-                            farSleepMatch = null
-                            when (val match = target?.let { matchSleepTime(sleepMatchTrail, it) }) {
-                                null -> sleepTimeError = "Use 24h time, e.g. 2349 or 23:49"
-                                SleepTimeMatch.NoHistory -> sleepTimeError = "No playback history to match"
-                                is SleepTimeMatch.Far -> farSleepMatch = match
-                                is SleepTimeMatch.Near -> jump(match.snapshot)
-                            }
-                        },
-                        shape = RectangleShape,
-                    ) {
-                        Text("JUMP")
-                    }
-                }
-                sleepTimeError?.let {
-                    MetaText(text = it, color = AarisColor.Danger, modifier = Modifier.padding(top = 4.dp))
-                }
+                JumpBackSleepTimeField(
+                    value = sleepTimeInput,
+                    onValueChange = {
+                        sleepTimeInput = it
+                        sleepTimeError = null
+                        farSleepMatch = null
+                    },
+                    error = sleepTimeError,
+                    onJump = {
+                        val parsed = parseClockTime(sleepTimeInput)
+                        val target = parsed?.let { (h, m) -> resolveSleepTimestamp(h, m, now) }
+                        farSleepMatch = null
+                        when (val match = target?.let { matchSleepTime(sleepMatchTrail, it) }) {
+                            null -> sleepTimeError = "Use 24h time, e.g. 2349 or 23:49"
+                            SleepTimeMatch.NoHistory -> sleepTimeError = "No playback history to match"
+                            is SleepTimeMatch.Far -> farSleepMatch = match
+                            is SleepTimeMatch.Near -> jump(match.snapshot)
+                        }
+                    },
+                )
                 farSleepMatch?.let { far ->
                     val typed = parseClockTime(sleepTimeInput)
                         ?.let { (h, m) -> "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}" } ?: sleepTimeInput.trim()
@@ -3856,7 +3835,10 @@ private fun PlayerScreen(
                         text = "Nothing recorded near $typed — closest is $closest " +
                             "(${relativeAgo(now - far.snapshot.timestamp)})",
                         color = AarisColor.Warning,
-                        modifier = Modifier.padding(top = 4.dp),
+                        // Also the answer to pressing JUMP, so it is announced like the errors.
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .semantics { liveRegion = LiveRegionMode.Polite },
                     )
                     TextButton(onClick = { jump(far.snapshot) }, enabled = !jumping) {
                         Text("JUMP TO $closest")
@@ -3870,7 +3852,7 @@ private fun PlayerScreen(
                     )
                 }
                 jumpError?.let { message ->
-                    MetaText(text = message, color = AarisColor.Danger, modifier = Modifier.padding(top = 8.dp))
+                    AnnouncedError(text = message, modifier = Modifier.padding(top = 8.dp))
                     failedJump?.let { snap ->
                         TextButton(onClick = { jump(snap) }, enabled = !jumping) {
                             Text("RETRY")
@@ -3893,7 +3875,11 @@ private fun PlayerScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = canJump && !jumping) { jump(snap) }
+                            .clickable(
+                                enabled = canJump && !jumping,
+                                onClickLabel = "Jump back to this moment",
+                                role = Role.Button,
+                            ) { jump(snap) }
                             .padding(horizontal = 20.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -3918,9 +3904,126 @@ private fun PlayerScreen(
     }
 }
 
+/**
+ * The speed sheet's "Only for this book" switch (#353). The whole row is the one toggleable node,
+ * as in Settings, so TalkBack reads the label with the state instead of a bare "Switch, off" whose
+ * label was a separate stop.
+ */
+@Composable
+internal fun PerBookSpeedSwitch(
+    isPinned: Boolean,
+    speedLabel: String,
+    onPinnedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = isPinned, role = Role.Switch, onValueChange = onPinnedChange)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            MetaText(text = "Only for this book")
+            Spacer(modifier = Modifier.height(2.dp))
+            MetaText(
+                text = if (isPinned) {
+                    "This book plays at $speedLabel whatever the " +
+                        "speed is elsewhere. Turning this off hands it back."
+                } else {
+                    "Different narrators want different paces. On, the speed you pick " +
+                        "applies here and nowhere else."
+                },
+                color = AarisColor.Dim,
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(checked = isPinned, onCheckedChange = null)
+    }
+}
+
+/**
+ * One preset in the speed sheet. A one-of-N choice, so `selectable` with the radio-button role
+ * (#358): TalkBack says which speed is the current one rather than leaving it to the colour.
+ */
+@Composable
+internal fun SpeedOptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .selectable(selected = selected, onClick = onClick, role = Role.RadioButton)
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (selected) AarisColor.Accent else AarisColor.Ink,
+                modifier = Modifier.weight(1f),
+            )
+            if (selected) {
+                MetaText(text = "Current", color = AarisColor.Accent)
+            }
+        }
+        HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+    }
+}
+
+/**
+ * The jump-back sheet's "fell asleep at" field and its JUMP button (#353). The field used to carry
+ * only a "2349" placeholder, which TalkBack stops reading the moment anything is typed, with the
+ * caption as a separate text above it — so the field itself had no name. The label now lives on the
+ * field; the caption keeps only the hint about where to find the time.
+ */
+@Composable
+internal fun JumpBackSleepTimeField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    error: String?,
+    onJump: () -> Unit,
+) {
+    MetaText(text = "// Check your health app", color = AarisColor.Muted)
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text("FELL ASLEEP AT") },
+            placeholder = { Text("2349") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
+        )
+        Button(onClick = onJump, shape = RectangleShape) {
+            Text("JUMP")
+        }
+    }
+    error?.let { AnnouncedError(text = it, modifier = Modifier.padding(top = 4.dp)) }
+}
+
+/**
+ * An error that answers something the user just did. Plain text appears silently, so a TalkBack
+ * user pressed the button and heard nothing — the app seemed to hang (#352, WCAG 4.1.3). A polite
+ * live region is read out when it appears, like the player's action feedback.
+ */
+@Composable
+internal fun AnnouncedError(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    MetaText(
+        text = text,
+        color = AarisColor.Danger,
+        modifier = modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
+}
+
 /** One row of the sleep-timer sheet, styled like the chapter rows above it. */
 @Composable
-private fun SleepTimerOption(
+internal fun SleepTimerOption(
     label: String,
     isDefault: Boolean = false,
     /** A second line under the label, for a row whose behaviour the label cannot fully carry. */
@@ -3930,7 +4033,9 @@ private fun SleepTimerOption(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            // An action, not a one-of-N choice: a tap arms the timer and closes the sheet, and no row
+            // stays "selected" afterwards — so the button role, with what the tap does (#358).
+            .clickable(onClickLabel = "Start sleep timer", role = Role.Button, onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -5152,6 +5257,7 @@ internal fun SettingsScreen(
             ) {
                 SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
                 CrashReportingSetting()
+                AutoUpdateCheckSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->
                     MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
                 }
@@ -6338,7 +6444,48 @@ private fun updateStatusText(state: UpdateState): Pair<String, Boolean>? = when 
     is UpdateState.Available -> "Version ${state.release.versionName} available" to false
     is UpdateState.Downloading -> "Downloading ${state.percent}%" to false
     is UpdateState.Failed -> state.message to true
+    is UpdateState.Rejected -> state.message to true
     else -> null
+}
+
+/**
+ * The mini player's cover and titles, which open the full player. It carries a click label (#358)
+ * because nothing on it looks like a control: without one TalkBack read the chapter title and a
+ * bare "double tap to activate", with no hint that it leads anywhere.
+ */
+@Composable
+internal fun MiniPlayerTitle(
+    state: PlayerUiState,
+    onExpand: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.clickable(
+            onClickLabel = "Open player",
+            role = Role.Button,
+            onClick = onExpand,
+        ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CoverThumb(
+            imageUrl = state.coverImageUrl,
+            fallback = state.fictionTitle ?: state.title,
+            size = 46,
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+            Text(
+                text = state.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = AarisColor.Ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            state.fictionTitle?.let {
+                MetaText(text = it, color = AarisColor.Dim)
+            }
+        }
+    }
 }
 
 /**
@@ -6384,31 +6531,7 @@ private fun MiniPlayerBar(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable(onClick = onExpand),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CoverThumb(
-                    imageUrl = state.coverImageUrl,
-                    fallback = state.fictionTitle ?: state.title,
-                    size = 46,
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = state.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AarisColor.Ink,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    state.fictionTitle?.let {
-                        MetaText(text = it, color = AarisColor.Dim)
-                    }
-                }
-            }
+            MiniPlayerTitle(state = state, onExpand = onExpand, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.width(12.dp))
             TransportIconButton(
                 icon = skipBackIcon(skipIntervalMs),
@@ -6767,6 +6890,9 @@ internal fun ChapterRow(
                 .combinedClickable(
                     enabled = playable || onLongPress != null,
                     onClick = { if (playable) onPlay() },
+                    // Named, so TalkBack says what holding the row opens instead of a generic
+                    // "double tap and hold to long press" (#356).
+                    onLongClickLabel = onLongPress?.let { ChapterActionsLabel },
                     onLongClick = onLongPress,
                 )
                 .padding(horizontal = 4.dp, vertical = 10.dp),
@@ -6861,10 +6987,39 @@ internal fun ChapterRow(
                     size = 36.dp,
                 ) { onPlay() }
             }
+            // The same sheet the long press opens, as something that can be seen and tapped (#356):
+            // "Play next", "Add to queue", "Mark all previous" and "Convert again" were reachable
+            // only by a gesture nothing on the row advertised. Unbordered, because it is secondary
+            // to Play. Not on a phone narrower than 360 dp: a fourth 48 dp target there leaves the
+            // title 36 dp, about three letters. The named long press above still reaches the sheet
+            // from TalkBack's actions menu, which is where a narrow phone's screen reader user is.
+            val roomForOverflow = LocalConfiguration.current.screenWidthDp >= ChapterOverflowMinScreenWidthDp
+            onLongPress?.takeIf { roomForOverflow }?.let { openActions ->
+                Box(
+                    modifier = Modifier
+                        .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
+                        .clickable(role = Role.Button, onClick = openActions)
+                        .semantics { contentDescription = ChapterActionsLabel },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = null,
+                        tint = AarisColor.Muted,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
         }
         HorizontalDivider(thickness = 1.dp, color = AarisColor.LineSoft)
     }
 }
+
+/** What the chapter row's long press and its ⋮ button both open. */
+private const val ChapterActionsLabel = "Chapter actions"
+
+/** The narrowest screen on which the chapter row's ⋮ still leaves the title readable. */
+private const val ChapterOverflowMinScreenWidthDp = 360
 
 private fun chapterNumberLabel(chapter: ChapterSummary): String =
     chapter.displayNumber?.let(::chapterNumberLabel) ?: "—"
