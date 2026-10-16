@@ -164,7 +164,7 @@ class NewChaptersGatingTest {
             compose.waitUntil(5_000) { state.loadedOnce && !state.isLoading }
             assertNotSame(initial, state)
             assertEquals(1, polls.get())
-            compose.onNodeWithText("New chapters (1)").assertExists()
+            compose.onNodeWithText("New chapters (1 waiting)").assertExists()
             assertEquals(0, manager.allNotifications.size)
             ready = true
             compose.runOnIdle { state.refreshRequest++ }
