@@ -57,6 +57,8 @@ class LibraryCache(
     private val snapshots: LibrarySnapshotStore? = null,
     /** The signed-in account's key for [snapshots]; null when signed out. */
     private val accountKey: suspend () -> String? = { null },
+    /** Keys a snapshot of this same account may still carry (see `historyAccountKeys`). */
+    private val formerAccountKeys: suspend () -> Collection<String> = { emptyList() },
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -113,7 +115,8 @@ class LibraryCache(
     private suspend fun readSnapshot(): StoredLibrary? {
         val store = snapshots ?: return null
         val key = accountKey() ?: return null
-        return runCatching { withContext(Dispatchers.IO) { store.read(key) } }.getOrNull()
+        val former = formerAccountKeys()
+        return runCatching { withContext(Dispatchers.IO) { store.read(key, former) } }.getOrNull()
     }
 
     /** Load only if nothing has been loaded yet — the "opening this screen" path. */

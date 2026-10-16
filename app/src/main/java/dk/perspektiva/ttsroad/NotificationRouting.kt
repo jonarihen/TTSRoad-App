@@ -43,7 +43,7 @@ class NotificationPlayActivity : androidx.activity.ComponentActivity() {
         lifecycleScope.launch {
             try {
                 val session = ServiceLocator.tokenStore(this@NotificationPlayActivity).current()
-                if (session.isLoggedIn && sessionKey == notificationSessionKey(session)) {
+                if (notificationActionOwnedBy(sessionKey, session)) {
                     startActivity(TrustedNotificationActions.issue(this@NotificationPlayActivity, route, session))
                 }
             } finally {

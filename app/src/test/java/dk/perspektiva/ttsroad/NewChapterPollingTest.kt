@@ -126,14 +126,32 @@ class NewChapterPollingTest {
         assertEquals(0, manager.allNotifications.size)
 
         // Another account has no record, so its first look is silent too.
-        val other = owner.copy(token = "other")
+        val other = owner.copy(token = "other", username = "other")
         announceNewlyReady(listOf(entry(5, true)), other, store, notifier) { true }
         assertEquals(0, manager.allNotifications.size)
 
         // Losing ownership mid-check records and announces nothing.
         announceNewlyReady(listOf(entry(5, true), entry(6, true)), other, store, notifier) { false }
         assertEquals(0, manager.allNotifications.size)
-        assertEquals(setOf(5), store.read(notificationSessionKey(other)))
+        assertEquals(setOf(5), store.read(requireNotNull(dk.perspektiva.ttsroad.player.historyAccountKey(other))))
+    }
+
+    @Test
+    fun `a rotated token keeps the seen record, and a pre-455 token-keyed record is read once`() = runBlocking {
+        val store = NewChapterSeenStore(context)
+        val notifier = NewChapterNotifier(context)
+        val owner = SessionState(serverUrl = "https://ttsroad.example.com/", token = "t", username = "anna")
+        // What a build before #455 wrote: the record under the server + token key.
+        store.write(notificationSessionKey(owner), setOf(1))
+
+        announceNewlyReady(listOf(entry(1, true), entry(2, true)), owner, store, notifier) { true }
+        assertEquals(1, manager.allNotifications.size)
+
+        // A password change rotates the token; chapter 3 became ready in the gap and is still news.
+        NewChapterNotifier(context).clear()
+        val rotated = owner.copy(token = "after-password-change")
+        announceNewlyReady(listOf(entry(1, true), entry(2, true), entry(3, true)), rotated, store, notifier) { true }
+        assertEquals(1, manager.allNotifications.size)
     }
 
     @Test

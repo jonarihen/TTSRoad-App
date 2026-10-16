@@ -8,6 +8,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dk.perspektiva.ttsroad.core.deleteUnderLock
 import dk.perspektiva.ttsroad.core.readUtf8OrNull
 import dk.perspektiva.ttsroad.core.writeUtf8
+import dk.perspektiva.ttsroad.data.isPlaceholderIdentity
 import dk.perspektiva.ttsroad.data.normalizeBaseUrl
 import dk.perspektiva.ttsroad.data.SessionState
 import java.io.File
@@ -49,15 +50,32 @@ data class HistorySnapshot(
  * Server and username rather than the token: signing in again to the same account — after a token
  * expiry in the middle of the night, say — must keep the very history the sleeper needs. Hashed so
  * the file does not spell out a self-hosted address that is usually a home one.
+ *
+ * The server is the one it says it is — its `instance_id`, else its reported `base_url` — rather
+ * than the address in use, so moving to a saved alternate address keeps the key (#446). Only a
+ * session that knows neither falls back to the address.
  */
-fun historyAccountKey(session: SessionState): String? {
-    if (!session.isLoggedIn) return null
-    val server = runCatching { normalizeBaseUrl(session.serverUrl) }.getOrDefault(session.serverUrl)
-    val identity = "$server\u0000${session.username.orEmpty()}"
-    return MessageDigest.getInstance("SHA-256")
-        .digest(identity.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
+fun historyAccountKey(session: SessionState): String? = historyAccountKeys(session).firstOrNull()
+
+/**
+ * [historyAccountKey] first, then every other key this same account's records may carry: the
+ * weaker server identities, and the address-based key of each of the session's known addresses —
+ * which is what every key was before #446. Records under any of them are this account's, so they
+ * are adopted rather than dropped when the session learns a stronger identity or switches address.
+ * Empty when signed out.
+ */
+fun historyAccountKeys(session: SessionState): List<String> {
+    if (!session.isLoggedIn) return emptyList()
+    val servers = listOfNotNull(
+        session.serverInstanceId?.let { "instance:$it" },
+        session.serverIdentity?.takeUnless(::isPlaceholderIdentity)?.let { "identity:$it" },
+    ) + session.knownAddresses.map { runCatching { normalizeBaseUrl(it) }.getOrDefault(it) }
+    return servers.map { accountHash("$it\u0000${session.username.orEmpty()}") }.distinct()
 }
+
+private fun accountHash(identity: String): String = MessageDigest.getInstance("SHA-256")
+    .digest(identity.toByteArray(Charsets.UTF_8))
+    .joinToString("") { "%02x".format(it) }
 
 /**
  * Where the history lives between launches.
@@ -179,8 +197,11 @@ class PlaybackHistoryStore internal constructor(
      *
      * Signing out ([key] null) keeps everything: the next sign-in is usually the same account, and
      * only then is it known whether the history still applies.
+     *
+     * Snapshots stamped with one of [formerKeys] are this account's under an older key (see
+     * [historyAccountKeys]) and are restamped with [key].
      */
-    fun bindAccount(key: String?) {
+    fun bindAccount(key: String?, formerKeys: Collection<String> = emptyList()) {
         account = key
         if (key == null) return
         synchronized(lock) {
@@ -188,7 +209,7 @@ class PlaybackHistoryStore internal constructor(
             val scoped = current.mapNotNull { snapshot ->
                 when (snapshot.account) {
                     key -> snapshot
-                    null -> snapshot.copy(account = key)
+                    null, in formerKeys -> snapshot.copy(account = key)
                     else -> null
                 }
             }

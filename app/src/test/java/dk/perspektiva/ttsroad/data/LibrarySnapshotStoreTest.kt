@@ -58,6 +58,14 @@ class LibrarySnapshotStoreTest {
     }
 
     @Test
+    fun `a library saved under a former key of the same account is still read (#446)`() {
+        store.write("old-address-key", library)
+
+        assertEquals(library, store.read("instance-key", listOf("instance-key", "old-address-key"))?.library)
+        assertNull(store.read("instance-key", listOf("instance-key")))
+    }
+
+    @Test
     fun `signed out writes nothing`() {
         store.write(null, library)
 
