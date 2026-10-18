@@ -1,6 +1,16 @@
 package dk.perspektiva.ttsroad
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
@@ -124,6 +134,46 @@ class PlayerSheetsSemanticsTest {
         assertEquals(Role.RadioButton, current.role())
         current.assertIsSelected()
         compose.onNodeWithText("1.0×").assertIsNotSelected()
+    }
+
+    @Test
+    fun `fine speed buttons step by a twentieth and are 48 dp named targets`() {
+        var speed by mutableStateOf(2.0f)
+        compose.setContent {
+            TtsRoadTheme {
+                FineSpeedStepper(
+                    speed = speed,
+                    speedLabel = "${speed}x",
+                    onSpeedChange = { speed = it },
+                )
+            }
+        }
+
+        val up = compose.onNodeWithTag("speed_step_up")
+        up.assertContentDescriptionEquals("Faster")
+        up.assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+        repeat(4) {
+            up.performClick()
+            compose.waitForIdle()
+        }
+        assertEquals(2.2f, speed, 0.0001f)
+        compose.onNodeWithTag("speed_step_down").assertContentDescriptionEquals("Slower").performClick()
+        compose.waitForIdle()
+        assertEquals(2.15f, speed, 0.0001f)
+    }
+
+    @Test
+    fun `fine speed buttons are disabled at the ends of the range`() {
+        compose.setContent {
+            TtsRoadTheme {
+                Column {
+                    FineSpeedStepper(speed = 3.0f, speedLabel = "3x", onSpeedChange = {})
+                }
+            }
+        }
+
+        compose.onNodeWithTag("speed_step_up").assertIsNotEnabled()
+        compose.onNodeWithTag("speed_step_down").assertIsEnabled()
     }
 
     @Test

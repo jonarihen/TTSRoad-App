@@ -108,6 +108,35 @@ fun speedOptions(current: Float): List<Float> {
 }
 
 /**
+ * The size of one tap on the speed sheet's -/+ buttons (#487). The presets are a quarter apart at
+ * best, and a listener who wants 2.2x had no way to reach it except from another client.
+ */
+const val FineSpeedStep: Float = 0.05f
+
+/**
+ * [current] moved by [steps] of [FineSpeedStep], snapped to that grid and kept inside
+ * [sanitizeSpeed]'s range.
+ *
+ * Snapping first means a speed set elsewhere at, say, 1.33x goes to 1.35x on "+" (1.30x on "-")
+ * rather than the awkward 1.38x, and float drift from repeated taps never accumulates into 2.1999x.
+ */
+fun stepSpeed(current: Float, steps: Int): Float {
+    val exact = sanitizeSpeed(current) / FineSpeedStep
+    val nearest = kotlin.math.round(exact)
+    // Off the grid, the first step only reaches the neighbouring grid point in its direction.
+    val base = when {
+        kotlin.math.abs(exact - nearest) < SpeedEpsilon -> nearest
+        steps > 0 -> kotlin.math.floor(exact)
+        else -> kotlin.math.ceil(exact)
+    }
+    return sanitizeSpeed((base.toInt() + steps) * FineSpeedStep)
+}
+
+/** Whether one more step in the direction of [steps] would change the speed at all. */
+fun canStepSpeed(current: Float, steps: Int): Boolean =
+    kotlin.math.abs(stepSpeed(current, steps) - sanitizeSpeed(current)) >= SpeedEpsilon
+
+/**
  * Float comparison tolerance for "is this the same speed". Presets are a tenth apart at the closest,
  * so anything this small only ever collapses genuine rounding drift.
  */
