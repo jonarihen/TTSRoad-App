@@ -29,3 +29,20 @@ fun chaptersPlayedAfter(history: List<HistorySnapshot>, from: HistorySnapshot): 
         .groupBy({ it.fictionId }, { it.chapterId })
         .mapValues { (_, ids) -> ids.toSet() }
 }
+
+/**
+ * Jump back to [snap] and, only after it succeeds, raise the unmark offer (#342, #484).
+ *
+ * Both the jump-back sheet and the library's "Resume there" banner use this, so their offers cannot
+ * drift apart. Returns [jump]'s answer: null on success, or a message for the listener.
+ */
+suspend fun jumpBackAndOffer(
+    snap: HistorySnapshot,
+    history: List<HistorySnapshot>,
+    onOffer: (Map<Int, Set<Int>>) -> Unit,
+    jump: suspend (HistorySnapshot) -> String?,
+): String? {
+    val failure = jump(snap)
+    if (failure == null) onOffer(chaptersPlayedAfter(history, snap))
+    return failure
+}

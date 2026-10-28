@@ -316,7 +316,7 @@ import dk.perspektiva.ttsroad.nav.switchToRoot
 import dk.perspektiva.ttsroad.nav.withFiction
 import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
-import dk.perspektiva.ttsroad.player.chaptersPlayedAfter
+import dk.perspektiva.ttsroad.player.jumpBackAndOffer
 import dk.perspektiva.ttsroad.player.jumpBackOptions
 import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
@@ -1069,7 +1069,7 @@ internal fun AppBottomBar(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainScaffold(
+internal fun MainScaffold(
     session: SessionState,
     screen: AppScreen,
     selectedRoot: AppRoot,
@@ -1085,6 +1085,10 @@ private fun MainScaffold(
     newChapters: NewChaptersState,
 ) {
     val context = LocalContext.current
+    // Chapters playback went on to finish after the moment just jumped back to, by fiction (#342).
+    // Held here rather than by the player because the library's "Resume there" banner raises it and
+    // the player answers it (#484). Sign-out leaves the scaffold, so no other account inherits it.
+    var playedAfterJump by remember { mutableStateOf<Map<Int, Set<Int>>>(emptyMap()) }
     // Saved UI state (scroll offsets, search text) is kept per stack entry, so returning to a
     // screen lands where it was left. Dropping an entry drops its state with it.
     val stateHolder = rememberSaveableStateHolder()
@@ -1173,6 +1177,7 @@ private fun MainScaffold(
                     onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                     onOpenPlayer = { onScreenChange(AppScreen.Player) },
                     onBrowseFictions = { onRootChange(AppRoot.Browse) },
+                    onUnmarkOffer = { playedAfterJump = it },
                 )
 
                 AppScreen.Fictions -> FictionsScreen(
@@ -1239,6 +1244,8 @@ private fun MainScaffold(
                     skipIntervalMs = skipIntervalMs,
                     onOpenReader = { onScreenChange(it) },
                     onOpenQueue = { onScreenChange(AppScreen.Queue) },
+                    playedAfterJump = playedAfterJump,
+                    onUnmarkOffer = { playedAfterJump = it },
                 )
 
                 is AppScreen.Reader -> ReaderScreen(
@@ -1346,6 +1353,7 @@ internal fun LibraryScreen(
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenPlayer: () -> Unit,
     onBrowseFictions: () -> Unit,
+    onUnmarkOffer: (Map<Int, Set<Int>>) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -1448,7 +1456,11 @@ internal fun LibraryScreen(
                                         lastHeardBusy = true
                                         lastHeardError = null
                                         scope.launch {
-                                            val failure = jumpToSnapshot(lastHeard.snapshot, playbackController, repository)
+                                            val failure = jumpBackAndOffer(
+                                                lastHeard.snapshot,
+                                                history,
+                                                onUnmarkOffer,
+                                            ) { jumpToSnapshot(it, playbackController, repository) }
                                             lastHeardBusy = false
                                             // Only open the player once there is something in it.
                                             if (failure == null) onOpenPlayer() else lastHeardError = failure
@@ -3284,6 +3296,8 @@ private fun PlayerScreen(
     skipIntervalMs: Long,
     onOpenReader: (AppScreen.Reader) -> Unit,
     onOpenQueue: () -> Unit,
+    playedAfterJump: Map<Int, Set<Int>>,
+    onUnmarkOffer: (Map<Int, Set<Int>>) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -3316,9 +3330,6 @@ private fun PlayerScreen(
     // should show where you are, not the last thing you went looking for.
     var queueQuery by remember(showChapters) { mutableStateOf("") }
     var showJumpBack by remember { mutableStateOf(false) }
-    // Chapters playback went on to finish after the moment just jumped back to, by fiction (#342).
-    // Non-empty only right after a jump, and only while the offer to unmark them is on screen.
-    var playedAfterJump by remember { mutableStateOf<Map<Int, Set<Int>>>(emptyMap()) }
     LaunchedEffect(showJumpBack) {
         if (!showJumpBack) return@LaunchedEffect
         remoteBreadcrumbs = runCatching {
@@ -3728,7 +3739,7 @@ private fun PlayerScreen(
 
     if (playedAfterJump.isNotEmpty()) {
         val count = playedAfterJump.values.sumOf { it.size }
-        val dismiss = { playedAfterJump = emptyMap() }
+        val dismiss = { onUnmarkOffer(emptyMap()) }
         AlertDialog(
             onDismissRequest = dismiss,
             containerColor = AarisColor.BgRaise,
@@ -3747,7 +3758,7 @@ private fun PlayerScreen(
                 Button(
                     onClick = {
                         val marked = playedAfterJump
-                        playedAfterJump = emptyMap()
+                        onUnmarkOffer(emptyMap())
                         scope.launch {
                             actionFeedback = unmarkPlayedAfterJump(marked, repository, context)
                         }
@@ -3800,10 +3811,11 @@ private fun PlayerScreen(
             jumping = true
             jumpError = null
             scope.launch {
-                val failure = jumpToSnapshot(snap, playbackController, repository)
+                val failure = jumpBackAndOffer(snap, history, onUnmarkOffer) {
+                    jumpToSnapshot(it, playbackController, repository)
+                }
                 jumping = false
                 if (failure == null) {
-                    playedAfterJump = chaptersPlayedAfter(history, snap)
                     showJumpBack = false
                 } else {
                     jumpError = failure
