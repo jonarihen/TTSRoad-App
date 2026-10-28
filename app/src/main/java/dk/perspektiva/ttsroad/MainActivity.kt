@@ -723,7 +723,7 @@ internal fun LoginNotice(text: String) {
 }
 
 @Composable
-private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
+internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     val scope = rememberCoroutineScope()
     // Empty rather than pre-filled with "https://": a pasted address used to land after the
     // pre-filled scheme as https://https://… (#361). normalizeBaseUrl assumes https:// anyway.
@@ -744,17 +744,22 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     // server's own wording explains which of expiry, revocation or a reset put the user here.
     val notice = error ?: sessionEnd?.message
     var probed by remember { mutableStateOf<ServerCapabilities?>(null) }
+    var unreachable by remember { mutableStateOf(false) }
 
     // Capability discovery is public, so the URL can be checked before any credentials are typed.
-    // Only once the host looks finished (#361) — half-typed names must not become DNS lookups — and
-    // still debounced, because a finished-looking "home.ex" is often on its way to "home.example.dk".
-    // A failure stays silent since an unreachable server here is usually just a typo in progress.
+    // Only once the host could be a real one (#361), and debounced, because "https://n" is usually
+    // on its way to "https://nas" and a finished-looking "home.ex" to "home.example.dk" (#513).
+    // No answer at all is said quietly once typing pauses; it never blocks Sign in, since the
+    // server may simply not be up yet. A 404 is an older server and stays silent.
     val probeUrl = remember(serverUrl) { probeableBaseUrl(serverUrl) }
     LaunchedEffect(probeUrl) {
         probed = null
+        unreachable = false
         val url = probeUrl ?: return@LaunchedEffect
         delay(800)
-        probed = repository.capabilities(url).takeIf { it.serverVersion != null }
+        val found = repository.resolvedCapabilitiesFor(url)
+        probed = found?.takeIf { it.serverVersion != null }
+        unreachable = found == null
     }
 
     Column(
@@ -787,6 +792,10 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             ),
             supportingText = probed?.let { found ->
                 { MetaText(text = "${found.serverName} ${found.serverVersion}", color = AarisColor.Accent) }
+            } ?: if (unreachable) {
+                { MetaText(text = "Can't reach this address yet") }
+            } else {
+                null
             },
         )
         Spacer(modifier = Modifier.height(12.dp))
