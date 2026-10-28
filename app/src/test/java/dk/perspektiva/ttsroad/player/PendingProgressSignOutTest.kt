@@ -2,7 +2,11 @@ package dk.perspektiva.ttsroad.player
 
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import dk.perspektiva.ttsroad.data.FakeSessionStore
+import dk.perspektiva.ttsroad.data.SessionEndReason
 import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.data.SignOutStep
+import dk.perspektiva.ttsroad.data.signOut
+import dk.perspektiva.ttsroad.data.unsyncedSignOutMessage
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.parseSessionEnd
 import dk.perspektiva.ttsroad.resolvedSession
@@ -143,6 +147,158 @@ class PendingProgressSignOutTest {
 
         assertTrue(store.isEmpty())
         assertFalse(file.exists())
+    }
+
+    private suspend fun TtsRoadRepository.signOutWith(store: PendingProgressStore, force: Boolean = false) =
+        signOut(
+            force = force,
+            flush = { ProgressSync(this@signOutWith, store).flushBeforeSignOut() },
+            logout = { logout() },
+        )
+
+    @Test
+    fun `sign-out sends the queued progress before clearing it`() = runTest {
+        val store = pendingStore()
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
+        val repository = TtsRoadRepository(loggedInStore(), onSessionCleared = store::clear)
+        server.enqueue(MockResponse().setBody("""{"capabilities":{"batch_progress":true},"limits":{}}"""))
+        server.enqueue(MockResponse().setBody("""{"accepted":[{"chapter_id":7}],"rejected":[],"server_state":[]}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok","revoked":true}"""))
+
+        val step = repository.signOutWith(store)
+
+        assertEquals(SignOutStep.Done(revoked = true), step)
+        server.takeRequest()
+        val sync = server.takeRequest()
+        assertEquals("/api/mobile/playback/sync", sync.path)
+        assertEquals("Bearer stale-token", sync.getHeader("Authorization"))
+        assertEquals("/api/mobile/logout", server.takeRequest().path)
+        assertTrue(store.isEmpty())
+        assertFalse(repository.currentSession().isLoggedIn)
+        assertNull(repository.sessionEnd.value)
+    }
+
+    @Test
+    fun `sign-out that cannot send the queue stays signed in and keeps it`() = runTest {
+        val store = pendingStore()
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
+        val repository = TtsRoadRepository(loggedInStore(), onSessionCleared = store::clear)
+        server.enqueue(MockResponse().setBody("""{"capabilities":{"batch_progress":true},"limits":{}}"""))
+        server.enqueue(MockResponse().setResponseCode(503))
+
+        val step = repository.signOutWith(store)
+
+        assertEquals(SignOutStep.Unsynced(positions = 1), step)
+        assertEquals(1, store.pending().size)
+        assertTrue(repository.currentSession().isLoggedIn)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a session expiring during the final flush does not hide its unsent positions`() = runTest {
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        val repository = TtsRoadRepository(loggedInStore(), onSessionCleared = store::clear)
+        server.enqueue(MockResponse().setBody("""{"capabilities":{"batch_progress":true}}"""))
+        server.enqueue(MockResponse().setResponseCode(401))
+
+        assertEquals(1, ProgressSync(repository, store).flushBeforeSignOut())
+        assertFalse(repository.currentSession().isLoggedIn)
+        assertEquals(1, store.pending().size)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `final flush uses legacy progress on an older server`() = runTest {
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        val repository = TtsRoadRepository(loggedInStore())
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(MockResponse().setBody("""{"status":"saved","chapter_id":7}"""))
+
+        assertEquals(0, ProgressSync(repository, store).flushBeforeSignOut())
+        assertTrue(store.isEmpty())
+        server.takeRequest()
+        assertEquals("/api/mobile/playback/progress", server.takeRequest().path)
+    }
+
+    @Test
+    fun `unresolved discovery leaves positions queued and blocks sign out`() = runTest {
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        val repository = TtsRoadRepository(loggedInStore(), onSessionCleared = store::clear)
+        server.enqueue(MockResponse().setResponseCode(503))
+
+        assertEquals(SignOutStep.Unsynced(1), repository.signOutWith(store))
+        assertTrue(repository.currentSession().isLoggedIn)
+        assertEquals(1, store.pending().size)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `final flush does not send another accounts positions`() = runTest {
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner.copy(username = "someone-else"))
+        val repository = TtsRoadRepository(loggedInStore())
+
+        assertEquals(0, ProgressSync(repository, store).flushBeforeSignOut())
+        assertEquals(1, store.pending().size)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `sign out anyway discards the queue and reports a revoke the server never heard`() = runTest {
+        val store = pendingStore()
+        store.record(fictionId = 1, chapterId = 7, positionSeconds = 30.0, isPlayed = false, owner = owner)
+        val repository = TtsRoadRepository(loggedInStore(), onSessionCleared = store::clear)
+        server.enqueue(MockResponse().setResponseCode(503))
+
+        val step = repository.signOutWith(store, force = true)
+
+        assertEquals(SignOutStep.Done(revoked = false), step)
+        assertEquals("/api/mobile/logout", server.takeRequest().path)
+        assertTrue(store.isEmpty())
+        assertFalse(repository.currentSession().isLoggedIn)
+        assertEquals(SessionEndReason.NotRevoked, repository.sessionEnd.value?.reason)
+    }
+
+    @Test
+    fun `a revoke refused as unauthorised counts as revoked`() = runTest {
+        val repository = TtsRoadRepository(loggedInStore())
+        server.enqueue(MockResponse().setResponseCode(401))
+
+        assertTrue(repository.logout())
+        assertNull(repository.sessionEnd.value)
+    }
+
+    @Test
+    fun `a successful HTTP response without confirmed revocation still warns`() = runTest {
+        val repository = TtsRoadRepository(loggedInStore())
+        server.enqueue(MockResponse().setBody("""{"status":"ok","revoked":false}"""))
+
+        assertFalse(repository.logout())
+        assertFalse(repository.currentSession().isLoggedIn)
+        assertEquals(SessionEndReason.NotRevoked, repository.sessionEnd.value?.reason)
+        assertTrue(repository.sessionEnd.value!!.message.contains("may still be valid"))
+
+        server.enqueue(loginResponse("admin"))
+        repository.loginAs("admin")
+        assertNull(repository.sessionEnd.value)
+    }
+
+    @Test
+    fun `already signed out needs no revoke or warning`() = runTest {
+        val repository = TtsRoadRepository(FakeSessionStore(SessionState()))
+
+        assertTrue(repository.logout())
+        assertNull(repository.sessionEnd.value)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `the unsynced warning names what is lost`() {
+        assertTrue(unsyncedSignOutMessage(1).startsWith("1 listening position recorded"))
+        assertTrue(unsyncedSignOutMessage(3).contains("discards them"))
     }
 
     private fun repositoryWith(store: PendingProgressStore, sessions: FakeSessionStore = loggedInStore()) =
