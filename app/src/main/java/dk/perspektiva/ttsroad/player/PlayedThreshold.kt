@@ -31,8 +31,9 @@ object PlayedThreshold {
         durationMs: Long?,
         autoMarkEnabled: Boolean,
         queueEnded: Boolean = false,
+        deferForSleepTimer: Boolean = false,
     ): Boolean {
-        if (!autoMarkEnabled) return false
+        if (!autoMarkEnabled || deferForSleepTimer) return false
         if (queueEnded) return true
         val total = durationMs?.takeIf { it > 0 } ?: return false
         return positionMs >= total - TailMs ||
