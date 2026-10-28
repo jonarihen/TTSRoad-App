@@ -86,8 +86,7 @@ internal fun playerUiStateOf(player: Player, queue: List<QueueItem>): PlayerUiSt
         currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
         hasNext = canRequestNextChapter(player),
         hasPrevious = player.hasPreviousMediaItem(),
-        // The cause does not survive the binder, so the HTTP status is unavailable here; the
-        // service reads it from the real exception and handles the 401 case there.
-        error = player.playerError?.let { classifyPlaybackError(it.errorCode).message },
+        error = player.playerError?.let(::playbackErrorMessage),
+        errorDetails = player.playerError?.let(::playbackErrorDetails),
     )
 }
