@@ -35,7 +35,7 @@ internal class GrowingPlaybackQueue(
     private var nextIntent: NextIntent? = null
     private data class ReconciledQueue(val playlist: List<Any>)
 
-    val sessionPlayer: Player = object : ForwardingPlayer(player) {
+    val sessionPlayer: Player = SessionPlaybackErrors(object : ForwardingPlayer(player) {
         override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
             .apply {
                 if (canReconcile()) {
@@ -50,7 +50,7 @@ internal class GrowingPlaybackQueue(
 
         override fun seekToNextMediaItem() = requestNext { player.seekToNextMediaItem() }
         override fun seekToNext() = requestNext { player.seekToNext() }
-    }
+    })
 
     private fun canReconcile(): Boolean {
         if (sessionKey() == null) return false

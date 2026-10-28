@@ -3025,7 +3025,7 @@ internal fun PlayerScreenBody(
         }
         playerState.error?.let { message ->
             Spacer(modifier = Modifier.height(12.dp))
-            PlaybackErrorBanner(message = message, onRetry = onRetry)
+            PlaybackErrorBanner(message = message, details = playerState.errorDetails, onRetry = onRetry)
         }
         actionFeedback?.let { feedback ->
             MetaText(
@@ -6590,20 +6590,23 @@ private fun MiniPlayerBar(
  * manual escalation, not the first line of defence.
  */
 @Composable
-private fun PlaybackErrorBanner(message: String, onRetry: () -> Unit) {
+internal fun PlaybackErrorBanner(message: String, details: String? = null, onRetry: () -> Unit) {
     AarisCard {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            MetaText(
-                text = message,
-                color = AarisColor.Danger,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onRetry) { Text("RETRY") }
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MetaText(
+                    text = message,
+                    color = AarisColor.Danger,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onRetry) { Text("RETRY") }
+            }
+            ErrorDetails(details = details, modifier = Modifier.padding(horizontal = 16.dp))
         }
     }
 }
