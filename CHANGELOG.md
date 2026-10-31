@@ -11,9 +11,15 @@ Notable changes to the TTSRoad Android client.
   widget has a Sleep button that steps the timer like the notification's. (#500)
 - Long-press a chapter, then "Mark a range of chapters…" to mark chapters from one number to another
   (say 400 to 650) played or unplayed in one request, with the count shown first. (#512)
+- The speed sheet has - / + buttons that move playback speed in 0.05x steps (2.2x is four taps from
+  2.0x), writing to this book's override when the per-book switch is on. (#487)
 
 ### Changed
 
+- New chapters groups rows under their fiction with a "Play new" button per fiction, scrolls as a
+  lazy list, and the Listening tab badge reads "3 new" instead of a bare number. (#496)
+- The empty Home cards ("No active chapters", "No fictions found") offer "Find something to listen
+  to", which opens Browse. (#508)
 - Android Auto: Continue Listening and Recent show at most 20 rows (newest first) instead of
   leaving the cut to the head unit, and the Recent folder says its rows name the book. (#499)
 
@@ -21,6 +27,13 @@ Notable changes to the TTSRoad Android client.
 
 - Home-screen widget buttons are at least 48 dp tall, share the row evenly and use 14 sp text, so
   they are easier to hit one-handed in the dark. (#501)
+- Error messages no longer assume you run the server: certificate, HTTPS, "update the backend" and
+  signing-key messages now say to ask whoever set up your server (or who gave you the app), with the
+  technical advice moved under Details. (#489)
+- Chapters that cannot be played yet read "Getting ready…" or "Couldn't prepare this chapter" instead of
+  PENDING / CLEANING / FETCHING; the pipeline words and the server's message sit behind Details. (#488)
+- The new-chapter notification says a single chapter is ready to listen, and when several land it
+  names the serials and offers "Play first". (#495)
 - A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
 - Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
   "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP

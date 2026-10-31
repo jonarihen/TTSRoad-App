@@ -70,7 +70,8 @@ class ChapterStateTest {
             ttsProgress = 62,
         )
 
-        assertEquals("converting 62%", chapter.statusLabel)
+        assertEquals("getting ready 62%", chapter.statusLabel)
+        assertEquals("Status: converting 62%\nStage: converting", chapter.statusDetail)
         assertFalse(chapter.hasError)
     }
 
@@ -82,34 +83,38 @@ class ChapterStateTest {
             subStatus = ChapterSubStatus.Converting,
         )
 
-        assertEquals("converting", chapter.statusLabel)
+        assertEquals("getting ready…", chapter.statusLabel)
+        assertEquals("Status: converting\nStage: converting", chapter.statusDetail)
     }
 
     @Test
-    fun `the earlier pipeline stages are named rather than lumped into processing`() {
-        assertEquals(
-            "fetching",
-            ChapterSummary(
-                id = 1,
-                status = ChapterStatus.Processing,
-                subStatus = ChapterSubStatus.FetchingHtml,
-            ).statusLabel,
+    fun `the pipeline stages read as getting ready, with their own names behind details`() {
+        // "PENDING" reads like a payment problem to a listener who has never seen the backend (#488).
+        val fetching = ChapterSummary(
+            id = 1,
+            status = ChapterStatus.Processing,
+            subStatus = ChapterSubStatus.FetchingHtml,
         )
-        assertEquals(
-            "cleaning",
-            ChapterSummary(
-                id = 1,
-                status = ChapterStatus.Processing,
-                subStatus = ChapterSubStatus.Preprocessing,
-            ).statusLabel,
+        val cleaning = ChapterSummary(
+            id = 1,
+            status = ChapterStatus.Processing,
+            subStatus = ChapterSubStatus.Preprocessing,
         )
+
+        assertEquals("getting ready…", fetching.statusLabel)
+        assertEquals("getting ready…", cleaning.statusLabel)
+        assertTrue(fetching.statusDetail.startsWith("Status: fetching"))
+        assertTrue(cleaning.statusDetail.startsWith("Status: cleaning"))
+        assertEquals("Not ready to listen yet - it is still being prepared.", fetching.statusSentence)
     }
 
     @Test
-    fun `a failure is labelled and flagged`() {
+    fun `a failure is worded for the listener and keeps the server's reason behind details`() {
         val chapter = ChapterSummary(id = 1, status = ChapterStatus.Error, errorMessage = "boom")
 
-        assertEquals("failed", chapter.statusLabel)
+        assertEquals("couldn't prepare", chapter.statusLabel)
+        assertEquals("Couldn't prepare this chapter.", chapter.statusSentence)
+        assertEquals("Status: failed\nServer said: boom", chapter.statusDetail)
         assertTrue(chapter.hasError)
     }
 
@@ -119,25 +124,35 @@ class ChapterStateTest {
         // the misleading half — it is not in the feed, the counts or the player either way.
         val chapter = ChapterSummary(id = 1, status = ChapterStatus.Done, excluded = true)
 
-        assertEquals("excluded", chapter.statusLabel)
+        assertEquals("skipped", chapter.statusLabel)
+        assertEquals("Status: excluded", chapter.statusDetail)
     }
 
     @Test
-    fun `a queued chapter still reads as pending`() {
-        assertEquals("pending", ChapterSummary(id = 1, status = ChapterStatus.Pending).statusLabel)
-        assertEquals("pending", ChapterSummary(id = 1).statusLabel)
+    fun `a queued chapter reads as getting ready and its raw status stays pending`() {
+        assertEquals("getting ready…", ChapterSummary(id = 1, status = ChapterStatus.Pending).statusLabel)
+        assertEquals("getting ready…", ChapterSummary(id = 1).statusLabel)
+        assertEquals("Status: pending", ChapterSummary(id = 1).statusDetail)
+    }
+
+    @Test
+    fun `a playable chapter has nothing to explain`() {
+        val chapter = ChapterSummary(id = 1, status = ChapterStatus.Done, audio = AudioInfo(url = "https://x/a.mp3"))
+
+        assertEquals(null, chapter.statusSentence)
     }
 
     @Test
     fun `an unrecognised sub status falls back to the coarse status`() {
-        // Additive by contract: a newer server may add a stage this build has never heard of, and
-        // showing the coarse status beats showing a raw enum name to a listener.
+        // Additive by contract: a newer server may add a stage this build has never heard of. The
+        // listener sees "getting ready"; the details name what the server actually sent.
         val chapter = ChapterSummary(
             id = 1,
             status = ChapterStatus.Processing,
             subStatus = "transcoding_to_opus",
         )
 
-        assertEquals("processing", chapter.statusLabel)
+        assertEquals("getting ready…", chapter.statusLabel)
+        assertEquals("Status: processing\nStage: transcoding_to_opus", chapter.statusDetail)
     }
 }
