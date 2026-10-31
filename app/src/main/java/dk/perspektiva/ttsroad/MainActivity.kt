@@ -273,6 +273,7 @@ import dk.perspektiva.ttsroad.data.signOut
 import dk.perspektiva.ttsroad.data.unsyncedSignOutMessage
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
+import dk.perspektiva.ttsroad.data.SleepAutoArmOptions
 import dk.perspektiva.ttsroad.data.speedOptions
 import dk.perspektiva.ttsroad.data.canStepSpeed
 import dk.perspektiva.ttsroad.data.stepSpeed
@@ -5009,6 +5010,20 @@ internal fun SettingsScreen(
                 MetaText(
                     text = "Marked in the player's sleep sheet. " +
                         PreferenceScope.account(capabilities.playerPreferences),
+                    color = AarisColor.Dim,
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(text = "Arm the sleep timer automatically after")
+                AarisChoiceRow(
+                    options = SleepAutoArmOptions,
+                    selected = prefs.sleepAutoArmFromHour,
+                    label = { if (it < 0) "Off" else "%02d:00".format(it) },
+                    onSelect = { scope.launch { preferences.setSleepAutoArmFromHour(it) } },
+                )
+                MetaText(
+                    text = "Starting playback from then until 05:00 arms the default timer, once " +
+                        "a night. Cancel it and it stays off until the next night. " +
+                        PreferenceScope.DevicePlayer,
                     color = AarisColor.Dim,
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)

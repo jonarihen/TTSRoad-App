@@ -6,6 +6,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Settings: "Arm the sleep timer automatically after" 21:00-00:00. Starting playback from then until
+  05:00 arms the default timer, once a night. (#503)
 - Release builds can trust user-installed CAs for named hosts only, set at build time with
   `ttsroad.trust.user.ca.hosts` in `local.properties` (no runtime toggle; see README). A certificate
   issued for a different name now says so instead of "doesn't trust the certificate". (#504)
