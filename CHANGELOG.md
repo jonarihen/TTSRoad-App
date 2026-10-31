@@ -16,6 +16,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- TalkBack: screen titles, section headers and `//` kickers are headings, and the time labels, speed
+  and sleep-timer buttons and the widget skip buttons are spoken in words ("28 minutes left",
+  "Speed 1.5 times", "Skip back 30 seconds"). (#492, #493)
 - A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
 - Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
   "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP

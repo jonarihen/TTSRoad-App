@@ -35,6 +35,8 @@ import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.layout.width
+import androidx.glance.semantics.contentDescription
+import androidx.glance.semantics.semantics
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -195,11 +197,11 @@ private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?, skips: SkipB
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.Vertical.CenterVertically,
         ) {
-            TransportButton(skips.back, actionRunCallback<SkipBackAction>())
+            TransportButton(skips.back, actionRunCallback<SkipBackAction>(), description = skips.backDescription)
             Spacer(GlanceModifier.width(6.dp))
             PlayPauseButton(view)
             Spacer(GlanceModifier.width(6.dp))
-            TransportButton(skips.forward, actionRunCallback<SkipForwardAction>())
+            TransportButton(skips.forward, actionRunCallback<SkipForwardAction>(), description = skips.forwardDescription)
         }
     }
 }
@@ -217,7 +219,7 @@ private fun PlayPauseButton(view: WidgetView.Playback) {
 }
 
 @Composable
-private fun TransportButton(text: String, action: Action, accent: Boolean = false) {
+private fun TransportButton(text: String, action: Action, accent: Boolean = false, description: String = text) {
     Button(
         text = text,
         onClick = action,
@@ -226,7 +228,9 @@ private fun TransportButton(text: String, action: Action, accent: Boolean = fals
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
         ),
-        modifier = GlanceModifier.background(if (accent) AarisColor.Accent else AarisColor.Line),
+        modifier = GlanceModifier
+            .background(if (accent) AarisColor.Accent else AarisColor.Line)
+            .semantics { contentDescription = description },
     )
 }
 
