@@ -7,6 +7,27 @@ Notable changes to the TTSRoad Android client.
 ### Added
 
 - Stats has a range picker (4, 12, 26 or 52 weeks) for the activity grid. (#514)
+- Settings: "Arm the sleep timer automatically after" 21:00-00:00. Starting playback from then until
+  05:00 arms the default timer, once a night. (#503)
+- Release builds can trust user-installed CAs for named hosts only, set at build time with
+  `ttsroad.trust.user.ca.hosts` in `local.properties` (no runtime toggle; see README). A certificate
+  issued for a different name now says so instead of "doesn't trust the certificate". (#504)
+- Android Auto and the media notification gain overflow "Previous chapter" / "Next chapter" buttons,
+  so a chapter can be skipped without browsing while the +/-30 s skips keep the main slots. Not
+  verified on a head unit. (#498)
+- Automatic address failover: when the address in use cannot be reached at all (no DNS, refused, no
+  route, connect timeout), the app tries your other saved addresses, each through the same
+  same-server and same-account checks as SWITCH, and keeps the first that passes. Settings > Profile
+  says when it switched and from where. At most one attempt a minute; the failed call still fails and
+  the next one uses the new address. (#505)
+- Queue: drag a row by its handle to reorder it; the drop sends one request with the whole order
+  instead of one per step. The arrows stay. (#511)
+- Settings > Offline lists what is downloaded per book, with DELETE PLAYED and DELETE ALL for each
+  book and one DELETE PLAYED DOWNLOADS across the library. (#497)
+- Jump back: each row shows the sentence being read at that moment (when the server has timed text),
+  a long press on the history icon names it, and with no sleep timer the library banner estimates
+  when you last touched the phone ("Last touched around") from the unbroken stretch of listening
+  before the audio stopped. (#502)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)
@@ -19,6 +40,9 @@ Notable changes to the TTSRoad Android client.
 
 - The jump-back log keeps three days of listening instead of the last 2,000 positions (about eight
   hours), and the Stats count is worded to match. (#514)
+- Opening a fiction no longer refetches the whole feed list (fetched once per session) and paints
+  its bookmarks, the Bookmarks screen and the Stats screen from the last visit while they refresh
+  behind it. (#509)
 - New chapters groups rows under their fiction with a "Play new" button per fiction, scrolls as a
   lazy list, and the Listening tab badge reads "3 new" instead of a bare number. (#496)
 - The empty Home cards ("No active chapters", "No fictions found") offer "Find something to listen

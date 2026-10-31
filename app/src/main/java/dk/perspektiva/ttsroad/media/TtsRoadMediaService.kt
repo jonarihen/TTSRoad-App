@@ -54,6 +54,8 @@ import dk.perspektiva.ttsroad.download.ChapterDownloadState
 import dk.perspektiva.ttsroad.data.ChapterListStore
 import dk.perspektiva.ttsroad.data.LibrarySnapshotStore
 import dk.perspektiva.ttsroad.data.DefaultHeadsetButtonsSeek
+import dk.perspektiva.ttsroad.data.SleepAutoArmOff
+import dk.perspektiva.ttsroad.data.sleepAutoArmNight
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSleepTimerMinutes
 import dk.perspektiva.ttsroad.data.DownloadPreferences
@@ -234,6 +236,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     // Read by the sleep-timer button on the notification for the same reason (#337).
     @Volatile
     private var sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes
+    @Volatile
+    private var sleepAutoArmFromHour: Int = SleepAutoArmOff
 
     // Read by onMediaButtonEvent, which is not suspending either (#336).
     @Volatile
@@ -343,6 +347,12 @@ class TtsRoadMediaService : MediaLibraryService() {
         }
         serviceScope.launch {
             preferences.prefs
+                .map { it.sleepAutoArmFromHour }
+                .distinctUntilChanged()
+                .collect { sleepAutoArmFromHour = it }
+        }
+        serviceScope.launch {
+            preferences.prefs
                 .map { it.sleepTimerDefaultMinutes }
                 .distinctUntilChanged()
                 .collect { sleepTimerDefaultMinutes = it }
@@ -381,6 +391,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     if (!isPlaying) {
                         pauseSave = serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
                     } else {
+                        autoArmSleepTimer()
                         // Do not wait for the first 15-second progress tick to turn Play into Pause.
                         serviceScope.launch { publishNowPlaying(forcePlaying = true) }
                     }
@@ -853,6 +864,23 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .map { it.isFading }
                 .distinctUntilChanged()
                 .collect { fading -> if (fading) shakeDetector?.start() else shakeDetector?.stop() }
+        }
+    }
+
+    /**
+     * Arm the default timer when playback starts inside the listener's night window (#503), once a
+     * night: cancelling it and carrying on is a decision this must not undo at the next resume.
+     */
+    private fun autoArmSleepTimer() {
+        if (sleepTimer.state.value.isArmed) return
+        val zone = java.util.TimeZone.getDefault()
+        val now = System.currentTimeMillis()
+        val night = sleepAutoArmNight(now + zone.getOffset(now), sleepAutoArmFromHour) ?: return
+        serviceScope.launch {
+            // Persisted: a reaped service must not re-arm a timer the listener cancelled tonight.
+            if (preferences.current().sleepAutoArmedNight == night) return@launch
+            preferences.setSleepAutoArmedNight(night)
+            if (!sleepTimer.state.value.isArmed) sleepTimer.cyclePreset(sleepTimerDefaultMinutes)
         }
     }
 
