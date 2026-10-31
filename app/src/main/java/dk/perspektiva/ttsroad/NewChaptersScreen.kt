@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad
 
 import androidx.compose.foundation.clickable
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -170,7 +171,7 @@ internal fun NewChaptersScreen(
                     Column {
                         Text(it, color = MaterialTheme.colorScheme.error)
                         TextButton(onClick = { actionError = null; refresh() }, enabled = !state.isLoading) {
-                            Text("RETRY")
+                            Text(labelCase("Retry"))
                         }
                     }
                 }
@@ -289,7 +290,7 @@ private fun NewChapterGroupHeader(group: NewChapterGroup, busy: Boolean, onPlayN
                 enabled = !busy,
                 shape = RectangleShape,
                 modifier = Modifier.heightIn(min = MinTouchTargetSize),
-            ) { Text("PLAY NEW") }
+            ) { Text(labelCase("Play new")) }
         }
     }
 }
@@ -343,7 +344,7 @@ private fun NewChapterRow(
                             enabled = !busy,
                             shape = RectangleShape,
                             modifier = Modifier.heightIn(min = MinTouchTargetSize),
-                        ) { Text(if (busy) "WORKING" else "CONVERT AGAIN") }
+                        ) { Text(if (busy) labelCase("Working") else labelCase("Convert again")) }
                     }
                     if (entry.playable) {
                         OutlinedButton(
@@ -351,7 +352,7 @@ private fun NewChapterRow(
                             enabled = !busy,
                             shape = RectangleShape,
                             modifier = Modifier.heightIn(min = MinTouchTargetSize),
-                        ) { Text(if (busy) "WORKING" else "PLAY") }
+                        ) { Text(if (busy) labelCase("Working") else labelCase("Play")) }
                     }
                     if (entry.dismissible) {
                         OutlinedButton(
@@ -359,7 +360,7 @@ private fun NewChapterRow(
                             enabled = !busy,
                             shape = RectangleShape,
                             modifier = Modifier.heightIn(min = MinTouchTargetSize),
-                        ) { Text(if (busy) "WORKING" else "DISMISS") }
+                        ) { Text(if (busy) labelCase("Working") else labelCase("Dismiss")) }
                     }
                 }
             }

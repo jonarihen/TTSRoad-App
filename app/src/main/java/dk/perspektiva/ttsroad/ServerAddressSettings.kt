@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -138,7 +139,7 @@ internal fun ServerAddressCard(
                             .testTag(ServerAddressUseTag)
                             .semantics { contentDescription = "Switch to $address" },
                     ) {
-                        Text(if (checking == address) "CHECKING" else "SWITCH")
+                        Text(if (checking == address) labelCase("Checking") else labelCase("Switch"))
                     }
                     TextButton(
                         onClick = {
@@ -151,7 +152,7 @@ internal fun ServerAddressCard(
                             .heightIn(min = 48.dp)
                             .semantics { contentDescription = "Forget $address" },
                     ) {
-                        Text("FORGET")
+                        Text(labelCase("Forget"))
                     }
                 }
             }
@@ -160,7 +161,7 @@ internal fun ServerAddressCard(
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                label = { Text("ANOTHER ADDRESS") },
+                label = { Text(labelCase("Another address")) },
                 placeholder = { Text("https://server.tailnet.ts.net") },
                 singleLine = true,
                 enabled = checking == null,
@@ -181,7 +182,7 @@ internal fun ServerAddressCard(
                     shape = RectangleShape,
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) {
-                    Text("CHECK AND SAVE")
+                    Text(labelCase("Check and save"))
                 }
                 OutlinedButton(
                     onClick = { run(draft, ServerAddressAction.Use) },
@@ -189,7 +190,7 @@ internal fun ServerAddressCard(
                     shape = RectangleShape,
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) {
-                    Text("CHECK AND SWITCH")
+                    Text(labelCase("Check and switch"))
                 }
             }
             if (checking != null) MetaText(text = "Checking ${checking.orEmpty()}…", color = AarisColor.Dim)

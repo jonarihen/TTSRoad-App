@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -288,7 +289,7 @@ internal fun FictionNotificationSettingsSheet(
                     enabled = !state.loading && !state.saving,
                     shape = RectangleShape,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("fiction-notification-retry"),
-                ) { Text("RETRY") }
+                ) { Text(labelCase("Retry")) }
             }
             AarisChoiceRow(
                 options = listOf(NotificationModeEvery, NotificationModeOff, NotificationModeBacklog),
@@ -353,7 +354,7 @@ internal fun FictionNotificationSettingsSheet(
                 enabled = canSave,
                 shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("fiction-notification-save"),
-            ) { Text(if (state.saving) "SAVING…" else "SAVE") }
+            ) { Text(if (state.saving) labelCase("Saving…") else labelCase("Save")) }
         }
     }
 }
@@ -402,7 +403,7 @@ internal fun FictionNotificationStatusButton(
         Spacer(Modifier.width(6.dp))
         Column {
             Text(label)
-            if (stale) Text("LAST KNOWN", style = MaterialTheme.typography.labelSmall)
+            if (stale) Text(labelCase("Last known"), style = MaterialTheme.typography.labelSmall)
         }
     }
 }

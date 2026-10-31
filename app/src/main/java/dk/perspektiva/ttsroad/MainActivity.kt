@@ -270,6 +270,8 @@ import dk.perspektiva.ttsroad.data.StreamingCacheUnlimited
 import dk.perspektiva.ttsroad.data.KeepAheadChoices
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
+import dk.perspektiva.ttsroad.data.readableTextDefault
+import dk.perspektiva.ttsroad.ui.LocalReadableText
 import dk.perspektiva.ttsroad.data.PreferenceScope
 import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.SignOutStep
@@ -438,7 +440,9 @@ class MainActivity : ComponentActivity() {
             val readableText by remember {
                 playbackPreferences.prefs.map { it.readableText }.distinctUntilChanged()
             }.collectAsStateWithLifecycle(initialValue = PlaybackPreferences.lastKnownReadableText)
-            TtsRoadTheme(readableText = readableText) {
+            TtsRoadTheme(
+                readableText = readableTextDefault(readableText, LocalDensity.current.fontScale),
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = AarisColor.Bg,
@@ -2272,13 +2276,13 @@ private fun FictionScreen(
 
             confirmDeleteChapter?.let { chapter ->
                 ConfirmDialog(
-                    title = "DELETE THIS CHAPTER?",
+                    title = labelCase("Delete this chapter?"),
                     // Specific rather than generic, for the same reason DELETE FICTION is: this is
                     // not scoped to one account, and there is no undo.
                     body = "\"${chapter.resolvedTitle}\" and its audio are deleted from the " +
                         "server, for everyone. It cannot be undone. The next poll may fetch it " +
                         "again from the source unless the chapter filter excludes it.",
-                    confirmLabel = "DELETE",
+                    confirmLabel = labelCase("Delete"),
                     onDismiss = { confirmDeleteChapter = null },
                     onConfirm = {
                         confirmDeleteChapter = null
@@ -2443,13 +2447,13 @@ private fun FictionScreen(
 
             if (confirmRotateFeed) {
                 ConfirmDialog(
-                    title = "REGENERATE THIS FEED LINK?",
+                    title = labelCase("Regenerate this feed link?"),
                     // Deliberately not the same warning as the account links: this token is shared
                     // by everyone subscribed to the fiction, so the blast radius is not just you.
                     body = "This book's feed URL is replaced. Every podcast app subscribed to it — " +
                         "on any account — stops receiving new chapters until it is given the new " +
                         "link. No audio or progress is lost.",
-                    confirmLabel = "REGENERATE",
+                    confirmLabel = labelCase("Regenerate"),
                     onDismiss = { confirmRotateFeed = false },
                     onConfirm = {
                         confirmRotateFeed = false
@@ -2467,12 +2471,12 @@ private fun FictionScreen(
 
             if (confirmReconvert) {
                 ConfirmDialog(
-                    title = "RE-NARRATE EVERY CHAPTER?",
+                    title = labelCase("Re-narrate every chapter?"),
                     body = "All ${fiction.totalChapters} chapters are converted again from " +
                         "scratch. That is ${fiction.totalChapters} conversions of server time and " +
                         "outbound requests, and every chapter already downloaded on a phone " +
                         "becomes an out-of-date copy. Saved positions and bookmarks are not touched.",
-                    confirmLabel = "RE-NARRATE",
+                    confirmLabel = labelCase("Re-narrate"),
                     onDismiss = { confirmReconvert = false },
                     onConfirm = {
                         confirmReconvert = false
@@ -2492,7 +2496,7 @@ private fun FictionScreen(
                     body = "This deletes the fiction, all ${fiction.totalChapters} chapters and " +
                         "their audio from the server, for everyone — including saved positions and " +
                         "bookmarks on other accounts. It cannot be undone.",
-                    confirmLabel = "DELETE",
+                    confirmLabel = labelCase("Delete"),
                     onDismiss = { confirmDelete = false },
                     onConfirm = {
                         confirmDelete = false
@@ -2545,7 +2549,7 @@ internal fun ChapterListControls(
     OutlinedTextField(
         value = query,
         onValueChange = onQuery,
-        label = { Text("FIND A CHAPTER") },
+        label = { Text(labelCase("Find a chapter")) },
         placeholder = { Text("Title or number") },
         singleLine = true,
         shape = RectangleShape,
@@ -2591,11 +2595,11 @@ internal fun ChapterListControls(
             onClick = onToggleSort,
             modifier = Modifier.heightIn(min = MinTouchTargetSize),
         ) {
-            Text(if (ascending) "OLDEST" else "NEWEST")
+            Text(if (ascending) labelCase("Oldest") else labelCase("Newest"))
         }
     }
     if (showJumpToCurrent) {
-        TextButton(onClick = onJumpToCurrent) { Text("JUMP TO CURRENT") }
+        TextButton(onClick = onJumpToCurrent) { Text(labelCase("Jump to current")) }
     }
 }
 
@@ -2773,7 +2777,7 @@ private fun ChapterRangeDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AarisColor.BgRaise,
-        title = { Text("MARK A RANGE", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(labelCase("Mark a range"), style = MaterialTheme.typography.titleLarge) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2803,16 +2807,16 @@ private fun ChapterRangeDialog(
         confirmButton = {
             Row {
                 TextButton(enabled = ids.isNotEmpty(), onClick = { onMark(ids, false) }) {
-                    Text("UNPLAYED")
+                    Text(labelCase("Unplayed"))
                 }
                 Button(
                     enabled = ids.isNotEmpty(),
                     onClick = { onMark(ids, true) },
                     shape = RectangleShape,
-                ) { Text("PLAYED") }
+                ) { Text(labelCase("Played")) }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(labelCase("Cancel")) } },
     )
 }
 
@@ -3458,7 +3462,7 @@ internal fun PlayerScreenBody(
             // Toggles in place rather than opening a sheet: it is a two-state setting, and the
             // label carries the state so nothing has to be opened to read it either.
             PlayerToggleButton(
-                label = if (skipSilence) "SKIP SILENCE ON" else "SKIP SILENCE",
+                label = if (skipSilence) labelCase("Skip silence on") else labelCase("Skip silence"),
                 name = "Skip silence",
                 checked = skipSilence,
                 onCheckedChange = { onToggleSkipSilence() },
@@ -3749,7 +3753,7 @@ private fun PlayerScreen(
             OutlinedTextField(
                 value = queueQuery,
                 onValueChange = { queueQuery = it },
-                label = { Text("FIND A CHAPTER") },
+                label = { Text(labelCase("Find a chapter")) },
                 placeholder = { Text("Title or number") },
                 singleLine = true,
                 shape = RectangleShape,
@@ -3855,7 +3859,7 @@ private fun PlayerScreen(
                         sleepTimer.cancel()
                         showSleepTimer = false
                     }) {
-                        Text("CANCEL")
+                        Text(labelCase("Cancel"))
                     }
                 }
             }
@@ -3932,7 +3936,7 @@ private fun PlayerScreen(
         AlertDialog(
             onDismissRequest = dismiss,
             containerColor = AarisColor.BgRaise,
-            title = { Text("MARK AS UNPLAYED?", style = MaterialTheme.typography.titleLarge) },
+            title = { Text(labelCase("Mark as unplayed?"), style = MaterialTheme.typography.titleLarge) },
             text = {
                 Text(
                     text = "Playback carried on through $count " +
@@ -3954,11 +3958,11 @@ private fun PlayerScreen(
                     },
                     shape = RectangleShape,
                 ) {
-                    Text("MARK UNPLAYED")
+                    Text(labelCase("Mark unplayed"))
                 }
             },
             dismissButton = {
-                TextButton(onClick = dismiss) { Text("KEEP") }
+                TextButton(onClick = dismiss) { Text(labelCase("Keep")) }
             },
         )
     }
@@ -3970,10 +3974,10 @@ private fun PlayerScreen(
         var confirmClearHistory by remember { mutableStateOf(false) }
         if (confirmClearHistory) {
             ConfirmDialog(
-                title = "CLEAR JUMP-BACK HISTORY?",
+                title = labelCase("Clear jump-back history?"),
                 body = "The listening trail this phone recorded — up to the last eight hours — is " +
                     "deleted, and cannot be brought back. Your progress on the server is not affected.",
-                confirmLabel = "CLEAR",
+                confirmLabel = labelCase("Clear"),
                 onDismiss = { confirmClearHistory = false },
                 onConfirm = {
                     confirmClearHistory = false
@@ -4029,7 +4033,7 @@ private fun PlayerScreen(
                     onClick = { confirmClearHistory = true },
                     colors = ButtonDefaults.textButtonColors(contentColor = AarisColor.Danger),
                 ) {
-                    Text("CLEAR")
+                    Text(labelCase("Clear"))
                 }
             }
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
@@ -4081,7 +4085,7 @@ private fun PlayerScreen(
                     AnnouncedError(text = message, modifier = Modifier.padding(top = 8.dp))
                     failedJump?.let { snap ->
                         TextButton(onClick = { jump(snap) }, enabled = !jumping) {
-                            Text("RETRY")
+                            Text(labelCase("Retry"))
                         }
                     }
                 }
@@ -4404,10 +4408,10 @@ private fun LastHeardBanner(
             error?.let { ErrorLine(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onResume, enabled = !busy, shape = RectangleShape) {
-                    Text(if (error != null) "RETRY" else "RESUME THERE")
+                    Text(if (error != null) labelCase("Retry") else labelCase("Resume there"))
                 }
                 TextButton(onClick = onDismiss) {
-                    Text("DISMISS")
+                    Text(labelCase("Dismiss"))
                 }
             }
         }
@@ -4869,7 +4873,7 @@ internal fun SettingsScreen(
                     color = AarisColor.Dim,
                 )
                 OutlinedButton(onClick = onOpenDevices, shape = RectangleShape) {
-                    Text("DEVICE SESSIONS")
+                    Text(labelCase("Device sessions"))
                 }
             }
         }
@@ -4968,7 +4972,7 @@ internal fun SettingsScreen(
                         },
                         shape = RectangleShape,
                     ) {
-                        Text("OPEN NOTIFICATION SETTINGS")
+                        Text(labelCase("Open notification settings"))
                     }
                 }
             }
@@ -5183,7 +5187,7 @@ internal fun SettingsScreen(
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
                 ReadableTextSetting(
-                    enabled = prefs.readableText,
+                    enabled = LocalReadableText.current,
                     onEnabledChange = { scope.launch { preferences.setReadableText(it) } },
                 )
 
@@ -5317,14 +5321,14 @@ internal fun SettingsScreen(
                     enabled = streamedBytes > 0,
                     shape = RectangleShape,
                 ) {
-                    Text("CLEAR STREAMED AUDIO")
+                    Text(labelCase("Clear streamed audio"))
                 }
                 OutlinedButton(
                     onClick = { confirmDeleteDownloads = true },
                     enabled = cacheBytes > 0,
                     shape = RectangleShape,
                 ) {
-                    Text("DELETE ALL DOWNLOADS")
+                    Text(labelCase("Delete all downloads"))
                 }
                 DownloadsOverview(
                     downloads = downloads,
@@ -5389,7 +5393,7 @@ internal fun SettingsScreen(
                         shape = RectangleShape,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Warning),
                     ) {
-                        Text("REGENERATE LINKS")
+                        Text(labelCase("Regenerate links"))
                     }
                 }
             }
@@ -5420,7 +5424,7 @@ internal fun SettingsScreen(
                             enabled = !isBackupBusy,
                             shape = RectangleShape,
                         ) {
-                            Text("SAVE A COPY")
+                            Text(labelCase("Save a copy"))
                         }
                         OutlinedButton(
                             // Not restricted to application/json: a file manager that stored the
@@ -5430,7 +5434,7 @@ internal fun SettingsScreen(
                             enabled = !isBackupBusy,
                             shape = RectangleShape,
                         ) {
-                            Text("RESTORE")
+                            Text(labelCase("Restore"))
                         }
                     }
                     MetaText(
@@ -5484,7 +5488,7 @@ internal fun SettingsScreen(
                         enabled = !isBusy,
                         shape = RectangleShape,
                     ) {
-                        Text("EMPTY MY SHELF")
+                        Text(labelCase("Empty my shelf"))
                     }
                 }
             }
@@ -5587,7 +5591,7 @@ internal fun SettingsScreen(
                         copyToClipboard(context, "TTSRoad diagnostics", report)
                     },
                     shape = RectangleShape,
-                ) { Text("COPY DIAGNOSTICS") }
+                ) { Text(labelCase("Copy diagnostics")) }
                 AutoUpdateCheckSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->
                     MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
@@ -5597,7 +5601,7 @@ internal fun SettingsScreen(
                     enabled = updateState !is UpdateState.Checking && updateState !is UpdateState.Downloading,
                     shape = RectangleShape,
                 ) {
-                    Text(if (updateState is UpdateState.Checking) "CHECKING…" else "CHECK FOR UPDATES")
+                    Text(if (updateState is UpdateState.Checking) labelCase("Checking…") else labelCase("Check for updates"))
                 }
             }
         }
@@ -5614,7 +5618,7 @@ internal fun SettingsScreen(
             colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Danger),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (isBusy) "SIGNING OUT" else "SIGN OUT")
+            Text(if (isBusy) labelCase("Signing out") else labelCase("Sign out"))
         }
         }
     }
@@ -5639,12 +5643,12 @@ internal fun SettingsScreen(
 
     if (confirmSignOut) {
         ConfirmDialog(
-            title = "SIGN OUT?",
+            title = labelCase("Sign out?"),
             body = "This phone stops playing and syncing until you sign in again, which needs the " +
                 "server address and your password. We will try to sync this phone's pending " +
                 "listening progress first and warn you if any remains unsent. Progress already on " +
                 "the server stays there.",
-            confirmLabel = "SIGN OUT",
+            confirmLabel = labelCase("Sign out"),
             onDismiss = { confirmSignOut = false },
             onConfirm = {
                 confirmSignOut = false
@@ -5655,9 +5659,9 @@ internal fun SettingsScreen(
 
     unsyncedAtSignOut?.let { positions ->
         ConfirmDialog(
-            title = "PROGRESS NOT SYNCED",
+            title = labelCase("Progress not synced"),
             body = unsyncedSignOutMessage(positions),
-            confirmLabel = "SIGN OUT ANYWAY",
+            confirmLabel = labelCase("Sign out anyway"),
             onDismiss = { unsyncedAtSignOut = null },
             onConfirm = {
                 unsyncedAtSignOut = null
@@ -5669,7 +5673,7 @@ internal fun SettingsScreen(
     if (confirmEmptyShelf) {
         val count = shelfCount
         ConfirmDialog(
-            title = "EMPTY YOUR SHELF?",
+            title = labelCase("Empty your shelf?"),
             // The count is the promise, so it leads. When it could not be loaded the sentence is
             // written without it rather than around a zero: "Remove 0 books" reads as "this will do
             // nothing", which is the one thing it must not say before a destructive confirmation.
@@ -5688,7 +5692,7 @@ internal fun SettingsScreen(
                         "follows.",
                 )
             },
-            confirmLabel = "EMPTY SHELF",
+            confirmLabel = labelCase("Empty shelf"),
             onDismiss = { confirmEmptyShelf = false },
             onConfirm = {
                 confirmEmptyShelf = false
@@ -5721,11 +5725,11 @@ internal fun SettingsScreen(
 
     if (confirmRotateFeed) {
         ConfirmDialog(
-            title = "REGENERATE FEED LINKS?",
+            title = labelCase("Regenerate feed links?"),
             body = "Your combined feed and OPML links are replaced with new ones. Every podcast " +
                 "app you have already given the old links to stops receiving new chapters until " +
                 "you hand it the new URL. Nothing is deleted and no progress is lost.",
-            confirmLabel = "REGENERATE",
+            confirmLabel = labelCase("Regenerate"),
             onDismiss = { confirmRotateFeed = false },
             onConfirm = {
                 confirmRotateFeed = false
@@ -5755,11 +5759,11 @@ internal fun SettingsScreen(
 
     if (confirmClearStreamed) {
         ConfirmDialog(
-            title = "CLEAR STREAMED AUDIO?",
+            title = labelCase("Clear streamed audio?"),
             body = "${formatStorageSize(streamedBytes)} of audio cached while streaming will be " +
                 "removed. Downloaded chapters and playback progress stay. Cleared chapters must " +
                 "stream from the server again the next time you play them.",
-            confirmLabel = "CLEAR",
+            confirmLabel = labelCase("Clear"),
             onConfirm = {
                 confirmClearStreamed = false
                 downloads.clearStreamingCache()
@@ -5772,7 +5776,7 @@ internal fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { confirmDeleteDownloads = false },
             containerColor = AarisColor.BgRaise,
-            title = { Text("DELETE ALL DOWNLOADS", style = MaterialTheme.typography.titleLarge) },
+            title = { Text(labelCase("Delete all downloads"), style = MaterialTheme.typography.titleLarge) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     MetaText(text = formatStorageSize(cacheBytes), color = AarisColor.Accent)
@@ -5798,11 +5802,11 @@ internal fun SettingsScreen(
                     },
                     shape = RectangleShape,
                 ) {
-                    Text("DELETE")
+                    Text(labelCase("Delete"))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmDeleteDownloads = false }) { Text("CANCEL") }
+                TextButton(onClick = { confirmDeleteDownloads = false }) { Text(labelCase("Cancel")) }
             },
         )
     }
@@ -5911,16 +5915,16 @@ private fun BookmarksScreen(
                 enabled = !isLoading && !isBusy,
                 shape = RectangleShape,
             ) {
-                Text("REFRESH")
+                Text(labelCase("Refresh"))
             }
         }
     }
 
     confirmDelete?.let { bookmark ->
         ConfirmDialog(
-            title = "DELETE BOOKMARK",
+            title = labelCase("Delete bookmark"),
             body = "\"${bookmark.resolvedLabel}\" will be removed here and in the browser.",
-            confirmLabel = "DELETE IT",
+            confirmLabel = labelCase("Delete it"),
             onConfirm = {
                 confirmDelete = null
                 scope.launch {
@@ -5968,7 +5972,7 @@ private fun BookmarkCard(
             bookmark.note?.let { MetaText(text = it, color = AarisColor.Dim) }
             if (onDelete != null) {
                 TextButton(onClick = onDelete) {
-                    Text("DELETE", color = AarisColor.Danger)
+                    Text(labelCase("Delete"), color = AarisColor.Danger)
                 }
             }
         }
@@ -6058,10 +6062,10 @@ private fun PronunciationReportsScreen(
 
     confirmDelete?.let { report ->
         ConfirmDialog(
-            title = "DELETE REPORT",
+            title = labelCase("Delete report"),
             body = "This report will be removed. It is the undo for a mistaken tap, so it only " +
                 "ever removes your own.",
-            confirmLabel = "DELETE IT",
+            confirmLabel = labelCase("Delete it"),
             onConfirm = {
                 confirmDelete = null
                 scope.launch {
@@ -6151,7 +6155,7 @@ internal fun PronunciationReportsBody(
             enabled = !isLoading && !isBusy,
             shape = RectangleShape,
         ) {
-            Text("REFRESH")
+            Text(labelCase("Refresh"))
         }
     }
 }
@@ -6192,13 +6196,13 @@ private fun PronunciationReportCard(
                 // Only ever an admin's doing, from the web. Worth saying, because "it stopped
                 // being wrong" and "nobody has looked at this" are different answers.
                 if (report.resolved) {
-                    AarisTag(text = "RESOLVED", color = AarisColor.Accent)
+                    AarisTag(text = labelCase("Resolved"), color = AarisColor.Accent)
                 }
             }
             report.note?.let { MetaText(text = it, color = AarisColor.Dim) }
             if (onDelete != null) {
                 TextButton(onClick = onDelete) {
-                    Text("DELETE", color = AarisColor.Danger)
+                    Text(labelCase("Delete"), color = AarisColor.Danger)
                 }
             }
         }
@@ -6426,7 +6430,7 @@ private fun QueueScreen(
                     enabled = !isLoading && !isBusy,
                     shape = RectangleShape,
                 ) {
-                    Text("REFRESH")
+                    Text(labelCase("Refresh"))
                 }
                 if (items.isNotEmpty()) {
                     OutlinedButton(
@@ -6437,7 +6441,7 @@ private fun QueueScreen(
                             contentColor = AarisColor.Danger,
                         ),
                     ) {
-                        Text("CLEAR QUEUE")
+                        Text(labelCase("Clear queue"))
                     }
                 }
             }
@@ -6446,10 +6450,10 @@ private fun QueueScreen(
 
     if (confirmClear) {
         ConfirmDialog(
-            title = "CLEAR QUEUE",
+            title = labelCase("Clear queue"),
             body = "Every queued chapter is removed, here and in the browser. Nothing is deleted " +
                 "and no progress is lost — only the order you lined them up in.",
-            confirmLabel = "CLEAR IT",
+            confirmLabel = labelCase("Clear it"),
             onConfirm = {
                 confirmClear = false
                 mutate { repository.clearQueue() }
@@ -6727,7 +6731,7 @@ private fun DevicesScreen(
                             shape = RectangleShape,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(if (isBusy) "WORKING" else "SIGN OUT ALL OTHER DEVICES")
+                            Text(if (isBusy) labelCase("Working") else labelCase("Sign out all other devices"))
                         }
                     }
 
@@ -6736,7 +6740,7 @@ private fun DevicesScreen(
                         enabled = !isLoading && !isBusy,
                         shape = RectangleShape,
                     ) {
-                        Text("REFRESH")
+                        Text(labelCase("Refresh"))
                     }
                 }
             }
@@ -6745,9 +6749,9 @@ private fun DevicesScreen(
 
     confirmRevoke?.let { device ->
         ConfirmDialog(
-            title = "SIGN OUT DEVICE",
+            title = labelCase("Sign out device"),
             body = "${device.resolvedName} will need to sign in again. Anything playing on it stops.",
-            confirmLabel = "SIGN IT OUT",
+            confirmLabel = labelCase("Sign it out"),
             onConfirm = {
                 confirmRevoke = null
                 revoke { repository.revokeDevice(device.id) }
@@ -6758,10 +6762,10 @@ private fun DevicesScreen(
 
     if (confirmRevokeOthers) {
         ConfirmDialog(
-            title = "SIGN OUT OTHERS",
+            title = labelCase("Sign out others"),
             body = "Every other signed-in device will need to sign in again. This device stays " +
                 "signed in.",
-            confirmLabel = "SIGN THEM OUT",
+            confirmLabel = labelCase("Sign them out"),
             onConfirm = {
                 confirmRevokeOthers = false
                 revoke { repository.revokeOtherDevices() }
@@ -6831,7 +6835,7 @@ private fun DeviceCard(
                     shape = RectangleShape,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Danger),
                 ) {
-                    Text("SIGN OUT")
+                    Text(labelCase("Sign out"))
                 }
             }
         }
@@ -6868,7 +6872,7 @@ internal fun ConfirmDialog(
             Button(onClick = onConfirm, shape = RectangleShape) { Text(confirmLabel) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("CANCEL") }
+            TextButton(onClick = onDismiss) { Text(labelCase("Cancel")) }
         },
     )
 }
@@ -6956,7 +6960,7 @@ private fun MiniPlayerBar(
                     color = AarisColor.Danger,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = playbackController::retry) { Text("RETRY") }
+                TextButton(onClick = playbackController::retry) { Text(labelCase("Retry")) }
             }
         }
         Row(
@@ -7005,7 +7009,7 @@ internal fun PlaybackErrorBanner(message: String, details: String? = null, onRet
                     color = AarisColor.Danger,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = onRetry) { Text("RETRY") }
+                TextButton(onClick = onRetry) { Text(labelCase("Retry")) }
             }
             ErrorDetails(details = details, modifier = Modifier.padding(horizontal = 16.dp))
         }
@@ -7161,7 +7165,7 @@ internal fun ContinueHero(
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+                        Text(if (chapter.resolvedPositionSeconds > 0.0) labelCase("Resume") else labelCase("Play"))
                     }
                     (chapter.playback?.remainingLabel?.let { "$it left" } ?: chapter.audioDurationLabel)
                         ?.let { MetaText(text = it, color = AarisColor.Dim) }
@@ -7590,7 +7594,7 @@ private fun FictionBookmarksSection(
         }
         if (bookmarks.size > FictionBookmarkPreviewCount) {
             TextButton(onClick = { expanded = !expanded }) {
-                Text(if (expanded) "SHOW FEWER" else "SHOW ALL ${bookmarks.size}")
+                Text(if (expanded) labelCase("Show fewer") else "SHOW ALL ${bookmarks.size}")
             }
         }
     }
@@ -7631,7 +7635,7 @@ private fun StaleDownloadsNotice(count: Int, onUpdateAll: () -> Unit) {
                 color = AarisColor.Dim,
             )
             OutlinedButton(onClick = onUpdateAll, shape = RectangleShape) {
-                Text(if (count == 1) "DOWNLOAD IT AGAIN" else "DOWNLOAD THEM AGAIN")
+                Text(if (count == 1) labelCase("Download it again") else labelCase("Download them again"))
             }
         }
     }
@@ -7847,7 +7851,7 @@ internal fun FictionsScreen(
                                 serverResults = null
                                 searchError = null
                             },
-                            label = { Text("SEARCH TITLE, AUTHOR OR TAG") },
+                            label = { Text(labelCase("Search title, author or tag")) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -8180,7 +8184,7 @@ private fun FilterBar(label: String, active: Set<String>, onOpen: () -> Unit, on
                 modifier = Modifier.heightIn(min = MinTouchTargetSize),
                 shape = RectangleShape,
             ) {
-                Text(text = "CLEAR", color = AarisColor.Muted, maxLines = 1, softWrap = false)
+                Text(text = labelCase("Clear"), color = AarisColor.Muted, maxLines = 1, softWrap = false)
             }
         } else {
             Spacer(modifier = Modifier.weight(1f))
@@ -8230,7 +8234,7 @@ private fun <T> FilterSheet(
                     modifier = Modifier.heightIn(min = MinTouchTargetSize),
                     shape = RectangleShape,
                 ) {
-                    Text(text = "CLEAR", color = AarisColor.Muted)
+                    Text(text = labelCase("Clear"), color = AarisColor.Muted)
                 }
             }
         }
@@ -8259,7 +8263,7 @@ private fun <T> FilterSheet(
                     Checkbox(checked = isChecked, onCheckedChange = null)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = label(option).uppercase(),
+                        text = labelCase(label(option)),
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isChecked) AarisColor.Accent else AarisColor.Ink,
                         maxLines = 1,
@@ -8275,7 +8279,7 @@ private fun <T> FilterSheet(
 
 @Composable
 internal fun TagFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) =
-    FilterBar(label = "TAGS", active = active, onOpen = onOpen, onClear = onClear)
+    FilterBar(label = labelCase("Tags"), active = active, onOpen = onOpen, onClear = onClear)
 
 /** Tags are ANDed: a book carries many, and ticking two means "both". */
 @Composable
@@ -8300,7 +8304,7 @@ internal fun TagFilterSheet(
 /** Drawn only when the shelf has more than one source, so the all-Royal-Road library never sees it. */
 @Composable
 internal fun SourceFilterBar(active: Set<String>, onOpen: () -> Unit, onClear: () -> Unit) =
-    FilterBar(label = "SOURCE", active = active, onOpen = onOpen, onClear = onClear)
+    FilterBar(label = labelCase("Source"), active = active, onOpen = onOpen, onClear = onClear)
 
 /** Sources are ORed: a book has exactly one, so ANDing two would always answer with nothing. */
 @Composable
@@ -8486,7 +8490,7 @@ internal fun AddFictionSection(
                     shape = RectangleShape,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text(if (isAdding) "ADDING" else "ADD FICTION")
+                    Text(if (isAdding) labelCase("Adding") else labelCase("Add fiction"))
                 }
             }
             if (canUploadEpub) {
@@ -8496,7 +8500,7 @@ internal fun AddFictionSection(
                     shape = RectangleShape,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text(if (isUploading) "UPLOADING" else "UPLOAD AN EPUB")
+                    Text(if (isUploading) labelCase("Uploading") else labelCase("Upload an epub"))
                 }
             }
         }
@@ -8605,7 +8609,7 @@ private fun AddFictionSheet(
             OutlinedTextField(
                 value = url,
                 onValueChange = onUrl,
-                label = { Text("FICTION URL OR ID") },
+                label = { Text(labelCase("Fiction URL or ID")) },
                 placeholder = { Text("https://www.royalroad.com/fiction/12345/…") },
                 singleLine = true,
                 enabled = !isAdding,
@@ -8648,7 +8652,7 @@ private fun AddFictionSheet(
                 FilterChip(
                     selected = options.sync.isEverything,
                     onClick = { onOptions(options.copy(sync = InitialSync(limit = null))) },
-                    label = { Text("EVERYTHING") },
+                    label = { Text(labelCase("Everything")) },
                     shape = RectangleShape,
                 )
             }
@@ -8667,7 +8671,7 @@ private fun AddFictionSheet(
                             ),
                         )
                     },
-                    label = { Text("HOW MANY CHAPTERS") },
+                    label = { Text(labelCase("How many chapters")) },
                     singleLine = true,
                     enabled = !isAdding,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -8703,7 +8707,7 @@ private fun AddFictionSheet(
             OutlinedTextField(
                 value = options.rate.orEmpty(),
                 onValueChange = { onOptions(options.copy(rate = it)) },
-                label = { Text("SPEECH RATE") },
+                label = { Text(labelCase("Speech rate")) },
                 placeholder = { Text("+0%") },
                 singleLine = true,
                 enabled = !isAdding,
@@ -8750,7 +8754,7 @@ private fun AddFictionSheet(
                 shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (isAdding) "ADDING" else "ADD FICTION")
+                Text(if (isAdding) labelCase("Adding") else labelCase("Add fiction"))
             }
         }
     }
@@ -8799,7 +8803,7 @@ internal fun LazyGridScope.serverSearchSection(
             shape = RectangleShape,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (isSearching) "SEARCHING" else "SEARCH CHAPTERS AND TEXT ON THE SERVER")
+            Text(if (isSearching) labelCase("Searching") else labelCase("Search chapters and text on the server"))
         }
     }
     error?.let { message ->
@@ -9094,7 +9098,7 @@ internal fun FictionDetailHeader(
                 shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (chapter.resolvedPositionSeconds > 0.0) "RESUME" else "PLAY")
+                Text(if (chapter.resolvedPositionSeconds > 0.0) labelCase("Resume") else labelCase("Play"))
             }
         }
 
@@ -9143,7 +9147,7 @@ internal fun FictionDetailHeader(
                     ) {
                         // The count moved to the line under the row. In a row of three it was the
                         // label that would not fit, and "12 not downloaded" says it anyway.
-                        Text(if (downloadSummary.remaining > 0) "DOWNLOAD" else "DOWNLOADED")
+                        Text(if (downloadSummary.remaining > 0) labelCase("Download") else labelCase("Downloaded"))
                     }
                 }
                 onMore?.let { more ->
@@ -9152,7 +9156,7 @@ internal fun FictionDetailHeader(
                         enabled = !isMaintaining,
                         shape = RectangleShape,
                     ) {
-                        Text(if (isMaintaining) "WORKING" else "MORE")
+                        Text(if (isMaintaining) labelCase("Working") else labelCase("More"))
                     }
                 }
             }
@@ -9271,7 +9275,7 @@ internal fun FictionDetailHeader(
                 )
                 if (descCanExpand) {
                     Text(
-                        text = if (descExpanded) "SHOW LESS" else "SHOW MORE",
+                        text = if (descExpanded) labelCase("Show less") else labelCase("Show more"),
                         style = MaterialTheme.typography.labelLarge,
                         color = AarisColor.Accent,
                         modifier = Modifier.clickable { descExpanded = !descExpanded },
@@ -9317,7 +9321,7 @@ private fun ShareUrlRow(label: String, url: String?, onShare: (String) -> Unit) 
         }
         MetaText(text = url, color = AarisColor.Dim, maxLines = 2)
         OutlinedButton(onClick = { onShare(url) }, shape = RectangleShape) {
-            Text("SHARE")
+            Text(labelCase("Share"))
         }
     }
 }
@@ -9353,7 +9357,7 @@ private fun AudiobookExportListItem(row: AudiobookExportRow, onShare: (String) -
         } else {
             MetaText(text = url, color = AarisColor.Dim, maxLines = 2)
             OutlinedButton(onClick = { onShare(url) }, shape = RectangleShape) {
-                Text("SHARE LINK")
+                Text(labelCase("Share link"))
             }
         }
     }
@@ -9914,7 +9918,7 @@ internal fun FictionEditScreen(
                         enabled = !isBusy && editsEverything,
                         shape = RectangleShape,
                     ) {
-                        Text(if (isUploading) "UPLOADING" else "CHOOSE IMAGE")
+                        Text(if (isUploading) labelCase("Uploading") else labelCase("Choose image"))
                     }
                 }
             }
@@ -10017,7 +10021,7 @@ internal fun FictionEditScreen(
                                 onClick = { voiceLoadRequest += 1 },
                                 enabled = !isBusy && !isLoadingVoices,
                             ) {
-                                Text("TRY AGAIN")
+                                Text(labelCase("Try again"))
                             }
                         }
 
@@ -10052,7 +10056,7 @@ internal fun FictionEditScreen(
             shape = RectangleShape,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (isSaving) "SAVING" else "SAVE CHANGES")
+            Text(if (isSaving) labelCase("Saving") else labelCase("Save changes"))
         }
 
         message?.let {
@@ -10092,7 +10096,7 @@ internal fun FictionEditScreen(
                             shape = RectangleShape,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("USE SOURCE VALUES")
+                            Text(labelCase("Use source values"))
                         }
                     }
                 }
@@ -10103,9 +10107,9 @@ internal fun FictionEditScreen(
     if (confirmDiscard) {
         val changedLabels = changedFieldLabels(patch)
         ConfirmDialog(
-            title = "DISCARD UNSAVED CHANGES?",
+            title = labelCase("Discard unsaved changes?"),
             body = formatDiscardBody(changedLabels),
-            confirmLabel = "DISCARD",
+            confirmLabel = labelCase("Discard"),
             onConfirm = {
                 confirmDiscard = false
                 onDirtyChange(false)
@@ -10117,14 +10121,14 @@ internal fun FictionEditScreen(
 
     if (confirmRevert) {
         ConfirmDialog(
-            title = "USE SOURCE VALUES?",
+            title = labelCase("Use source values?"),
             // Specific about what it does *not* do. "Revert" reads as an undo, and this is not one:
             // the text on screen stays until the fiction is polled and the source replaces it.
             body = "The source is allowed to overwrite " +
                 overridden.joinToString(", ") { metadataFieldLabel(it).lowercase() } +
                 " again from the next poll. It does not bring the old values back — what is here " +
                 "now stays until the source replaces it.",
-            confirmLabel = "HAND THEM BACK",
+            confirmLabel = labelCase("Hand them back"),
             onConfirm = {
                 confirmRevert = false
                 revert()
@@ -10204,7 +10208,7 @@ internal fun VoicePickerContent(
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            label = { Text("SEARCH NAME OR LOCALE") },
+            label = { Text(labelCase("Search name or locale")) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -10687,7 +10691,7 @@ private fun ReaderScreen(
                     .background(palette.background)
                     .border(1.dp, palette.accent),
             ) {
-                Text("BACK TO CURRENT", color = palette.accent)
+                Text(labelCase("Back to current"), color = palette.accent)
             }
         }
     }
@@ -10748,7 +10752,7 @@ private fun ReaderPage(
                         modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = onOpenSettings) {
-                        Text("TEXT", color = palette.muted)
+                        Text(labelCase("Text"), color = palette.muted)
                     }
                 }
                 Spacer(modifier = Modifier.height(6.dp))
@@ -11024,7 +11028,7 @@ private fun ErrorPane(
         ErrorDetails(details = details, horizontalAlignment = Alignment.CenterHorizontally)
         Spacer(modifier = Modifier.height(16.dp))
         Button(onClick = onRetry, shape = RectangleShape) {
-            Text("RETRY")
+            Text(labelCase("Retry"))
         }
     }
 }

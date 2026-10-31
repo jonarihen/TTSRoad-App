@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -87,7 +88,7 @@ internal fun DownloadsOverview(
                 OutlinedButton(
                     onClick = { pending = PendingCleanup("All downloads of $name", group.chapterIds) },
                     shape = RectangleShape,
-                ) { Text("DELETE ALL") }
+                ) { Text(labelCase("Delete all")) }
             }
         }
     }
@@ -103,7 +104,7 @@ internal fun DownloadsOverview(
             title = cleanup.title.uppercase(),
             body = "${cleanup.chapterIds.size} downloaded chapters are removed from this phone. " +
                 "Nothing is lost on the server, and they stream again if you play them.",
-            confirmLabel = "DELETE",
+            confirmLabel = labelCase("Delete"),
             onConfirm = {
                 pending = null
                 val failed = cleanup.chapterIds.count { !downloads.remove(it) }

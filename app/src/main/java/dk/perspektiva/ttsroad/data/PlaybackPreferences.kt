@@ -67,8 +67,10 @@ data class PlaybackPrefs(
     /**
      * Labels in sentence case, in the system sans, at 14 sp or more, instead of small mono capitals
      * (#359). A device setting like [nightMode]: it is about this reader and this screen.
+     * Null until the reader chooses; then [readableTextDefault] decides from the system font
+     * scale (#491), and the choice, either way, wins from then on.
      */
-    val readableText: Boolean = false,
+    val readableText: Boolean? = null,
     /**
      * Whether a headset's or a car's next/previous keys seek by [skipIntervalMs] rather than change
      * chapter (#336). Earbuds send those for a double and a triple tap, and a whole chapter is a lot
@@ -271,7 +273,7 @@ class PlaybackPreferences(private val context: Context) {
                 autoMarkPlayed = stored[Keys.AutoMarkPlayed] ?: DefaultAutoMarkPlayed,
                 skipAdSegments = stored[Keys.SkipAdSegments] ?: DefaultSkipAdSegments,
                 nightMode = stored[Keys.NightMode] ?: false,
-                readableText = stored[Keys.ReadableText] ?: false,
+                readableText = stored[Keys.ReadableText],
                 headsetButtonsSeek = stored[Keys.HeadsetButtonsSeek] ?: DefaultHeadsetButtonsSeek,
                 sleepAutoArmFromHour = (stored[Keys.SleepAutoArmFromHour] ?: SleepAutoArmOff)
                     .takeIf { it in 0..23 } ?: SleepAutoArmOff,
@@ -330,7 +332,7 @@ class PlaybackPreferences(private val context: Context) {
          * [dk.perspektiva.ttsroad.core.ServiceLocator.init] warms it at process start.
          */
         @Volatile
-        var lastKnownReadableText: Boolean = false
+        var lastKnownReadableText: Boolean? = null
             private set
     }
 
@@ -346,3 +348,10 @@ class PlaybackPreferences(private val context: Context) {
         context.playbackDataStore.edit { it[Keys.HeadsetButtonsSeek] = enabled }
     }
 }
+
+/** The system font scale from which labels default to readable text (#491). */
+internal const val ReadableTextFontScale = 1.3f
+
+/** The readable-text setting as drawn: the reader's choice if made, else on at large font scales. */
+internal fun readableTextDefault(choice: Boolean?, fontScale: Float): Boolean =
+    choice ?: (fontScale >= ReadableTextFontScale)

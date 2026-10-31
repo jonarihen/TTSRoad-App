@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.sp
 import androidx.test.core.app.ApplicationProvider
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
+import dk.perspektiva.ttsroad.data.readableTextDefault
 import kotlinx.coroutines.runBlocking
 import dk.perspektiva.ttsroad.nav.AppRoot
 import dk.perspektiva.ttsroad.ui.AarisTag
@@ -23,6 +24,7 @@ import dk.perspektiva.ttsroad.ui.spokenMetaText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -39,7 +41,7 @@ class ReadableTextTest {
 
     @Test
     fun `the setting is off until asked for`() {
-        assertFalse(PlaybackPrefs().readableText)
+        assertNull(PlaybackPrefs().readableText)
     }
 
     /** The cache is what the activity's first frame is drawn from; it must follow the store. */
@@ -48,12 +50,12 @@ class ReadableTextTest {
         val preferences = PlaybackPreferences(ApplicationProvider.getApplicationContext())
         runBlocking {
             preferences.setReadableText(true)
-            assertTrue(PlaybackPreferences.lastKnownReadableText)
+            assertEquals(true, PlaybackPreferences.lastKnownReadableText)
             preferences.setReadableText(false)
-            assertFalse(PlaybackPreferences.lastKnownReadableText)
+            assertEquals(false, PlaybackPreferences.lastKnownReadableText)
             preferences.setReadableText(true)
-            assertTrue(preferences.current().readableText)
-            assertTrue(PlaybackPreferences.lastKnownReadableText)
+            assertEquals(true, preferences.current().readableText)
+            assertEquals(true, PlaybackPreferences.lastKnownReadableText)
             preferences.setReadableText(false)
         }
     }
@@ -122,8 +124,32 @@ class ReadableTextTest {
             }
         }
 
-        compose.onNodeWithText("READABLE TEXT", substring = true).assertIsOff().performClick()
+        compose.onNodeWithText("Readable text", substring = true).assertIsOff().performClick()
         assertTrue(enabled)
+    }
+
+    @Test
+    fun `an unchosen setting follows the system font scale, a choice always wins`() {
+        assertEquals(false, readableTextDefault(null, 1.0f))
+        assertEquals(false, readableTextDefault(null, 1.29f))
+        assertEquals(true, readableTextDefault(null, 1.3f))
+        assertEquals(false, readableTextDefault(false, 2.0f))
+        assertEquals(true, readableTextDefault(true, 1.0f))
+    }
+
+    @Test
+    fun `the switch label is readable even while the rest is capitals`() {
+        compose.setContent {
+            TtsRoadTheme {
+                androidx.compose.foundation.layout.Column {
+                    ReadableTextSetting(enabled = false, onEnabledChange = {})
+                    MetaText(text = "Other label")
+                }
+            }
+        }
+
+        compose.onNodeWithText("Readable text").assertExists()
+        compose.onNodeWithText("OTHER LABEL").assertExists()
     }
 
     @Test

@@ -46,6 +46,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- Readable text is on by default when the system font scale is 130 % or more (turning it off still
+  sticks), its own switch label is always readable, and every hard-coded capitals label now follows
+  the setting. (#491)
 - The jump-back log keeps three days of listening instead of the last 2,000 positions (about eight
   hours), and the Stats count is worded to match. (#514)
 - Opening a fiction no longer refetches the whole feed list (fetched once per session) and paints

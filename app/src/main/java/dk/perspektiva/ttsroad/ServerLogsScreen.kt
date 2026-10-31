@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -164,7 +165,7 @@ internal fun ServerLogsScreen(
                         modifier = Modifier.heightIn(min = MinTouchTargetSize),
                         shape = RectangleShape,
                     ) {
-                        Text("SHOW EVERY FICTION")
+                        Text(labelCase("Show every fiction"))
                     }
                 } else {
                     MetaText(
@@ -211,7 +212,7 @@ internal fun ServerLogsScreen(
                         modifier = Modifier.heightIn(min = MinTouchTargetSize),
                         shape = RectangleShape,
                     ) {
-                        Text(if (isLoadingMore) "LOADING…" else "OLDER LINES")
+                        Text(if (isLoadingMore) labelCase("Loading…") else labelCase("Older lines"))
                     }
                 } else {
                     MetaText(text = "That is the whole log.", color = AarisColor.Muted)
@@ -235,7 +236,7 @@ internal fun ServerLogsScreen(
             modifier = Modifier.heightIn(min = MinTouchTargetSize),
             shape = RectangleShape,
         ) {
-            Text("REFRESH")
+            Text(labelCase("Refresh"))
         }
     }
 }
@@ -406,7 +407,7 @@ private fun ServerLogListItem(
             onClick = { copyToClipboard(context, "Server log line", serverLogLineText(row, serverAddresses)) },
             modifier = Modifier.heightIn(min = MinTouchTargetSize),
             shape = RectangleShape,
-        ) { Text("COPY LINE") }
+        ) { Text(labelCase("Copy line")) }
         val fiction = row.fictionId
         if (fiction != null) {
             OutlinedButton(
