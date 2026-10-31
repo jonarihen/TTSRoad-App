@@ -212,7 +212,8 @@ baked in at build time, not a runtime toggle (#504). Add the host(s) to the giti
 ttsroad.trust.user.ca.hosts=nas.lan,home.example.com
 ```
 
-(`-PttsroadTrustUserCaHosts=…` and `TTSROAD_TRUST_USER_CA_HOSTS` also work.) Those exact hosts, and
+Use host names: Android's `<domain>` takes names, and an IP address (a Tailscale `100.x`, say) may
+not match. (`-PttsroadTrustUserCaHosts=…` and `TTSROAD_TRUST_USER_CA_HOSTS` also work.) Those exact hosts, and
 only those, may chain to a CA installed on the phone; every other host and the default build keep
 system CAs only, with no cleartext. A certificate that is trusted but issued for a different name
 gets its own "different address" message instead of the untrusted-certificate one.

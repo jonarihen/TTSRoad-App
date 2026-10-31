@@ -112,19 +112,13 @@ private fun plainLanguageFor(failure: Throwable): String? {
             cause is UnknownServiceException && cause.message.orEmpty().contains("CLEARTEXT", ignoreCase = true) ->
                 return CleartextBlockedMessage
 
-            // OkHttp: "Hostname x not verified" (and the platform's "No subject alternative
-            // names"). The chain is fine; the name is not, so "doesn't trust" would send the admin
-            // to install a CA they do not need.
-            cause is SSLPeerUnverifiedException ||
-                cause.message.orEmpty().let {
-                    it.contains("not verified", ignoreCase = true) ||
-                        it.contains("subject alternative name", ignoreCase = true)
-                } -> return HostnameMismatchMessage
-
             cause is CertPathValidatorException ||
                 cause is CertificateException ||
                 cause.message.orEmpty().contains("Trust anchor", ignoreCase = true) ->
                 return UntrustedCertificateMessage
+
+            // OkHttp's "Hostname x not verified": the chain is fine, the name is not.
+            cause is SSLPeerUnverifiedException -> return HostnameMismatchMessage
         }
     }
     chain.forEach { cause ->

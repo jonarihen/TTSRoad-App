@@ -48,7 +48,7 @@ val ttsRoadUserCaHosts: List<String> = run {
         ?: ""
     raw.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.onEach {
         // Also keeps anything that is not a plain host name out of the generated XML.
-        require(Regex("[a-z0-9]([a-z0-9.-]*[a-z0-9])?").matches(it)) {
+        require(Regex("[a-z0-9]+([.-][a-z0-9]+)*").matches(it)) {
             "ttsroad.trust.user.ca.hosts: '$it' is not a host name"
         }
     }
