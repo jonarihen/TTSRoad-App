@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dk.perspektiva.ttsroad.core.ServiceLocator
 import dk.perspektiva.ttsroad.data.ActivityDay
+import dk.perspektiva.ttsroad.data.DefaultActivityWeeks
 import dk.perspektiva.ttsroad.data.ListeningMilestone
 import dk.perspektiva.ttsroad.data.ListeningStats
 import dk.perspektiva.ttsroad.data.TopListenedFiction
@@ -83,12 +84,13 @@ internal fun ListeningStatsScreen(
     var stats by remember { mutableStateOf<ListeningStats?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var weeks by remember { mutableStateOf(DefaultActivityWeeks) }
 
     fun load() {
         scope.launch {
             isLoading = true
             error = null
-            runCatching { repository.listeningStats() }
+            runCatching { repository.listeningStats(weeks) }
                 // A null body is the capability gate answering, which the section below already has
                 // its own words for. It must not be mistaken for an account with nothing on it.
                 .onSuccess { stats = it?.stats }
@@ -99,10 +101,10 @@ internal fun ListeningStatsScreen(
 
     // Keyed on the capability so a server discovered after this screen opened still loads, and one
     // that cannot answer is never asked.
-    LaunchedEffect(capabilities.listeningStats) {
+    LaunchedEffect(capabilities.listeningStats, weeks) {
         if (capabilities.listeningStats) {
-            // Last visit's figures first; load() refreshes them (a 304 is nearly free).
-            if (stats == null) stats = repository.peekListeningStats()?.stats
+            // Last visit's figures for this range first; load() refreshes them (a 304 is nearly free).
+            repository.peekListeningStats(weeks)?.let { stats = it.stats }
             load()
         }
     }
@@ -125,6 +127,8 @@ internal fun ListeningStatsScreen(
             isLoading = isLoading,
             error = error,
             onRetry = ::load,
+            weeks = weeks,
+            onWeeksChange = { weeks = it },
         )
     }
 }
@@ -145,6 +149,8 @@ internal fun AccountStatsSection(
     isLoading: Boolean,
     error: String?,
     onRetry: () -> Unit,
+    weeks: Int = DefaultActivityWeeks,
+    onWeeksChange: ((Int) -> Unit)? = null,
 ) {
     val context = LocalContext.current
 
@@ -199,7 +205,7 @@ internal fun AccountStatsSection(
             error?.let { MetaText(text = it, color = AarisColor.Danger) }
             ListeningTotalsCard(stats = stats)
             ListeningRhythmCard(context = context, stats = stats)
-            if (stats.activityWeeks.isNotEmpty()) ActivityGridCard(stats = stats)
+            if (stats.activityWeeks.isNotEmpty()) ActivityGridCard(stats, weeks, onWeeksChange)
             if (stats.topFictions.isNotEmpty()) TopFictionsCard(fictions = stats.topFictions)
             if (stats.milestones.isNotEmpty()) MilestonesCard(milestones = stats.milestones)
         }
@@ -320,7 +326,7 @@ private fun ListeningRhythmCard(context: android.content.Context, stats: Listeni
  * content description, which is the only thing this grid says to a screen reader.
  */
 @Composable
-private fun ActivityGridCard(stats: ListeningStats) {
+private fun ActivityGridCard(stats: ListeningStats, weeks: Int, onWeeksChange: ((Int) -> Unit)?) {
     AarisCard {
         Column(
             modifier = Modifier
@@ -329,6 +335,13 @@ private fun ActivityGridCard(stats: ListeningStats) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             MetaText(text = "Last ${listeningPlural(stats.activityWeeks.size, "week")}")
+            if (onWeeksChange != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (option in ActivityRangeOptions) {
+                        ReaderOptionChip("${option}w", selected = option == weeks) { onWeeksChange(option) }
+                    }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -468,3 +481,6 @@ private fun MilestonesCard(milestones: List<ListeningMilestone>) {
 /** A calendar date in the phone's own format — this screen never needs the time of day. */
 private fun formatCalendarDate(context: android.content.Context, epochMillis: Long): String =
     android.text.format.DateFormat.getDateFormat(context).format(Date(epochMillis))
+
+/** The ranges the picker offers; the server accepts 1..53 weeks. */
+internal val ActivityRangeOptions = listOf(4, DefaultActivityWeeks, 26, 52)
