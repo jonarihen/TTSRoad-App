@@ -139,6 +139,10 @@ fun List<ChapterSummary>.chapterIdsFrom(chapterId: Int): List<Int> {
     return ordered.drop(index).mapNotNull { it.resolvedChapterId.takeIf { id -> id > 0 } }
 }
 
+/** A typed chapter number: decimal comma accepted, blank or non-finite ("NaN", "Infinity") is null. */
+fun parseChapterNumber(text: String): Double? =
+    text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+
 /**
  * Ids of the chapters numbered from [from] to [to], both inclusive, in either order — "400 to 650"
  * and "650 to 400" are the same request (#512). Unnumbered chapters never match a range.

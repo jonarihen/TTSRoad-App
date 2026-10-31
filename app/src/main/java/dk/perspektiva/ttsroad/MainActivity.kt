@@ -285,6 +285,7 @@ import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterIdsFrom
 import dk.perspektiva.ttsroad.data.chapterIdsInRange
 import dk.perspektiva.ttsroad.data.chapterNumberText
+import dk.perspektiva.ttsroad.data.parseChapterNumber
 import dk.perspektiva.ttsroad.data.chapterRowKeys
 import dk.perspektiva.ttsroad.data.chapterView
 import dk.perspektiva.ttsroad.data.fictionNarrationPatch
@@ -2721,8 +2722,8 @@ private fun ChapterRangeDialog(
 ) {
     var from by remember { mutableStateOf(initial) }
     var to by remember { mutableStateOf(initial) }
-    val fromNumber = from.trim().toDoubleOrNull()
-    val toNumber = to.trim().toDoubleOrNull()
+    val fromNumber = parseChapterNumber(from)
+    val toNumber = parseChapterNumber(to)
     val ids = remember(chapters, fromNumber, toNumber) {
         if (fromNumber == null || toNumber == null) {
             emptyList()
