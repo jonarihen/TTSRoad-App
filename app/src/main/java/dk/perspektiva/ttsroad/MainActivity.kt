@@ -78,6 +78,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -102,7 +106,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -263,6 +273,7 @@ import dk.perspektiva.ttsroad.data.signOut
 import dk.perspektiva.ttsroad.data.unsyncedSignOutMessage
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
+import dk.perspektiva.ttsroad.data.SleepAutoArmOptions
 import dk.perspektiva.ttsroad.data.speedOptions
 import dk.perspektiva.ttsroad.data.canStepSpeed
 import dk.perspektiva.ttsroad.data.stepSpeed
@@ -326,6 +337,7 @@ import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
 import dk.perspektiva.ttsroad.player.jumpBackAndOffer
 import dk.perspektiva.ttsroad.player.jumpBackOptions
+import dk.perspektiva.ttsroad.player.excerptAt
 import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.jumpBackTo
@@ -2967,6 +2979,7 @@ private fun PlayerToggleButton(
  * @param accent draws the glyph in the accent colour, for the actions that mark the moment being
  *   heard. The content description carries the same meaning, so this is never the only signal.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerIconAction(
     icon: ImageVector,
@@ -2975,6 +2988,12 @@ private fun PlayerIconAction(
     badge: String? = null,
     accent: Boolean = false,
 ) {
+    // A long press names the icon (#502); the description is what TalkBack already reads.
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(contentDescription) } },
+        state = rememberTooltipState(),
+    ) {
     Row(
         modifier = Modifier
             .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
@@ -3004,6 +3023,7 @@ private fun PlayerIconAction(
         badge?.let {
             MetaText(text = it, color = AarisColor.Muted, maxLines = 1)
         }
+    }
     }
 }
 
@@ -4051,6 +4071,14 @@ private fun PlayerScreen(
                                 text = "${relativeAgo(now - snap.timestamp)}  ·  " +
                                     listOfNotNull(snap.fictionTitle, snap.title).joinToString("  ·  "),
                             )
+                            // A line of the story itself, when the server has timed text (#502).
+                            // Per visible row; the repository caches the document per chapter.
+                            val excerpt by produceState<String?>(null, snap.chapterId, capabilities.readAlong) {
+                                if (!capabilities.readAlong || snap.chapterId <= 0) return@produceState
+                                value = runCatching { repository.readAlong(snap.chapterId) }.getOrNull()
+                                    ?.let { excerptAt(it, snap.positionMs) }
+                            }
+                            excerpt?.let { MetaText(text = "“$it”", color = AarisColor.Dim, maxLines = 2) }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         MetaText(text = formatDuration(snap.positionMs))
@@ -4295,6 +4323,7 @@ private fun LastHeardBanner(
                 text = when (lastHeard.kind) {
                     LastHeardKind.TimerSet -> "// Sleep timer set at"
                     LastHeardKind.AudioStopped -> "// Audio stopped at"
+                    LastHeardKind.LastTouched -> "// Last touched around"
                 },
                 color = AarisColor.Accent,
             )
@@ -4302,9 +4331,10 @@ private fun LastHeardBanner(
                 text = formatClockTime(context, snapshot.timestamp),
                 style = MaterialTheme.typography.titleLarge,
             )
-            if (lastHeard.kind == LastHeardKind.TimerSet) {
+            if (lastHeard.kind != LastHeardKind.AudioStopped) {
                 MetaText(
-                    text = "Timer stopped the audio at ${formatClockTime(context, lastHeard.stoppedAtMs)}",
+                    text = (if (lastHeard.kind == LastHeardKind.LastTouched) "Estimated; the audio kept playing until " else "Timer stopped the audio at ") +
+                        formatClockTime(context, lastHeard.stoppedAtMs),
                     color = AarisColor.Muted,
                 )
             }
@@ -4981,6 +5011,20 @@ internal fun SettingsScreen(
                     color = AarisColor.Dim,
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(text = "Arm the sleep timer automatically after")
+                AarisChoiceRow(
+                    options = SleepAutoArmOptions,
+                    selected = prefs.sleepAutoArmFromHour,
+                    label = { if (it < 0) "Off" else "%02d:00".format(it) },
+                    onSelect = { scope.launch { preferences.setSleepAutoArmFromHour(it) } },
+                )
+                MetaText(
+                    text = "Starting playback from then until 05:00 arms the default timer, once " +
+                        "a night. Cancel it and it stays off until the next night. " +
+                        PreferenceScope.DevicePlayer,
+                    color = AarisColor.Dim,
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -5234,6 +5278,11 @@ internal fun SettingsScreen(
                 ) {
                     Text("DELETE ALL DOWNLOADS")
                 }
+                DownloadsOverview(
+                    downloads = downloads,
+                    cache = remember { ServiceLocator.libraryCache(context) },
+                    onError = { deleteDownloadsError = it },
+                )
                 deleteDownloadsError?.let { MetaText(text = it, color = AarisColor.Danger) }
             }
         }
@@ -6120,6 +6169,8 @@ private fun QueueScreen(
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var dragIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(0f) }
 
     fun load() {
         scope.launch {
@@ -6233,8 +6284,42 @@ private fun QueueScreen(
                     kicker = "Q",
                     title = if (items.size == 1) "1 queued" else "${items.size} queued",
                 )
+                val rowHeights = remember { mutableStateMapOf<Int, Int>() }
+                val gapPx = with(LocalDensity.current) { 16.dp.toPx() }
+                fun endDrag(): Int {
+                    val to = queueDropIndex(
+                        from = dragIndex,
+                        dragPx = dragOffset,
+                        heights = items.indices.map { rowHeights[it] ?: 0 },
+                        gapPx = gapPx,
+                    )
+                    val from = dragIndex
+                    dragIndex = -1
+                    dragOffset = 0f
+                    return if (from >= 0 && to != from) to - from else 0
+                }
                 items.forEachIndexed { index, item ->
                     QueueRow(
+                        modifier = Modifier
+                            .onSizeChanged { rowHeights[index] = it.height }
+                            .zIndex(if (dragIndex == index) 1f else 0f)
+                            .graphicsLayer { translationY = if (dragIndex == index) dragOffset else 0f },
+                        // One request for wherever the row was dropped, not one per step.
+                        dragHandle = Modifier.pointerInput(items.map { it.id }, isBusy) {
+                            if (isBusy) return@pointerInput
+                            detectDragGestures(
+                                onDragStart = { dragIndex = index; dragOffset = 0f },
+                                onDrag = { change, delta ->
+                                    change.consume()
+                                    dragOffset += delta.y
+                                },
+                                onDragEnd = {
+                                    val offset = endDrag()
+                                    if (offset != 0) mutate { repository.reorderQueue(items.moveItem(index, offset)) }
+                                },
+                                onDragCancel = { endDrag() },
+                            )
+                        },
                         item = item,
                         position = index + 1,
                         // The ends of the list have nowhere to go, and a disabled arrow says that
@@ -6311,6 +6396,25 @@ private fun QueueScreen(
 }
 
 /**
+ * Where a row dragged [dragPx] pixels from [from] lands, given each row's measured [heights] and the
+ * [gapPx] between rows: it passes a neighbour once it is past that neighbour's midpoint.
+ */
+internal fun queueDropIndex(from: Int, dragPx: Float, heights: List<Int>, gapPx: Float): Int {
+    if (from !in heights.indices) return from
+    var to = from
+    var remaining = dragPx
+    while (remaining > 0 && to < heights.lastIndex && remaining > (heights[to + 1] + gapPx) / 2) {
+        remaining -= heights[to + 1] + gapPx
+        to++
+    }
+    while (remaining < 0 && to > 0 && -remaining > (heights[to - 1] + gapPx) / 2) {
+        remaining += heights[to - 1] + gapPx
+        to--
+    }
+    return to
+}
+
+/**
  * The whole order with the item at [index] shifted by [offset], as the row ids the server takes.
  *
  * A complete order rather than a move instruction because that is the endpoint's shape, and it is
@@ -6328,6 +6432,8 @@ internal fun List<QueueItem>.moveItem(index: Int, offset: Int): List<Int> {
 
 @Composable
 internal fun QueueRow(
+    modifier: Modifier = Modifier,
+    dragHandle: Modifier? = null,
     item: QueueItem,
     position: Int,
     onMoveUp: (() -> Unit)?,
@@ -6335,7 +6441,7 @@ internal fun QueueRow(
     onRemove: (() -> Unit)?,
     onPlay: (() -> Unit)?,
 ) {
-    AarisCard {
+    AarisCard(modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -6343,6 +6449,18 @@ internal fun QueueRow(
                 .padding(12.dp),
         ) {
             Row(verticalAlignment = Alignment.Top) {
+                if (dragHandle != null) {
+                    // The arrows below stay as the non-gesture way to reorder (TalkBack, switch access).
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
+                            .semantics { contentDescription = "Drag to reorder" }
+                            .then(dragHandle),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        MetaText(text = "≡", color = AarisColor.Muted)
+                    }
+                }
                 MetaText(
                     text = position.toString().padStart(2, '0'),
                     color = AarisColor.Dim,
@@ -6670,7 +6788,7 @@ private fun DeviceDetail(label: String, value: String) {
 
 /** Square, orange-accented confirmation for the two irreversible actions on the devices screen. */
 @Composable
-private fun ConfirmDialog(
+internal fun ConfirmDialog(
     title: String,
     body: String,
     confirmLabel: String,

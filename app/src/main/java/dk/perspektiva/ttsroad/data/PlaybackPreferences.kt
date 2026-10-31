@@ -75,7 +75,37 @@ data class PlaybackPrefs(
      * to lose to a tap made half asleep. Device-only, like the skip interval it uses.
      */
     val headsetButtonsSeek: Boolean = DefaultHeadsetButtonsSeek,
+    /**
+     * The hour (0-23) after which starting playback arms the default sleep timer, or -1 for off
+     * (#503). The window runs to [SleepAutoArmEndHour]. Device-only: when this phone is by the bed
+     * is not a fact about the account.
+     */
+    val sleepAutoArmFromHour: Int = SleepAutoArmOff,
+    /** The night (see [sleepAutoArmNight]) the timer was last auto-armed, so a restart does not re-arm it. */
+    val sleepAutoArmedNight: Long? = null,
 )
+
+const val SleepAutoArmOff: Int = -1
+
+/** The window closes at 05:00 local time; one start hour is the whole setting. */
+const val SleepAutoArmEndHour: Int = 5
+
+/** Offered in Settings: off, or 21:00 to midnight. */
+val SleepAutoArmOptions: List<Int> = listOf(SleepAutoArmOff, 21, 22, 23, 0)
+
+/**
+ * The night [localMs] (epoch ms shifted to local wall clock) falls in when it is inside the window
+ * that opens at [fromHour] and closes at [SleepAutoArmEndHour], else null. The number is the same
+ * for 23:00 and the 01:00 after it, so a night can be armed once.
+ */
+fun sleepAutoArmNight(localMs: Long, fromHour: Int): Long? {
+    if (fromHour !in 0..23) return null
+    val hour = Math.floorMod(localMs / 3_600_000L, 24L).toInt()
+    val inWindow = if (fromHour == 0) hour < SleepAutoArmEndHour
+    else hour >= fromHour || hour < SleepAutoArmEndHour
+    if (!inWindow) return null
+    return Math.floorDiv(localMs - fromHour * 3_600_000L, 86_400_000L)
+}
 
 /**
  * The speeds offered in the player's speed picker.
@@ -219,6 +249,8 @@ class PlaybackPreferences(private val context: Context) {
         val NightMode = booleanPreferencesKey("night_mode")
         val ReadableText = booleanPreferencesKey("readable_text")
         val HeadsetButtonsSeek = booleanPreferencesKey("headset_buttons_seek")
+        val SleepAutoArmFromHour = intPreferencesKey("sleep_auto_arm_from_hour")
+        val SleepAutoArmedNight = longPreferencesKey("sleep_auto_armed_night")
     }
 
     val prefs: Flow<PlaybackPrefs> = context.playbackDataStore.data
@@ -241,6 +273,9 @@ class PlaybackPreferences(private val context: Context) {
                 nightMode = stored[Keys.NightMode] ?: false,
                 readableText = stored[Keys.ReadableText] ?: false,
                 headsetButtonsSeek = stored[Keys.HeadsetButtonsSeek] ?: DefaultHeadsetButtonsSeek,
+                sleepAutoArmFromHour = (stored[Keys.SleepAutoArmFromHour] ?: SleepAutoArmOff)
+                    .takeIf { it in 0..23 } ?: SleepAutoArmOff,
+                sleepAutoArmedNight = stored[Keys.SleepAutoArmedNight],
             ).also { lastKnownReadableText = it.readableText }
         }
 
@@ -297,6 +332,14 @@ class PlaybackPreferences(private val context: Context) {
         @Volatile
         var lastKnownReadableText: Boolean = false
             private set
+    }
+
+    suspend fun setSleepAutoArmedNight(night: Long) {
+        context.playbackDataStore.edit { it[Keys.SleepAutoArmedNight] = night }
+    }
+
+    suspend fun setSleepAutoArmFromHour(hour: Int) {
+        context.playbackDataStore.edit { it[Keys.SleepAutoArmFromHour] = hour }
     }
 
     suspend fun setHeadsetButtonsSeek(enabled: Boolean) {
