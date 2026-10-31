@@ -8,6 +8,8 @@ Notable changes to the TTSRoad Android client.
 
 - Long-press a chapter, then "Mark a range of chapters…" to mark chapters from one number to another
   (say 400 to 650) played or unplayed in one request, with the count shown first. (#512)
+- The speed sheet has - / + buttons that move playback speed in 0.05x steps (2.2x is four taps from
+  2.0x), writing to this book's override when the per-book switch is on. (#487)
 
 ### Changed
 
