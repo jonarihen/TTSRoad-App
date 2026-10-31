@@ -9,6 +9,19 @@ Notable changes to the TTSRoad Android client.
 - Android Auto and the media notification gain overflow "Previous chapter" / "Next chapter" buttons,
   so a chapter can be skipped without browsing while the +/-30 s skips keep the main slots. Not
   verified on a head unit. (#498)
+- Automatic address failover: when the address in use cannot be reached at all (no DNS, refused, no
+  route, connect timeout), the app tries your other saved addresses, each through the same
+  same-server and same-account checks as SWITCH, and keeps the first that passes. Settings > Profile
+  says when it switched and from where. At most one attempt a minute; the failed call still fails and
+  the next one uses the new address. (#505)
+- Queue: drag a row by its handle to reorder it; the drop sends one request with the whole order
+  instead of one per step. The arrows stay. (#511)
+- Settings > Offline lists what is downloaded per book, with DELETE PLAYED and DELETE ALL for each
+  book and one DELETE PLAYED DOWNLOADS across the library. (#497)
+- Jump back: each row shows the sentence being read at that moment (when the server has timed text),
+  a long press on the history icon names it, and with no sleep timer the library banner estimates
+  when you last touched the phone ("Last touched around") from the unbroken stretch of listening
+  before the audio stopped. (#502)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)

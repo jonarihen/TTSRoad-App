@@ -103,3 +103,16 @@ fun matchSleepTime(
     val distance = kotlin.math.abs(nearest.timestamp - targetMs)
     return if (distance <= windowMs) SleepTimeMatch.Near(nearest) else SleepTimeMatch.Far(nearest, distance)
 }
+
+/**
+ * The sentence being read at [positionMs], flattened to one line and cut to [maxChars] (#502), or
+ * null when the chapter has no timings to say where that is. Shown under a jump-back row so
+ * "01:12:34" can be recognised as a bit of the story.
+ */
+fun excerptAt(document: dk.perspektiva.ttsroad.data.ReadAlongDocument, positionMs: Long, maxChars: Int = 120): String? {
+    if (!document.hasTimings) return null
+    val sentence = document.highlightAtMillis(positionMs).sentence ?: return null
+    val line = document.textIn(sentence).replace(Regex("\\s+"), " ").trim()
+    if (line.isEmpty()) return null
+    return if (line.length <= maxChars) line else line.take(maxChars - 1).trimEnd() + "…"
+}

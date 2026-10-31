@@ -10,6 +10,9 @@ import dk.perspektiva.ttsroad.download.DownloadCacheKeys
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
@@ -172,9 +175,57 @@ class TtsRoadRepository(
         val authorizationHeader: String?,
     )
 
+    private val failoverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val failingOver = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var lastFailoverAttemptMs = Long.MIN_VALUE / 2
+
+    private val _addressFailover = MutableStateFlow<AddressFailover?>(null)
+
+    /** The last automatic switch to another saved address (#505), or null if there has been none. */
+    val addressFailover: StateFlow<AddressFailover?> = _addressFailover.asStateFlow()
+
+    /**
+     * The address in use could not be reached at all (no DNS answer, refused, no route, connect
+     * timeout): try the session's other saved addresses, each through the same identity and
+     * account checks as a manual switch, and keep the first that passes (#505). The call that
+     * failed still fails; the next one goes to the new address. Single-flight and rate-limited, so
+     * an offline phone does not probe every address on every request.
+     */
+    private fun noteUnreachable(requestUrl: String) {
+        val now = clock()
+        if (now - lastFailoverAttemptMs < FailoverCooldownMs) return
+        if (!failingOver.compareAndSet(false, true)) return
+        lastFailoverAttemptMs = now
+        failoverScope.launch {
+            try {
+                val session = tokenStore.current()
+                if (!session.isLoggedIn || session.alternateUrls.isEmpty()) return@launch
+                // Only a failure of the address in use counts; a probe of a candidate failing is
+                // exactly what this loop is for.
+                if (!ServerUrls.isSameOrigin(requestUrl, session.serverUrl)) return@launch
+                for (alternate in session.alternateUrls) {
+                    if (verifyServerAddress(alternate, ServerAddressAction.Use) == ServerAddressResult.Done) {
+                        _addressFailover.value = AddressFailover(session.serverUrl, alternate, clock())
+                        return@launch
+                    }
+                }
+            } finally {
+                failingOver.set(false)
+            }
+        }
+    }
+
     private val client = httpClient.newBuilder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            try {
+                chain.proceed(chain.request())
+            } catch (e: java.io.IOException) {
+                if (isHostUnreachable(e)) noteUnreachable(chain.request().url.toString())
+                throw e
+            }
+        }
         .addInterceptor { chain ->
             val request = chain.request()
             val builder = request.newBuilder().removeHeader("Authorization")
