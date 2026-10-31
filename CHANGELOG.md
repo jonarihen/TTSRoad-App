@@ -6,6 +6,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
+  "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP
+  status. (#481)
 - Chapter rows are keyed by chapter id instead of list position, so changing sort or filter on a
   long fiction moves rows rather than recomposing all of them. (#510)
 

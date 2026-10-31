@@ -1,6 +1,7 @@
 package dk.perspektiva.ttsroad.media
 
 import androidx.media3.common.MediaItem
+import androidx.media3.session.SessionError
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.widget.NowPlayingSnapshot
@@ -31,6 +32,13 @@ internal sealed interface OfflineResume {
     /** Nothing on this phone to play. [message] says so in words a driver can act on. */
     data class Unavailable(val message: String) : OfflineResume
 }
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+internal class PlaybackRequestFailure(val sessionError: SessionError) : Exception(sessionError.message)
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+internal fun OfflineResume.Unavailable.asRequestFailure(): PlaybackRequestFailure =
+    PlaybackRequestFailure(SessionError(SessionError.ERROR_IO, message))
 
 /**
  * Resume [chapter] — the newest continue-listening entry, from the library saved on disk — with no
