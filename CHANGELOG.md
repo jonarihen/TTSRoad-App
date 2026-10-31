@@ -63,6 +63,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- Accessibility: the password can be shown, a failed sign-in marks the fields as errors, refresh errors
+  are announced, shelf tiles are buttons that read "3 of 40 chapters ready", the buffering bar is
+  labelled, grid card titles get two lines and tag chips have 48 dp targets. (#494)
 - TalkBack: screen titles, section headers and `//` kickers are headings, and the time labels, speed
   and sleep-timer buttons and the widget skip buttons are spoken in words ("28 minutes left",
   "Speed 1.5 times", "Skip back 30 seconds"). (#492, #493)

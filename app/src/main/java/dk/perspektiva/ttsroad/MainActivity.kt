@@ -98,6 +98,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -140,6 +141,7 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
@@ -156,6 +158,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -769,6 +772,7 @@ internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var errorDetails by remember { mutableStateOf<String?>(null) }
+    var showPassword by remember { mutableStateOf(false) }
     val sessionEnd by repository.sessionEnd.collectAsStateWithLifecycle()
     // A failed attempt has more to say than "your old token went stale", so it wins. Otherwise the
     // server's own wording explains which of expiry, revocation or a reset put the user here.
@@ -836,6 +840,7 @@ internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             label = { Text(labelCase("Username")) },
             placeholder = { Text("The username you were given") },
             singleLine = true,
+            isError = error != null,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(modifier = Modifier.height(12.dp))
@@ -844,9 +849,20 @@ internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             onValueChange = { password = it },
             label = { Text(labelCase("Password")) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            isError = error != null,
+            modifier = Modifier.fillMaxWidth().then(
+                error?.let { message -> Modifier.semantics { error(message) } } ?: Modifier,
+            ),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                TextButton(
+                    onClick = { showPassword = !showPassword },
+                    modifier = Modifier.semantics {
+                        contentDescription = if (showPassword) "Hide password" else "Show password"
+                    },
+                ) { Text(labelCase(if (showPassword) "Hide" else "Show")) }
+            },
         )
         // The device name only labels this sign-in under Device sessions, and the default is fine;
         // shown up front it read like one more thing that had to be filled in (#362).
@@ -1639,7 +1655,9 @@ private fun RefreshablePane(
                 MetaText(
                     text = it,
                     color = AarisColor.Danger,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
                 )
                 ErrorDetails(details = errorDetails, modifier = Modifier.padding(horizontal = 4.dp))
             }
@@ -3363,7 +3381,7 @@ internal fun PlayerScreenBody(
             progress = { playerState.bufferedPercentage / 100f },
             trackColor = AarisColor.Line,
             color = AarisColor.Dim,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Buffered" },
         )
         Spacer(modifier = Modifier.height(24.dp))
         // Single transport row: chapter skips outside, fine seek inside, primary in the middle.
@@ -7217,7 +7235,7 @@ internal fun ChapterTile(
     Column(
         modifier = Modifier
             .width(148.dp)
-            .clickable(enabled = fiction != null, onClick = onOpenFiction),
+            .clickable(enabled = fiction != null, role = Role.Button, onClick = onOpenFiction),
     ) {
         Box(
             modifier = Modifier
@@ -7265,7 +7283,7 @@ private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .width(140.dp)
-            .clickable(onClick = onClick),
+            .clickable(role = Role.Button, onClick = onClick),
     ) {
         Box(
             modifier = Modifier
@@ -7304,9 +7322,16 @@ private fun FictionTile(fiction: FictionSummary, onClick: () -> Unit) {
                 "${fiction.doneChapters}/${fiction.totalChapters}",
             ).joinToString("  ·  "),
             color = AarisColor.Dim,
+            modifier = Modifier.semantics {
+                contentDescription = spokenTileMeta(fiction.author, fiction.doneChapters, fiction.totalChapters)
+            },
         )
     }
 }
+
+/** "Ada, 3 of 40 chapters ready" — the tile's meta line without "3/40", which is read literally. */
+internal fun spokenTileMeta(author: String?, done: Int, total: Int): String =
+    listOfNotNull(author?.takeIf { it.isNotBlank() }, "$done of $total chapters ready").joinToString(", ")
 
 /**
  * Flat chapter list row (Audible-style): the row itself is the play target, the trailing check
@@ -8926,7 +8951,7 @@ private fun FictionGridCard(
                     text = fiction.title,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 MetaText(
@@ -8950,14 +8975,17 @@ private fun FictionGridCard(
                     ) {
                         fiction.tags.take(3).forEach { tag ->
                             val normalised = tag.trim().lowercase()
-                            AarisTag(
-                                text = tag,
+                            Box(
                                 modifier = Modifier
+                                    .minimumInteractiveComponentSize()
                                     .clickable(
                                         role = Role.Button,
                                         onClickLabel = "Show everything tagged $tag",
                                     ) { onTagClick(normalised) },
-                            )
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                AarisTag(text = tag)
+                            }
                         }
                     }
                 }
