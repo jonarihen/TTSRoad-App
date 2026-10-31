@@ -6,6 +6,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Release builds can trust user-installed CAs for named hosts only, set at build time with
+  `ttsroad.trust.user.ca.hosts` in `local.properties` (no runtime toggle; see README). A certificate
+  issued for a different name now says so instead of "doesn't trust the certificate". (#504)
 - Android Auto and the media notification gain overflow "Previous chapter" / "Next chapter" buttons,
   so a chapter can be skipped without browsing while the +/-30 s skips keep the main slots. Not
   verified on a head unit. (#498)

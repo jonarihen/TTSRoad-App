@@ -64,6 +64,18 @@ class UserFacingErrorsTest {
     }
 
     @Test
+    fun `a hostname mismatch is not reported as an untrusted certificate`() {
+        val mismatch = javax.net.ssl.SSLPeerUnverifiedException(
+            "Hostname 100.64.0.7 not verified:\n    certificate: sha256/abc\n    DN: CN=nas.example.ts.net",
+        )
+
+        val error = mismatch.toUserFacingError("x")
+
+        assertEquals(HostnameMismatchMessage, error.message)
+        assertTrue(error.details!!.contains("subject alternative names"))
+    }
+
+    @Test
     fun `listener copy names someone to ask and the admin advice stays under details`() {
         val cert = CertPathValidatorException("Trust anchor for certification path not found.").toUserFacingError("x")
         assertTrue(cert.message.contains("Ask whoever set up your server"))
