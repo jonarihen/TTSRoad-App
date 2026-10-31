@@ -16,6 +16,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- Home-screen widget buttons are at least 48 dp tall, share the row evenly and use 14 sp text, so
+  they are easier to hit one-handed in the dark. (#501)
 - A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
 - Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
   "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP

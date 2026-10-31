@@ -257,4 +257,11 @@ class WidgetPresentationTest {
         val unknown = playing.copy(durationMs = 0L)
         assertEquals(widgetRedrawKey(unknown), widgetRedrawKey(unknown.copy(positionMs = 600_000L)))
     }
+
+    @Test
+    fun `widget controls are at least 48dp tall`() {
+        // Glance cannot be rendered on the JVM, so the shared constant every transport button's
+        // height modifier uses is what is guarded (#501).
+        assertTrue(WidgetMinTouchTarget >= androidx.compose.ui.unit.Dp(48f))
+    }
 }

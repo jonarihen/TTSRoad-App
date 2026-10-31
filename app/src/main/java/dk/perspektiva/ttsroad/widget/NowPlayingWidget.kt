@@ -47,6 +47,9 @@ import dk.perspektiva.ttsroad.ui.AarisColor
 /** Below this height the widget is one launcher cell tall and only the essentials fit. */
 private val CompactCeiling = 100.dp
 
+/** Smallest touch target Android accessibility guidance allows; the widget is used one-handed in the dark (#501). */
+internal val WidgetMinTouchTarget = 48.dp
+
 /**
  * "What am I listening to, and pause it" — one tap from the home screen (#150).
  *
@@ -195,17 +198,18 @@ private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?, skips: SkipB
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.Vertical.CenterVertically,
         ) {
-            TransportButton(skips.back, actionRunCallback<SkipBackAction>())
+            // Equal shares of a full-width row (at least 250 dp here), so each is well over 48 dp wide.
+            TransportButton(skips.back, actionRunCallback<SkipBackAction>(), modifier = GlanceModifier.defaultWeight())
             Spacer(GlanceModifier.width(6.dp))
-            PlayPauseButton(view)
+            PlayPauseButton(view, GlanceModifier.defaultWeight())
             Spacer(GlanceModifier.width(6.dp))
-            TransportButton(skips.forward, actionRunCallback<SkipForwardAction>())
+            TransportButton(skips.forward, actionRunCallback<SkipForwardAction>(), modifier = GlanceModifier.defaultWeight())
         }
     }
 }
 
 @Composable
-private fun PlayPauseButton(view: WidgetView.Playback) {
+private fun PlayPauseButton(view: WidgetView.Playback, modifier: GlanceModifier = GlanceModifier) {
     TransportButton(
         // Labelled for what the tap will do, not for what is happening. A stale note that still
         // claims to be playing has already been resolved to false by widgetView, so this cannot
@@ -213,20 +217,23 @@ private fun PlayPauseButton(view: WidgetView.Playback) {
         text = if (view.isPlaying) "Pause" else "Play",
         action = actionRunCallback<TogglePlayPauseAction>(),
         accent = true,
+        modifier = modifier,
     )
 }
 
 @Composable
-private fun TransportButton(text: String, action: Action, accent: Boolean = false) {
+private fun TransportButton(text: String, action: Action, accent: Boolean = false, modifier: GlanceModifier = GlanceModifier) {
     Button(
         text = text,
         onClick = action,
         style = TextStyle(
             color = ColorProvider(if (accent) Color.Black else Color.White),
-            fontSize = 12.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
         ),
-        modifier = GlanceModifier.background(if (accent) AarisColor.Accent else AarisColor.Line),
+        modifier = modifier
+            .height(WidgetMinTouchTarget)
+            .background(if (accent) AarisColor.Accent else AarisColor.Line),
     )
 }
 
