@@ -401,6 +401,7 @@ class SettingsNavigationTest {
                                         onOpenFiction = {},
                                         onOpenPlayer = {},
                                         onBrowseFictions = {},
+                                        onUnmarkOffer = {},
                                     )
                                     AppScreen.Fictions -> FictionsScreen(
                                         padding = PaddingValues(),
