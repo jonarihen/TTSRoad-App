@@ -316,6 +316,8 @@ class NewChaptersUiTest {
     )
 
     @Test
+    // Tall viewport: the list is lazy, so the second group must fit on screen to be composed.
+    @Config(sdk = [34], qualifiers = "w320dp-h1200dp")
     fun `rows group under their fiction and play new starts at the first chapter`() {
         val played = mutableListOf<Int>()
         val state = NewChaptersState().apply {
