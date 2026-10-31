@@ -39,7 +39,10 @@ data class UserFacingError(val message: String, val details: String? = null)
  * JSON `detail` into an exception message, and that is better wording than any guess made here.
  * [fallback] is for a failure with no message at all.
  */
-fun Throwable.toUserFacingError(fallback: String): UserFacingError {
+fun Throwable.toUserFacingError(fallback: String): UserFacingError =
+    describeFailure(fallback).also { LastError.latest = it }
+
+private fun Throwable.describeFailure(fallback: String): UserFacingError {
     val raw = rawDescription()
     val plain = plainLanguageFor(this)
     return when {
