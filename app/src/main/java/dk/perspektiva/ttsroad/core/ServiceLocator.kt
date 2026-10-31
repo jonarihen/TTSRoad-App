@@ -9,6 +9,7 @@ import dk.perspektiva.ttsroad.data.ChapterListPreferences
 import dk.perspektiva.ttsroad.data.DownloadPreferences
 import dk.perspektiva.ttsroad.data.FictionSpeedPreferences
 import dk.perspektiva.ttsroad.data.LibraryCache
+import dk.perspektiva.ttsroad.data.ChapterListStore
 import dk.perspektiva.ttsroad.data.LibrarySnapshotStore
 import dk.perspektiva.ttsroad.data.LocalReaderPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPreferences
@@ -144,6 +145,7 @@ object ServiceLocator {
                         NowPlayingStore(context).clear()
                         // The offline copy of the library is this account's too (#327).
                         LibrarySnapshotStore(context.applicationContext).clear()
+                        ChapterListStore(context.applicationContext).clear()
                         runCatching { NowPlayingWidget().updateAll(context) }
                     }
                     previous = key
@@ -278,6 +280,7 @@ object ServiceLocator {
             libraryCache ?: LibraryCache(
                 repository = repository(context),
                 snapshots = LibrarySnapshotStore(context.applicationContext),
+                chapterLists = ChapterListStore(context.applicationContext),
                 accountKey = { historyAccountKey(tokenStore(context).current()) },
                 formerAccountKeys = { historyAccountKeys(tokenStore(context).current()) },
             ).also { libraryCache = it }

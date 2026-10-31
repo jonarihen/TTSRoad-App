@@ -2,6 +2,13 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- Chapter lists are kept on disk per fiction, so a fiction opens and its Android Auto folder lists
+  chapters after a cold start with no network. (#486)
+
 ## 0.21.0 — 2026-10-17
 
 ### Fixed
