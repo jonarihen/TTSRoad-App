@@ -146,6 +146,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var session: MediaLibrarySession
     private lateinit var browserCallback: BrowserCallback
     private lateinit var sleepTimer: SleepTimerController
+    private lateinit var sleepTimerProgress: SleepTimerProgress
     private lateinit var fictionSpeeds: FictionSpeedPreferences
     private lateinit var nowPlayingStore: NowPlayingStore
     private lateinit var librarySnapshots: LibrarySnapshotStore
@@ -341,6 +342,8 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .distinctUntilChanged()
                 .collect { headsetButtonsSeek = it }
         }
+        sleepTimerProgress = SleepTimerProgress(player, sleepTimer)
+        player.addListener(sleepTimerProgress)
         player.addListener(
             departingChapterProgressListener(player, serviceScope) { item, position, duration, completed, flushHistory ->
                 saveProgressFor(item, position, duration, queueEnded = completed, flushHistory = flushHistory)
@@ -869,6 +872,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             SleepTimerAction.None -> Unit
             is SleepTimerAction.SetVolume -> player.volume = action.volume
             SleepTimerAction.Expire -> {
+                sleepTimerProgress.expired()
                 recordSleepTimerStop()
                 player.pause()
                 // Restore after pausing, so the next play doesn't start silent.
@@ -1086,6 +1090,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         queueEnded: Boolean,
         flushHistory: Boolean = queueEnded,
     ) {
+        val deferPlayedMark = sleepTimerProgress.deferPlayedMark(mediaItem)
         suspend fun ownsProgress(): Boolean = ownsProgress(mediaItem, tokenStore.current())
         if (!ownsProgress()) return
         val extras = mediaItem.mediaMetadata.extras
@@ -1104,7 +1109,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         publishNowPlaying(forcePlaying = null)
 
         if (fictionId == null || chapterId == null) return
-        if (!recordPendingProgress(mediaItem, position, duration, queueEnded)) return
+        if (!recordPendingProgress(mediaItem, position, duration, queueEnded, deferPlayedMark)) return
         if (!ownsProgress()) return
         progressSync.flush()
 
@@ -1127,6 +1132,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         position: Long,
         duration: Long?,
         queueEnded: Boolean,
+        deferPlayedMark: Boolean = sleepTimerProgress.deferPlayedMark(mediaItem),
     ): Boolean {
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 } ?: return false
@@ -1147,6 +1153,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 durationMs = duration,
                 autoMarkEnabled = preferences.current().autoMarkPlayed,
                 queueEnded = queueEnded,
+                deferForSleepTimer = deferPlayedMark,
             ),
         )
 
