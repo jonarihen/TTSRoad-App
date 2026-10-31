@@ -7213,12 +7213,18 @@ internal fun ChapterRow(
                         },
                     )
                 }
-                // Why it failed, on the row rather than only behind a long press. A list of rows
-                // reading "FAILED" and nothing else is what #106 was filed about; one line of the
-                // server's own message is usually enough to tell a locked chapter from a broken one.
-                chapter.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                // Why it cannot be played, in a listener's words, with the pipeline's own words and
+                // the server's message one tap away (#488). A list of rows reading "FAILED" and
+                // nothing else is what #106 was filed about; the server's message is still how an
+                // admin tells a locked chapter from a broken one, it just no longer greets everyone.
+                chapter.statusSentence?.let { sentence ->
                     Spacer(modifier = Modifier.height(2.dp))
-                    MetaText(text = message, color = AarisColor.Danger, maxLines = 2)
+                    MetaText(
+                        text = sentence,
+                        color = if (chapter.hasError) AarisColor.Danger else AarisColor.Dim,
+                        maxLines = 2,
+                    )
+                    ErrorDetails(details = chapter.statusDetail)
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))

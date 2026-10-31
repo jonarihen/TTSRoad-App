@@ -20,6 +20,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- Chapters that cannot be played yet read "Getting ready…" or "Couldn't prepare this chapter" instead of
+  PENDING / CLEANING / FETCHING; the pipeline words and the server's message sit behind Details. (#488)
 - The new-chapter notification says a single chapter is ready to listen, and when several land it
   names the serials and offers "Play first". (#495)
 - A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
