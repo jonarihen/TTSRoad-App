@@ -6,6 +6,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Queue: drag a row by its handle to reorder it; the drop sends one request with the whole order
+  instead of one per step. The arrows stay. (#511)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)
