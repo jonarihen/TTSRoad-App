@@ -1058,7 +1058,8 @@ private val NavigationTabLabelMinSize = 6.sp
 private fun NavigationCountBadge(count: Int) {
     val spoken = if (count == 1) "1 new chapter ready" else "$count new chapters ready"
     Text(
-        text = if (count > 99) "99+" else count.toString(),
+        // "new" is spelled out so the bare number is not mistaken for part of the tab name.
+        text = (if (count > 99) "99+" else count.toString()) + " new",
         modifier = Modifier
             .testTag("nav-badge")
             .semantics { contentDescription = spoken }

@@ -181,13 +181,13 @@ class PrimaryNavigationLayoutTest {
 
         compose.runOnIdle { badges = mapOf(AppRoot.Listening to 2) }
         compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertIsDisplayed()
-            .assertTextEquals("2")
+            .assertTextEquals("2 new")
         compose.onNodeWithContentDescription("2 new chapters ready").assertExists()
         // The label still fits beside it on a narrow phone.
         compose.onNodeWithText("LISTENING").assertIsDisplayed()
 
         compose.runOnIdle { badges = mapOf(AppRoot.Listening to 250) }
-        compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertTextEquals("99+")
+        compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertTextEquals("99+ new")
     }
 
     @Test

@@ -72,7 +72,7 @@ class NewChaptersCountsTest {
             assertEquals(pageSize, state.rows.size)
             assertEquals(240, state.ready)
             assertEquals("New chapters (240 ready · 110 waiting)", newChaptersRowTitle(state.unread, state.ready))
-            compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertTextEquals("99+")
+            compose.onNodeWithTag("nav-badge", useUnmergedTree = true).assertTextEquals("99+ new")
         } finally {
             server.shutdown()
         }

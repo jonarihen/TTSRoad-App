@@ -13,6 +13,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- New chapters groups rows under their fiction with a "Play new" button per fiction, scrolls as a
+  lazy list, and the Listening tab badge reads "3 new" instead of a bare number. (#496)
 - The empty Home cards ("No active chapters", "No fictions found") offer "Find something to listen
   to", which opens Browse. (#508)
 - Android Auto: Continue Listening and Recent show at most 20 rows (newest first) instead of
