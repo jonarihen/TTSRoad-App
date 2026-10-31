@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.text
 import androidx.compose.ui.semantics.semantics
@@ -335,6 +336,7 @@ fun MetaText(
             if (text.startsWith(KickerMark)) {
                 Modifier.clearAndSetSemantics {
                     this.text = AnnotatedString(spokenMetaText(text, uppercase = !readable))
+                    heading()
                 }
             } else {
                 Modifier
@@ -566,6 +568,7 @@ fun SectionHeader(
         }
         Text(
             text = labelCase(title),
+            modifier = Modifier.semantics { heading() },
             style = MaterialTheme.typography.titleLarge,
         )
         Spacer(modifier = Modifier.height(8.dp))

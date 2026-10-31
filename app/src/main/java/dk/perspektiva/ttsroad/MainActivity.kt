@@ -140,6 +140,7 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -798,6 +799,7 @@ internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = "TTSROAD",
+            modifier = Modifier.semantics { heading() },
             style = MaterialTheme.typography.displaySmall,
         )
         Spacer(modifier = Modifier.height(6.dp))
@@ -942,6 +944,7 @@ internal fun AppTopBar(title: String, canGoBack: Boolean, onBack: () -> Unit) {
             title = {
                 Text(
                     text = labelCase(title),
+                    modifier = Modifier.semantics { heading() },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleLarge,
@@ -2927,11 +2930,15 @@ private fun PlayerActionButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     color: Color = Color.Unspecified,
+    /** What a screen reader says instead of [label], whose digits and symbols read badly aloud. */
+    description: String? = null,
 ) {
     TextButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        modifier = Modifier.heightIn(min = MinTouchTargetSize).then(
+            if (description != null) Modifier.semantics { contentDescription = description } else Modifier,
+        ),
     ) {
         Text(text = label, color = color, maxLines = 1, softWrap = false)
     }
@@ -3306,7 +3313,12 @@ internal fun PlayerScreenBody(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            MetaText(text = formatDuration(dragMs?.toLong() ?: playerState.positionMs))
+            MetaText(
+                text = formatDuration(dragMs?.toLong() ?: playerState.positionMs),
+                modifier = Modifier.semantics {
+                    contentDescription = "${spokenDuration(dragMs?.toLong() ?: playerState.positionMs)} played"
+                },
+            )
             // Time left beats total duration here: the scrubber already shows how far in this is,
             // and "how much longer" is the thing being asked. At anything but 1x the wall-clock
             // answer differs from the audio one, so say both rather than the misleading one.
@@ -3329,6 +3341,13 @@ internal fun PlayerScreenBody(
                             )
                             append(" at ${formatSpeed(playerState.speed)}")
                         }
+                    },
+                    modifier = Modifier.semantics {
+                        contentDescription = spokenTimeLeft(
+                            remainingMs(position, playerState.durationMs),
+                            playerState.speed,
+                            remainingMsAtSpeed(position, playerState.durationMs, playerState.speed),
+                        )
                     },
                 )
             } else {
@@ -3400,6 +3419,7 @@ internal fun PlayerScreenBody(
             // cycle-only button.
             PlayerActionButton(
                 label = "SPEED ${formatSpeed(playerState.speed)}",
+                description = "Speed ${spokenSpeed(playerState.speed)}",
                 onClick = onOpenSpeed,
             )
             PlayerActionButton(
@@ -3407,6 +3427,11 @@ internal fun PlayerScreenBody(
                     "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
                 } else {
                     "SLEEP"
+                },
+                description = if (sleepTimerState.isArmed) {
+                    "Sleep timer, ${spokenDuration(sleepTimerState.remainingMs)} left"
+                } else {
+                    "Sleep timer"
                 },
                 onClick = onOpenSleepTimer,
                 enabled = playerState.hasMedia || sleepTimerState.isArmed,
@@ -11106,7 +11131,15 @@ private fun skipForwardIcon(skipIntervalMs: Long): ImageVector = when {
 private fun formatSleepTimerDefault(minutes: Int): String =
     if (minutes <= 0) "Ask" else "${minutes}m"
 
-private fun formatSpeed(speed: Float): String {
+/** "1.5 times" — a speed as a screen reader should say it, not as "1.5 multiplication sign". */
+internal fun spokenSpeed(speed: Float): String = "${formatSpeed(speed).removeSuffix("×")} times"
+
+/** "28 minutes left", plus the wall-clock answer when [speed] is not 1x. */
+internal fun spokenTimeLeft(remainingMs: Long, speed: Float, atSpeedMs: Long): String =
+    "${spokenDuration(remainingMs)} left" +
+        if (speed != 1f) ", ${spokenDuration(atSpeedMs)} at ${spokenSpeed(speed)} speed" else ""
+
+internal fun formatSpeed(speed: Float): String {
     val text = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')
     return "${text}×"
 }

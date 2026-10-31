@@ -208,9 +208,9 @@ class WidgetPresentationTest {
     @Test
     fun `skip buttons are labelled with the configured interval`() {
         // #335: the widget said 30 whatever the setting was.
-        assertEquals(SkipButtonLabels("\u221230", "+30"), skipButtonLabels(30_000L))
-        assertEquals(SkipButtonLabels("\u221210", "+10"), skipButtonLabels(10_000L))
-        assertEquals(SkipButtonLabels("\u221260", "+60"), skipButtonLabels(60_000L))
+        assertEquals(SkipButtonLabels("\u221230", "+30", "Skip back 30 seconds", "Skip forward 30 seconds"), skipButtonLabels(30_000L))
+        assertEquals("Skip back 10 seconds", skipButtonLabels(10_000L).backDescription)
+        assertEquals("Skip forward 60 seconds", skipButtonLabels(60_000L).forwardDescription)
     }
 
     // #338: the launcher used to redraw on every 15-second tick.

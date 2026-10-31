@@ -60,6 +60,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- TalkBack: screen titles, section headers and `//` kickers are headings, and the time labels, speed
+  and sleep-timer buttons and the widget skip buttons are spoken in words ("28 minutes left",
+  "Speed 1.5 times", "Skip back 30 seconds"). (#492, #493)
 - Home-screen widget buttons are at least 48 dp tall, share the row evenly and use 14 sp text, so
   they are easier to hit one-handed in the dark. (#501)
 - Error messages no longer assume you run the server: certificate, HTTPS, "update the backend" and
