@@ -77,6 +77,8 @@ object TtsRoadSessionCommands {
      *   without looking at the screen.
      * @param sleepTimerLabel the sleep-timer button's name, which carries its state ("Sleep timer:
      *   30 min"), or null for no button. Each press steps the timer through its presets (#337).
+     * @param sleepTimerArmed filled crescent when a timer is running, outlined when not, so the
+     *   state shows on surfaces that do not render the button's name (#500).
      */
     @OptIn(UnstableApi::class)
     fun mediaButtonPreferences(
@@ -84,6 +86,7 @@ object TtsRoadSessionCommands {
         bookmarks: Boolean = false,
         pronunciationReports: Boolean = false,
         sleepTimerLabel: String? = null,
+        sleepTimerArmed: Boolean = false,
     ): ImmutableList<CommandButton> {
         val buttons = ImmutableList.builder<CommandButton>()
             .add(
@@ -131,7 +134,7 @@ object TtsRoadSessionCommands {
             // Media3 has no timer icon of its own, hence the custom crescent.
             buttons.add(
                 CommandButton.Builder(CommandButton.ICON_UNDEFINED)
-                    .setCustomIconResId(R.drawable.ic_sleep_timer)
+                    .setCustomIconResId(sleepTimerIcon(sleepTimerArmed))
                     .setSessionCommand(sleepTimerCommand)
                     .setDisplayName(sleepTimerLabel)
                     .setSlots(CommandButton.SLOT_OVERFLOW)
@@ -140,6 +143,9 @@ object TtsRoadSessionCommands {
         }
         return buttons.build()
     }
+
+    internal fun sleepTimerIcon(armed: Boolean): Int =
+        if (armed) R.drawable.ic_sleep_timer else R.drawable.ic_sleep_timer_off
 
     /**
      * Media3 has numbered glyphs for 5, 10, 15 and 30 seconds only. Any other interval gets the

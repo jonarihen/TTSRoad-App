@@ -6,6 +6,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
+  outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
+  widget has a Sleep button that steps the timer like the notification's. (#500)
 - Long-press a chapter, then "Mark a range of chapters…" to mark chapters from one number to another
   (say 400 to 650) played or unplayed in one request, with the count shown first. (#512)
 - The speed sheet has - / + buttons that move playback speed in 0.05x steps (2.2x is four taps from

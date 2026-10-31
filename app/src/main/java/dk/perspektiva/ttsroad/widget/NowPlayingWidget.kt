@@ -192,6 +192,11 @@ private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?, skips: SkipB
         if (compact) {
             Spacer(GlanceModifier.width(8.dp))
             PlayPauseButton(view)
+        } else {
+            // Beside the title rather than in the transport row, where a fourth button would be
+            // under 48 dp wide; fixed width keeps the target at 48 dp or more.
+            Spacer(GlanceModifier.width(8.dp))
+            TransportButton("Sleep", actionRunCallback<SleepTimerToggleAction>(), modifier = GlanceModifier.width(64.dp))
         }
     }
     if (!compact) {
