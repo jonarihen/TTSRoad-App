@@ -4,7 +4,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -302,5 +305,56 @@ class NewChaptersUiTest {
 
         playBtn.performClick()
         assertEquals(1, played)
+    }
+
+    private fun ready(id: Int, fictionId: Int, fiction: String) = ChapterNotificationEntry(
+        id = id,
+        state = ChapterNotificationState.Ready.wire,
+        playable = true,
+        fiction = ChapterNotificationFiction(id = fictionId, title = fiction),
+        chapter = ChapterNotificationChapter(id = 1000 + id, title = "Chapter $id"),
+    )
+
+    @Test
+    fun `rows group under their fiction and play new starts at the first chapter`() {
+        val played = mutableListOf<Int>()
+        val state = NewChaptersState().apply {
+            isLoading = false
+            loadedOnce = true
+            notifications = listOf(ready(1, 7, "Alpha"), ready(2, 8, "Beta"), ready(3, 7, "Alpha"))
+        }
+        compose.setContent {
+            TtsRoadTheme {
+                NewChaptersScreen(PaddingValues(0.dp), state, fakeRepo, onPlay = { played += it.id }, onOpenFiction = {})
+            }
+        }
+        // One header per fiction (the title is no longer repeated on every row).
+        compose.onAllNodesWithTag("new-chapter-group").assertCountEquals(2)
+        compose.onAllNodesWithText("Alpha").assertCountEquals(1)
+        compose.onAllNodesWithText("PLAY NEW")[0].performClick()
+        assertEquals(listOf(1), played)
+    }
+
+    @Test
+    fun `a large backlog is lazy and composes only the visible rows`() {
+        val state = NewChaptersState().apply {
+            isLoading = false
+            loadedOnce = true
+            notifications = (1..200).map { ready(it, it, "Serial $it") }
+        }
+        compose.setContent {
+            TtsRoadTheme {
+                NewChaptersScreen(PaddingValues(0.dp), state, fakeRepo, onPlay = {}, onOpenFiction = {})
+            }
+        }
+        compose.onNodeWithText("Serial 1").assertIsDisplayed()
+        compose.onAllNodesWithText("Serial 200").assertCountEquals(0)
+    }
+
+    @Test
+    fun `an id-less fiction never merges with a real fiction`() {
+        val title = ready(1, 0, "Zeta")
+        val groups = newChapterGroups(listOf(title, ready(2, "Zeta".hashCode(), "Other"), ready(3, 0, "Zeta")))
+        assertEquals(listOf(2, 1), groups.map { it.entries.size })
     }
 }
