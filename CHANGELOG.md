@@ -2,6 +2,14 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- Resuming from Android Auto or a headset on weak signal serves the saved library or downloaded
+  chapter after 5 seconds instead of waiting out every network timeout, and skips capability
+  discovery on a fresh process. (#483)
+
 ## 0.21.0 — 2026-10-17
 
 ### Fixed

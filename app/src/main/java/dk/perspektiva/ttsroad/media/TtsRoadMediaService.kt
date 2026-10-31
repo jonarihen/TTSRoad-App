@@ -134,6 +134,9 @@ private const val SpeechMaxBufferMs = 300_000
 // How long an offline resume waits for the download index to load (#327).
 private const val DownloadIndexWaitMs = 2_000L
 
+/** How long a cold-start resume waits on the network before serving the saved library (#483). */
+private const val ResumeDeadlineMs = 5_000L
+
 @OptIn(UnstableApi::class)
 class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -1251,7 +1254,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun library(): LibraryResponse? {
         // Android Auto can start the service in a fresh process without MainActivity having run
         // capability discovery. Do it here once so the car benefits from delta sync too.
-        if (repository.currentCapabilities.value.advertised.isEmpty()) {
+        // Only needed for a delta, and a fresh process has no baseline to be sparse against, so
+        // skipping it keeps a round trip off the cold-start resume path (#483).
+        if (lastLibrary != null && lastLibraryCursor != null &&
+            repository.currentCapabilities.value.advertised.isEmpty()
+        ) {
             repository.refreshCurrentCapabilities()
         }
         val session = librarySessionGeneration
@@ -1290,18 +1297,27 @@ class TtsRoadMediaService : MediaLibraryService() {
                 val key = historyAccountKey(tokenStore.current())
                 withContext(Dispatchers.IO) { librarySnapshots.write(key, loaded) }
             }
-        } else if (lastLibrary == null) {
-            // A fresh process with no network: last time's library rather than nothing, so the car
-            // can still browse and resume (#327). No cursor, so the next load that works is a full one.
-            val keys = historyAccountKeys(tokenStore.current())
-            val stored = withContext(Dispatchers.IO) { librarySnapshots.read(keys.firstOrNull(), keys) }
-            if (stored != null && sessionStillCurrent(session)) {
-                searchCacheGeneration++
-                lastLibrary = stored.library
-                lastLibraryCursor = null
-            }
+        } else {
+            savedLibrary()
         }
         return loaded ?: lastLibrary
+    }
+
+    /**
+     * The library on disk when this process has none yet: last time's rather than nothing, so the
+     * car can still browse and resume (#327). No cursor, so the next load that works is a full one.
+     */
+    private suspend fun savedLibrary(): LibraryResponse? {
+        if (lastLibrary != null) return lastLibrary
+        val session = librarySessionGeneration
+        val keys = historyAccountKeys(tokenStore.current())
+        val stored = withContext(Dispatchers.IO) { librarySnapshots.read(keys.firstOrNull(), keys) }
+        if (stored != null && sessionStillCurrent(session)) {
+            searchCacheGeneration++
+            lastLibrary = stored.library
+            lastLibraryCursor = null
+        }
+        return lastLibrary
     }
 
     /**
@@ -1422,18 +1438,29 @@ class TtsRoadMediaService : MediaLibraryService() {
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
         val session = librarySessionGeneration
-        val library = afterPendingProgress(
-            flush = { progressSync.flush() },
-            read = { library() },
-        ) ?: return null
-        // First is the most recently heard: the server sorts continue_listening by last listening
-        // activity, newest first (build.md, "continue_listening[]"). The items carry no documented
-        // timestamp to re-sort on, so the server's order is the contract (#330).
-        val chapter = library.continueListening.firstOrNull() ?: return null
-        val fictionId = chapter.resolvedFictionId.takeIf { it > 0 } ?: return null
-        buildFictionQueue(fictionId, chapter.resolvedChapterId, session)?.let { return it }
-        if (!sessionStillCurrent(session)) return null
-        return offlineResumeQueue(chapter, library)
+        // On weak signal each network call waits up to its own connect/read timeout, one after the
+        // other; the car would show a spinner for a minute. Past the deadline, serve what is on disk (#483).
+        return withinResumeDeadline(
+            deadlineMs = ResumeDeadlineMs,
+            online = {
+                val library = afterPendingProgress(
+                    flush = { progressSync.flush() },
+                    read = { library() },
+                )
+                // First is the most recently heard: the server sorts continue_listening by last
+                // listening activity, newest first (build.md, "continue_listening[]"). The items
+                // carry no documented timestamp to re-sort on, so the server's order is the contract (#330).
+                val chapter = library?.continueListening?.firstOrNull()
+                val fictionId = chapter?.resolvedFictionId?.takeIf { it > 0 }
+                if (fictionId == null) null else buildFictionQueue(fictionId, chapter.resolvedChapterId, session)
+            },
+            offline = {
+                val library = savedLibrary() ?: return@withinResumeDeadline null
+                val chapter = library.continueListening.firstOrNull() ?: return@withinResumeDeadline null
+                if (chapter.resolvedFictionId <= 0 || !sessionStillCurrent(session)) null
+                else offlineResumeQueue(chapter, library)
+            },
+        )
     }
 
     /**
