@@ -77,6 +77,8 @@ object TtsRoadSessionCommands {
      *   without looking at the screen.
      * @param sleepTimerLabel the sleep-timer button's name, which carries its state ("Sleep timer:
      *   30 min"), or null for no button. Each press steps the timer through its presets (#337).
+     * @param sleepTimerArmed filled crescent when a timer is running, outlined when not, so the
+     *   state shows on surfaces that do not render the button's name (#500).
      */
     @OptIn(UnstableApi::class)
     fun mediaButtonPreferences(
@@ -84,6 +86,7 @@ object TtsRoadSessionCommands {
         bookmarks: Boolean = false,
         pronunciationReports: Boolean = false,
         sleepTimerLabel: String? = null,
+        sleepTimerArmed: Boolean = false,
     ): ImmutableList<CommandButton> {
         val buttons = ImmutableList.builder<CommandButton>()
             .add(
@@ -100,6 +103,24 @@ object TtsRoadSessionCommands {
                     .setSlots(CommandButton.SLOT_FORWARD, CommandButton.SLOT_OVERFLOW)
                     .build(),
             )
+        // Chapter skip without browsing (#498). The skips own the slots either side of play/pause,
+        // so these two are overflow-only: a driver can step over an author's-note chapter from the
+        // transport's overflow instead of the browse tree. Player commands, so the player's own
+        // queue logic (and its enabled state at either end of the queue) applies.
+        buttons.add(
+            CommandButton.Builder(CommandButton.ICON_PREVIOUS)
+                .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .setDisplayName("Previous chapter")
+                .setSlots(CommandButton.SLOT_OVERFLOW)
+                .build(),
+        )
+        buttons.add(
+            CommandButton.Builder(CommandButton.ICON_NEXT)
+                .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .setDisplayName("Next chapter")
+                .setSlots(CommandButton.SLOT_OVERFLOW)
+                .build(),
+        )
         if (bookmarks) {
             // Overflow only, and last. The skips are what a driver reaches for constantly
             // and they own the slots either side of play/pause; a bookmark button that displaced one
@@ -131,7 +152,7 @@ object TtsRoadSessionCommands {
             // Media3 has no timer icon of its own, hence the custom crescent.
             buttons.add(
                 CommandButton.Builder(CommandButton.ICON_UNDEFINED)
-                    .setCustomIconResId(R.drawable.ic_sleep_timer)
+                    .setCustomIconResId(sleepTimerIcon(sleepTimerArmed))
                     .setSessionCommand(sleepTimerCommand)
                     .setDisplayName(sleepTimerLabel)
                     .setSlots(CommandButton.SLOT_OVERFLOW)
@@ -140,6 +161,9 @@ object TtsRoadSessionCommands {
         }
         return buttons.build()
     }
+
+    internal fun sleepTimerIcon(armed: Boolean): Int =
+        if (armed) R.drawable.ic_sleep_timer else R.drawable.ic_sleep_timer_off
 
     /**
      * Media3 has numbered glyphs for 5, 10, 15 and 30 seconds only. Any other interval gets the

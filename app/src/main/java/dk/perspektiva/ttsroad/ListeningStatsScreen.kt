@@ -99,7 +99,13 @@ internal fun ListeningStatsScreen(
 
     // Keyed on the capability so a server discovered after this screen opened still loads, and one
     // that cannot answer is never asked.
-    LaunchedEffect(capabilities.listeningStats) { if (capabilities.listeningStats) load() }
+    LaunchedEffect(capabilities.listeningStats) {
+        if (capabilities.listeningStats) {
+            // Last visit's figures first; load() refreshes them (a 304 is nearly free).
+            if (stats == null) stats = repository.peekListeningStats()?.stats
+            load()
+        }
+    }
 
     Column(
         modifier = Modifier
