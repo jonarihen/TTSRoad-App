@@ -127,17 +127,18 @@ class ChapterNotificationsTest {
     fun `several chapters collapse into one notification`() {
         // A serial converting a backlog would otherwise post a dozen at once, burying the shade.
         val single = readyNotificationText(listOf(notice(1, "ready")))
-        assertEquals("A Test Serial", single?.first)
+        assertEquals("New chapter ready: A Test Serial", single?.first)
         assertEquals("Chapter 1", single?.second)
 
-        val many = readyNotificationText(
-            listOf(notice(1, "ready"), notice(2, "ready", fictionTitle = "Another Serial")),
-        )
-        assertEquals("2 chapters ready", many?.first)
-        assertEquals("New audio in 2 serials", many?.second)
+        val two = listOf(notice(1, "ready"), notice(2, "ready", fictionTitle = "Another Serial"))
+        val many = readyNotificationText(two)
+        assertEquals("2 chapters ready to listen", many?.first)
+        assertEquals("A Test Serial, Another Serial", many?.second)
+        assertEquals(listOf("A Test Serial", "Another Serial"), readySerialLines(two))
 
-        val sameSerial = readyNotificationText(listOf(notice(1, "ready"), notice(2, "ready")))
-        assertEquals("New audio in A Test Serial", sameSerial?.second)
+        val sameSerial = listOf(notice(1, "ready"), notice(2, "ready"))
+        assertEquals("A Test Serial (2)", readyNotificationText(sameSerial)?.second)
+        assertEquals(listOf("A Test Serial (2)"), readySerialLines(sameSerial))
 
         assertNull(readyNotificationText(emptyList()))
     }
@@ -152,7 +153,7 @@ class ChapterNotificationsTest {
             )
 
             assertEquals("2 hours ready to listen", entry.notificationBody())
-            assertEquals("A Test Serial" to entry.notificationBody(), readyNotificationText(listOf(entry)))
+            assertEquals("New chapter ready: A Test Serial" to entry.notificationBody(),readyNotificationText(listOf(entry)))
         }
     }
 
@@ -167,7 +168,7 @@ class ChapterNotificationsTest {
                 )
 
                 assertEquals("Chapter 1", entry.notificationBody())
-                assertEquals("A Test Serial" to "Chapter 1", readyNotificationText(listOf(entry)))
+                assertEquals("New chapter ready: A Test Serial" to "Chapter 1",readyNotificationText(listOf(entry)))
             }
         }
     }
@@ -265,7 +266,7 @@ class ChapterNotificationsTest {
         assertEquals("backlog", entry.kind)
         assertEquals(7200.5, entry.backlogSeconds)
         assertEquals("2 hours ready to listen", entry.message)
-        assertEquals("A Test Serial" to "2 hours ready to listen", readyNotificationText(listOf(entry)))
+        assertEquals("New chapter ready: A Test Serial" to "2 hours ready to listen",readyNotificationText(listOf(entry)))
         assertFalse(entry.playable)
         assertFalse(entry.dismissible)
     }

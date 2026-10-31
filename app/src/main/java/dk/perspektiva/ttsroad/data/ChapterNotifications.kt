@@ -93,14 +93,14 @@ fun readyNotificationText(fresh: List<ChapterNotificationEntry>): Pair<String, S
     fresh.isEmpty() -> null
     fresh.size == 1 -> {
         val item = fresh.single()
-        item.fiction.title to item.notificationBody()
+        "New chapter ready: ${item.fiction.title}" to item.notificationBody()
     }
-    else -> {
-        val serials = fresh.map { it.fiction.title }.distinct()
-        val where = if (serials.size == 1) serials.single() else "${serials.size} serials"
-        "${fresh.size} chapters ready" to "New audio in $where"
-    }
+    else -> "${fresh.size} chapters ready to listen" to readySerialLines(fresh).joinToString(", ")
 }
+
+/** One "Serial (n)" line per serial in [fresh], in first-seen order, for the expanded notification. */
+fun readySerialLines(fresh: List<ChapterNotificationEntry>): List<String> =
+    fresh.groupBy { it.fiction.title }.map { (title, rows) -> if (rows.size == 1) title else "$title (${rows.size})" }
 
 /** Rows worth drawing. Dismissed ones are not requested, but a stale list can still hold one. */
 fun visibleNotifications(
