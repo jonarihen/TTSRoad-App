@@ -2,6 +2,13 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Changed
+
+- Android Auto: Continue Listening and Recent show at most 20 rows (newest first) instead of
+  leaving the cut to the head unit, and the Recent folder says its rows name the book. (#499)
+
 ## 0.21.0 — 2026-10-17
 
 ### Fixed
