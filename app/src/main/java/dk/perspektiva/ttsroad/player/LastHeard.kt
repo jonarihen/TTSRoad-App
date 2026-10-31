@@ -37,6 +37,13 @@ enum class LastHeardKind {
     /** No better estimate: this is where the audio stopped, and the banner says exactly that. */
     AudioStopped,
 
+    /**
+     * No timer, but the trail shows an unbroken stretch of listening at one pace ending at the stop:
+     * nothing was seeked, paused or skipped after this moment, so this is the last time the phone
+     * was plausibly touched (#502).
+     */
+    LastTouched,
+
     /** A sleep timer cut the audio; this is where the listener last touched it, awake. */
     TimerSet,
 }
@@ -68,7 +75,12 @@ fun estimateLastHeard(
     minimumAgeMs: Long = DefaultMinimumAgeMs,
 ): LastHeard? {
     val stopped = lastHeardSnapshot(history, now, minimumAgeMs) ?: return null
-    val audioStopped = LastHeard(stopped, LastHeardKind.AudioStopped, stopped.timestamp)
+    val untouched = untouchedSince(history, stopped)
+    val audioStopped = if (untouched == null) {
+        LastHeard(stopped, LastHeardKind.AudioStopped, stopped.timestamp)
+    } else {
+        LastHeard(untouched, LastHeardKind.LastTouched, stopped.timestamp)
+    }
     if (sleepStop == null) return audioStopped
     // The timer's stop has to be *this* stop: a later session that ended some other way must not
     // be rewound to a timer from the night before.
@@ -86,3 +98,40 @@ const val SleepStopMatchMs: Long = 2 * 60_000L
 
 /** Older than this and the banner is worth showing — roughly "not the same sitting". */
 const val DefaultMinimumAgeMs: Long = 30 * 60_000L
+
+/** A gap longer than this between snapshots (15s ticks) means playback paused or the app was away. */
+private const val MaxTickGapMs: Long = 45_000L
+
+/** Shorter than this and an unbroken stretch is just a listening session, not a doze. */
+const val MinUntouchedMs: Long = 20 * 60_000L
+
+/**
+ * Where the unbroken stretch of listening that ends at [stopped] began, or null when it is shorter
+ * than [MinUntouchedMs] (#502). Without a timer nothing records the last touch, so it is read off
+ * the trail: while untouched, media time advances at one steady multiple of wall-clock time (the
+ * playback speed). A seek, skip, pause or chapter pick breaks that ratio or leaves a gap.
+ * Chapters advancing on their own are not a break.
+ */
+internal fun untouchedSince(history: List<HistorySnapshot>, stopped: HistorySnapshot): HistorySnapshot? {
+    val end = history.indexOf(stopped).takeIf { it > 0 } ?: return null
+    fun ratio(a: HistorySnapshot, b: HistorySnapshot): Double? =
+        if (a.mediaId == b.mediaId) {
+            (b.positionMs - a.positionMs).toDouble() / (b.timestamp - a.timestamp).coerceAtLeast(1L)
+        } else {
+            null
+        }
+    // The pace the sleeper's phone was last running at: the newest same-chapter pair before the stop.
+    val pace = (end downTo 1).firstNotNullOfOrNull { i ->
+        ratio(history[i - 1], history[i])?.takeIf { it > 0.0 }
+    } ?: return null
+    var start = end
+    while (start > 0) {
+        val a = history[start - 1]
+        val b = history[start]
+        if (b.timestamp - a.timestamp > MaxTickGapMs) break
+        val r = ratio(a, b)
+        if (r != null && kotlin.math.abs(r - pace) > pace * 0.15) break
+        start--
+    }
+    return history[start].takeIf { stopped.timestamp - it.timestamp >= MinUntouchedMs }
+}
