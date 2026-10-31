@@ -91,7 +91,9 @@ const val ContinuousGapMs: Long = 90_000L
  * What [PlaybackHistoryStore] keeps. Duplicated as a parameter default rather than read from the
  * store because this file is arithmetic over a list and has no business holding a `Context`.
  */
-const val HistorySnapshotCapacity: Int = 17_000
+// A ceiling, not the age cap: 8,000 ticks is ~33h of non-stop playback or three days at ~11h a
+// day, and keeps the periodic rewrite of the file near 2 MB instead of ~4 MB at 72h non-stop.
+const val HistorySnapshotCapacity: Int = 8_000
 
 /**
  * Total up [history] into what can honestly be said about it.

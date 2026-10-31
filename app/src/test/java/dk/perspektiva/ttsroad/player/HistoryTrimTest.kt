@@ -30,4 +30,14 @@ class HistoryTrimTest {
         assertEquals(history.last(), kept.last())
         assertEquals(history[1], kept.first())
     }
+
+    @Test
+    fun `old entries behind newer ones are still dropped after a backwards clock change`() {
+        val hour = 3_600_000L
+        val history = listOf(snap(10 * hour), snap(100 * hour), snap(5 * hour), snap(0))
+
+        val kept = trimHistory(history, now)
+
+        assertEquals(listOf(10 * hour, 5 * hour, 0L), kept.map { now - it.timestamp })
+    }
 }

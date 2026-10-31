@@ -32,12 +32,12 @@ const val HistoryMaxAgeMs: Long = 72 * 3_600_000L
 
 /**
  * [history] without what is older than [HistoryMaxAgeMs] at [now], then at most
- * [HistorySnapshotCapacity] newest entries. The count is only a ceiling against runaway
- * (non-stop playback records 5,760 a day at the 15s tick, well under three days of it).
+ * [HistorySnapshotCapacity] newest entries. Filters by age rather than trusting the order: after a
+ * backwards clock change old entries can sit behind newer ones.
  */
 internal fun trimHistory(history: List<HistorySnapshot>, now: Long): List<HistorySnapshot> {
     val cutoff = now - HistoryMaxAgeMs
-    val fresh = if (history.firstOrNull()?.let { it.timestamp < cutoff } == true) history.filter { it.timestamp >= cutoff } else history
+    val fresh = if (history.any { it.timestamp < cutoff }) history.filter { it.timestamp >= cutoff } else history
     return if (fresh.size > HistorySnapshotCapacity) fresh.takeLast(HistorySnapshotCapacity) else fresh
 }
 
