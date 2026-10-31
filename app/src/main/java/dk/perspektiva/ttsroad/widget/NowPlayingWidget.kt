@@ -116,7 +116,9 @@ private fun WidgetBody(view: WidgetView, cover: Bitmap?, open: Intent, skips: Sk
             .background(AarisColor.Bg)
             // The whole surface opens the app; the transport buttons below claim their own taps.
             .clickable(actionStartActivity(open))
-            .padding(12.dp),
+            // 60 dp - 2 x 6 dp leaves exactly the 48 dp the compact layout's one button needs; 12 dp
+            // padding would have clipped it by 12 dp.
+            .padding(if (LocalSize.current.height < CompactCeiling) 6.dp else 12.dp),
         verticalAlignment = Alignment.Vertical.CenterVertically,
     ) {
         when (view) {
