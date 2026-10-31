@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.media
 
+import androidx.media3.common.Player
 import androidx.media3.session.CommandButton
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -54,6 +55,19 @@ class TtsRoadSessionCommandsTest {
             ),
             actions(buttons),
         )
+    }
+
+    @Test
+    fun `chapter skip is reachable from the overflow without taking a main slot`() {
+        val buttons = TtsRoadSessionCommands.mediaButtonPreferences()
+        val byCommand = buttons.associateBy { it.playerCommand }
+
+        for (command in listOf(
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+        )) {
+            assertEquals(listOf(CommandButton.SLOT_OVERFLOW), byCommand.getValue(command).slots.toArray().toList())
+        }
     }
 
     @Test
