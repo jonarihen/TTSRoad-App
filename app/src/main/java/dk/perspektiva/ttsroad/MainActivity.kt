@@ -106,6 +106,11 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -6147,6 +6152,8 @@ private fun QueueScreen(
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var dragIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(0f) }
 
     fun load() {
         scope.launch {
@@ -6260,8 +6267,42 @@ private fun QueueScreen(
                     kicker = "Q",
                     title = if (items.size == 1) "1 queued" else "${items.size} queued",
                 )
+                val rowHeights = remember { mutableStateMapOf<Int, Int>() }
+                val gapPx = with(LocalDensity.current) { 16.dp.toPx() }
+                fun endDrag(): Int {
+                    val to = queueDropIndex(
+                        from = dragIndex,
+                        dragPx = dragOffset,
+                        heights = items.indices.map { rowHeights[it] ?: 0 },
+                        gapPx = gapPx,
+                    )
+                    val from = dragIndex
+                    dragIndex = -1
+                    dragOffset = 0f
+                    return if (from >= 0 && to != from) to - from else 0
+                }
                 items.forEachIndexed { index, item ->
                     QueueRow(
+                        modifier = Modifier
+                            .onSizeChanged { rowHeights[index] = it.height }
+                            .zIndex(if (dragIndex == index) 1f else 0f)
+                            .graphicsLayer { translationY = if (dragIndex == index) dragOffset else 0f },
+                        // One request for wherever the row was dropped, not one per step.
+                        dragHandle = Modifier.pointerInput(items.map { it.id }, isBusy) {
+                            if (isBusy) return@pointerInput
+                            detectDragGestures(
+                                onDragStart = { dragIndex = index; dragOffset = 0f },
+                                onDrag = { change, delta ->
+                                    change.consume()
+                                    dragOffset += delta.y
+                                },
+                                onDragEnd = {
+                                    val offset = endDrag()
+                                    if (offset != 0) mutate { repository.reorderQueue(items.moveItem(index, offset)) }
+                                },
+                                onDragCancel = { endDrag() },
+                            )
+                        },
                         item = item,
                         position = index + 1,
                         // The ends of the list have nowhere to go, and a disabled arrow says that
@@ -6338,6 +6379,25 @@ private fun QueueScreen(
 }
 
 /**
+ * Where a row dragged [dragPx] pixels from [from] lands, given each row's measured [heights] and the
+ * [gapPx] between rows: it passes a neighbour once it is past that neighbour's midpoint.
+ */
+internal fun queueDropIndex(from: Int, dragPx: Float, heights: List<Int>, gapPx: Float): Int {
+    if (from !in heights.indices) return from
+    var to = from
+    var remaining = dragPx
+    while (remaining > 0 && to < heights.lastIndex && remaining > (heights[to + 1] + gapPx) / 2) {
+        remaining -= heights[to + 1] + gapPx
+        to++
+    }
+    while (remaining < 0 && to > 0 && -remaining > (heights[to - 1] + gapPx) / 2) {
+        remaining += heights[to - 1] + gapPx
+        to--
+    }
+    return to
+}
+
+/**
  * The whole order with the item at [index] shifted by [offset], as the row ids the server takes.
  *
  * A complete order rather than a move instruction because that is the endpoint's shape, and it is
@@ -6355,6 +6415,8 @@ internal fun List<QueueItem>.moveItem(index: Int, offset: Int): List<Int> {
 
 @Composable
 internal fun QueueRow(
+    modifier: Modifier = Modifier,
+    dragHandle: Modifier? = null,
     item: QueueItem,
     position: Int,
     onMoveUp: (() -> Unit)?,
@@ -6362,7 +6424,7 @@ internal fun QueueRow(
     onRemove: (() -> Unit)?,
     onPlay: (() -> Unit)?,
 ) {
-    AarisCard {
+    AarisCard(modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -6370,6 +6432,18 @@ internal fun QueueRow(
                 .padding(12.dp),
         ) {
             Row(verticalAlignment = Alignment.Top) {
+                if (dragHandle != null) {
+                    // The arrows below stay as the non-gesture way to reorder (TalkBack, switch access).
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
+                            .semantics { contentDescription = "Drag to reorder" }
+                            .then(dragHandle),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        MetaText(text = "≡", color = AarisColor.Muted)
+                    }
+                }
                 MetaText(
                     text = position.toString().padStart(2, '0'),
                     color = AarisColor.Dim,
