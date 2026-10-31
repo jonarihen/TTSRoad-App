@@ -243,8 +243,14 @@ class SettingsNavigationTest {
                 }
             }
             try {
+                // resolvedSession is async: the screen is not composed on the first frame.
+                compose.waitUntil(10_000) {
+                    compose.onAllNodes(hasText("SIGN OUT")).fetchSemanticsNodes().isNotEmpty()
+                }
                 compose.onNodeWithText("SIGN OUT").performScrollTo().performClick()
-                compose.onNode(hasText("SIGN OUT") and hasAnyAncestor(isDialog())).performClick()
+                val dialogSignOut = hasText("SIGN OUT") and hasAnyAncestor(isDialog())
+                compose.waitUntil(10_000) { compose.onAllNodes(dialogSignOut).fetchSemanticsNodes().isNotEmpty() }
+                compose.onNode(dialogSignOut).performClick()
                 compose.waitUntil(10_000) { flushing.count == 0L }
                 // The latch trips on the server thread; the busy label lands on a later recomposition.
                 compose.waitUntil(10_000) {
