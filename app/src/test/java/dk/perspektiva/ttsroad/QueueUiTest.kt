@@ -106,4 +106,25 @@ class QueueUiTest {
         compose.onNodeWithText("KEEP GOING").assertIsEnabled().performClick()
         assertEquals(QueueWhenEmptyContinue, selected)
     }
+
+    @Test
+    fun `a draggable row has a 48dp handle, and the arrows stay for non-gesture users`() {
+        compose.setContent {
+            TtsRoadTheme {
+                QueueRow(
+                    dragHandle = androidx.compose.ui.Modifier,
+                    item = QueueItem(id = 1, chapterId = 10, fictionId = 2, chapterTitle = "Ch 1"),
+                    position = 1,
+                    onMoveUp = {},
+                    onMoveDown = {},
+                    onRemove = {},
+                    onPlay = {},
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Drag to reorder")
+            .assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithContentDescription("Move up").assertIsDisplayed()
+    }
 }
