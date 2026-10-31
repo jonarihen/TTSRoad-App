@@ -118,7 +118,7 @@ sealed interface ServerAddressResult {
      * the check got as far as presenting the token there — false whenever the address failed the
      * unauthenticated identity check, which is the case the wording should reassure about.
      */
-    data class Refused(val message: String, val tokenSent: Boolean = false) : ServerAddressResult
+    data class Refused(val message: String, val tokenSent: Boolean = false, val details: String? = null) : ServerAddressResult
 }
 
 /** What to do with an address once it has passed. */

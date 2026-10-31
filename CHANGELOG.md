@@ -6,6 +6,10 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Diagnostics: inline errors (feeds, backups, exports, bookmarks, queue, sessions and more) and the
+  address check now fold the raw text under Details; Settings > About has COPY DIAGNOSTICS (app,
+  Android, server version, capabilities, last error; no token, server address redacted); each server
+  log line has COPY LINE and selectable text. (#506)
 - Updates: failures read in plain words (rate-limited, not found, no connection) instead of "GitHub
   returned 403"; the update dialog always opens with one plain line and keeps the changelog behind
   WHAT CHANGED IN DETAIL; Settings > About shows the SHA-256 of the certificate this install is
