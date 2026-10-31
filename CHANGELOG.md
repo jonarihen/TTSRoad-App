@@ -16,6 +16,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- Error messages no longer assume you run the server: certificate, HTTPS, "update the backend" and
+  signing-key messages now say to ask whoever set up your server (or who gave you the app), with the
+  technical advice moved under Details. (#489)
 - A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
 - Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
   "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP

@@ -125,7 +125,7 @@ internal fun NewChaptersScreen(
 
         if (state.isUnsupported) {
             MetaText(
-                "This server does not support new chapter notifications. Update the backend to track new chapters.",
+                "This server can't tell the app about new chapters yet. Ask whoever set up your server to update it.",
                 color = AarisColor.Muted,
             )
         } else {

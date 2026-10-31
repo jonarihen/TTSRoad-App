@@ -70,7 +70,7 @@ class NewChaptersUiTest {
                 )
             }
         }
-        compose.onNodeWithText("THIS SERVER DOES NOT SUPPORT NEW CHAPTER NOTIFICATIONS. UPDATE THE BACKEND TO TRACK NEW CHAPTERS.").assertIsDisplayed()
+        compose.onNodeWithText("THIS SERVER CAN'T TELL THE APP ABOUT NEW CHAPTERS YET. ASK WHOEVER SET UP YOUR SERVER TO UPDATE IT.").assertIsDisplayed()
         compose.onNodeWithText("RETRY").assertDoesNotExist()
     }
 
