@@ -6,6 +6,7 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Stats has a range picker (4, 12, 26 or 52 weeks) for the activity grid. (#514)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)
@@ -16,6 +17,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- The jump-back log keeps three days of listening instead of the last 2,000 positions (about eight
+  hours), and the Stats count is worded to match. (#514)
 - New chapters groups rows under their fiction with a "Play new" button per fiction, scrolls as a
   lazy list, and the Listening tab badge reads "3 new" instead of a bare number. (#496)
 - The empty Home cards ("No active chapters", "No fictions found") offer "Find something to listen

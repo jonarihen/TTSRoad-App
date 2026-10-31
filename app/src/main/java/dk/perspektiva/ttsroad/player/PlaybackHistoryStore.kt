@@ -27,6 +27,20 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+/** How far back the log reaches: three days covers a heavy listener's yesterday and the day before. */
+const val HistoryMaxAgeMs: Long = 72 * 3_600_000L
+
+/**
+ * [history] without what is older than [HistoryMaxAgeMs] at [now], then at most
+ * [HistorySnapshotCapacity] newest entries. The count is only a ceiling against runaway
+ * (non-stop playback records 5,760 a day at the 15s tick, well under three days of it).
+ */
+internal fun trimHistory(history: List<HistorySnapshot>, now: Long): List<HistorySnapshot> {
+    val cutoff = now - HistoryMaxAgeMs
+    val fresh = if (history.firstOrNull()?.let { it.timestamp < cutoff } == true) history.filter { it.timestamp >= cutoff } else history
+    return if (fresh.size > HistorySnapshotCapacity) fresh.takeLast(HistorySnapshotCapacity) else fresh
+}
+
 /** A point on the playback timeline: where the audio was at a given wall-clock moment. */
 data class HistorySnapshot(
     val timestamp: Long,       // wall-clock epoch millis
@@ -181,7 +195,7 @@ class PlaybackHistoryStore internal constructor(
             } else {
                 current + snap
             }
-            val list = if (updated.size > MAX_SNAPSHOTS) updated.takeLast(MAX_SNAPSHOTS) else updated
+            val list = trimHistory(updated, timestamp)
             _snapshots.value = list
             pending = PendingPersist.Write(++generation, list)
             schedulePersist()
@@ -280,8 +294,6 @@ class PlaybackHistoryStore internal constructor(
             ?: emptyList()
 
     private companion object {
-        // ~8 hours of overnight listening at the service's 15s tick granularity.
-        const val MAX_SNAPSHOTS = 2000
         const val PERSIST_INTERVAL_MS = 300_000L
     }
 }
