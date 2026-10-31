@@ -236,8 +236,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     // Read by the sleep-timer button on the notification for the same reason (#337).
     @Volatile
     private var sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes
+    @Volatile
     private var sleepAutoArmFromHour: Int = SleepAutoArmOff
-    private var sleepAutoArmedNight: Long? = null
 
     // Read by onMediaButtonEvent, which is not suspending either (#336).
     @Volatile
@@ -876,9 +876,12 @@ class TtsRoadMediaService : MediaLibraryService() {
         val zone = java.util.TimeZone.getDefault()
         val now = System.currentTimeMillis()
         val night = sleepAutoArmNight(now + zone.getOffset(now), sleepAutoArmFromHour) ?: return
-        if (night == sleepAutoArmedNight) return
-        sleepAutoArmedNight = night
-        sleepTimer.cyclePreset(sleepTimerDefaultMinutes)
+        serviceScope.launch {
+            // Persisted: a reaped service must not re-arm a timer the listener cancelled tonight.
+            if (preferences.current().sleepAutoArmedNight == night) return@launch
+            preferences.setSleepAutoArmedNight(night)
+            if (!sleepTimer.state.value.isArmed) sleepTimer.cyclePreset(sleepTimerDefaultMinutes)
+        }
     }
 
     private fun tickSleepTimer() {

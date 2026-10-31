@@ -81,6 +81,8 @@ data class PlaybackPrefs(
      * is not a fact about the account.
      */
     val sleepAutoArmFromHour: Int = SleepAutoArmOff,
+    /** The night (see [sleepAutoArmNight]) the timer was last auto-armed, so a restart does not re-arm it. */
+    val sleepAutoArmedNight: Long? = null,
 )
 
 const val SleepAutoArmOff: Int = -1
@@ -248,6 +250,7 @@ class PlaybackPreferences(private val context: Context) {
         val ReadableText = booleanPreferencesKey("readable_text")
         val HeadsetButtonsSeek = booleanPreferencesKey("headset_buttons_seek")
         val SleepAutoArmFromHour = intPreferencesKey("sleep_auto_arm_from_hour")
+        val SleepAutoArmedNight = longPreferencesKey("sleep_auto_armed_night")
     }
 
     val prefs: Flow<PlaybackPrefs> = context.playbackDataStore.data
@@ -272,6 +275,7 @@ class PlaybackPreferences(private val context: Context) {
                 headsetButtonsSeek = stored[Keys.HeadsetButtonsSeek] ?: DefaultHeadsetButtonsSeek,
                 sleepAutoArmFromHour = (stored[Keys.SleepAutoArmFromHour] ?: SleepAutoArmOff)
                     .takeIf { it in 0..23 } ?: SleepAutoArmOff,
+                sleepAutoArmedNight = stored[Keys.SleepAutoArmedNight],
             ).also { lastKnownReadableText = it.readableText }
         }
 
@@ -328,6 +332,10 @@ class PlaybackPreferences(private val context: Context) {
         @Volatile
         var lastKnownReadableText: Boolean = false
             private set
+    }
+
+    suspend fun setSleepAutoArmedNight(night: Long) {
+        context.playbackDataStore.edit { it[Keys.SleepAutoArmedNight] = night }
     }
 
     suspend fun setSleepAutoArmFromHour(hour: Int) {
