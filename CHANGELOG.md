@@ -11,6 +11,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- The empty Home cards ("No active chapters", "No fictions found") offer "Find something to listen
+  to", which opens Browse. (#508)
 - Android Auto: Continue Listening and Recent show at most 20 rows (newest first) instead of
   leaving the cut to the head unit, and the Recent folder says its rows name the book. (#499)
 
