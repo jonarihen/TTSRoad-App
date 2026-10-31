@@ -50,8 +50,11 @@ class ServerAddressFailoverTest {
         ),
     )
 
+    /** Polls up to 20s of real time; the condition is normally met within milliseconds. */
     private fun waitFor(condition: () -> Boolean) = runBlocking {
-        repeat(100) { if (!condition()) delay(50) }
+        val deadline = System.nanoTime() + 20_000_000_000L
+        while (!condition() && System.nanoTime() < deadline) delay(25)
+        assertTrue("condition not met within 20s", condition())
     }
 
     @Test
@@ -91,7 +94,6 @@ class ServerAddressFailoverTest {
 
         runCatching { runBlocking { repository.library() } }
         waitFor { away.requestCount > 0 }
-        Thread.sleep(300)
 
         assertEquals(homeUrl, runBlocking { sessions.current().serverUrl })
         assertEquals(null, repository.addressFailover.value)
