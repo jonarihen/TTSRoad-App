@@ -1810,7 +1810,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             TtsRoadMediaItems.folder(
                 mediaId = TtsRoadMediaIds.Recent,
                 title = "Recent",
-                subtitle = "Latest ready chapters",
+                subtitle = "Newest chapters, with their book",
             ),
         )
 
@@ -1827,10 +1827,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
             if (!service.sessionStillCurrent(session)) return emptyList()
-            return library.continueListening.mapNotNull { chapter ->
-                val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl, crossFiction = true)
-            }
+            return TtsRoadMediaItems.crossFictionRows(library.continueListening, library.fictions, serverUrl)
         }
 
         private suspend fun fictionFolders(): List<MediaItem> {
@@ -1846,10 +1843,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
             if (!service.sessionStillCurrent(session)) return emptyList()
-            return library.recentChapters.mapNotNull { chapter ->
-                val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl, crossFiction = true)
-            }
+            return TtsRoadMediaItems.crossFictionRows(library.recentChapters, library.fictions, serverUrl)
         }
 
         private suspend fun fictionChildren(parentId: String): List<MediaItem> {
