@@ -258,6 +258,9 @@ import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.PreferenceScope
 import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.data.SignOutStep
+import dk.perspektiva.ttsroad.data.signOut
+import dk.perspektiva.ttsroad.data.unsyncedSignOutMessage
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
 import dk.perspektiva.ttsroad.data.speedOptions
@@ -723,7 +726,7 @@ internal fun LoginNotice(text: String) {
 }
 
 @Composable
-private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
+internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     val scope = rememberCoroutineScope()
     // Empty rather than pre-filled with "https://": a pasted address used to land after the
     // pre-filled scheme as https://https://… (#361). normalizeBaseUrl assumes https:// anyway.
@@ -4475,6 +4478,7 @@ internal fun SettingsScreen(
     // far more often than to do any of this, and the confirmation is the only thing that needs it.
     var confirmEmptyShelf by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
+    var unsyncedAtSignOut by remember { mutableStateOf<Int?>(null) }
     var shelfCount by remember { mutableStateOf<Int?>(null) }
     var shelfNote by remember { mutableStateOf<String?>(null) }
     var backupError by remember { mutableStateOf<String?>(null) }
@@ -5320,20 +5324,49 @@ internal fun SettingsScreen(
         }
     }
 
+    val progressSync = remember { ServiceLocator.progressSync(context) }
+    fun startSignOut(force: Boolean) {
+        if (isBusy) return
+        isBusy = true
+        scope.launch {
+            try {
+                val step = signOut(
+                    force = force,
+                    flush = { progressSync.flushBeforeSignOut() },
+                    logout = { repository.logout() },
+                )
+                if (step is SignOutStep.Unsynced) unsyncedAtSignOut = step.positions
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
     if (confirmSignOut) {
         ConfirmDialog(
             title = "SIGN OUT?",
             body = "This phone stops playing and syncing until you sign in again, which needs the " +
-                "server address and your password. Your listening progress stays on the server.",
+                "server address and your password. We will try to sync this phone's pending " +
+                "listening progress first and warn you if any remains unsent. Progress already on " +
+                "the server stays there.",
             confirmLabel = "SIGN OUT",
             onDismiss = { confirmSignOut = false },
             onConfirm = {
                 confirmSignOut = false
-                scope.launch {
-                    isBusy = true
-                    repository.logout()
-                    isBusy = false
-                }
+                startSignOut(force = false)
+            },
+        )
+    }
+
+    unsyncedAtSignOut?.let { positions ->
+        ConfirmDialog(
+            title = "PROGRESS NOT SYNCED",
+            body = unsyncedSignOutMessage(positions),
+            confirmLabel = "SIGN OUT ANYWAY",
+            onDismiss = { unsyncedAtSignOut = null },
+            onConfirm = {
+                unsyncedAtSignOut = null
+                startSignOut(force = true)
             },
         )
     }
