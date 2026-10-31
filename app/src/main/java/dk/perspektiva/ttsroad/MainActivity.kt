@@ -258,6 +258,9 @@ import dk.perspektiva.ttsroad.data.PlaybackPreferences
 import dk.perspektiva.ttsroad.data.PlaybackPrefs
 import dk.perspektiva.ttsroad.data.PreferenceScope
 import dk.perspektiva.ttsroad.data.SessionState
+import dk.perspektiva.ttsroad.data.SignOutStep
+import dk.perspektiva.ttsroad.data.signOut
+import dk.perspektiva.ttsroad.data.unsyncedSignOutMessage
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
 import dk.perspektiva.ttsroad.data.speedOptions
@@ -281,6 +284,7 @@ import dk.perspektiva.ttsroad.data.canPickVoice
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterIdsFrom
 import dk.perspektiva.ttsroad.data.chapterNumberText
+import dk.perspektiva.ttsroad.data.chapterRowKeys
 import dk.perspektiva.ttsroad.data.chapterView
 import dk.perspektiva.ttsroad.data.fictionNarrationPatch
 import dk.perspektiva.ttsroad.data.initiallyExpandedVoiceLocale
@@ -316,7 +320,7 @@ import dk.perspektiva.ttsroad.nav.switchToRoot
 import dk.perspektiva.ttsroad.nav.withFiction
 import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
-import dk.perspektiva.ttsroad.player.chaptersPlayedAfter
+import dk.perspektiva.ttsroad.player.jumpBackAndOffer
 import dk.perspektiva.ttsroad.player.jumpBackOptions
 import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
@@ -723,7 +727,7 @@ internal fun LoginNotice(text: String) {
 }
 
 @Composable
-private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
+internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     val scope = rememberCoroutineScope()
     // Empty rather than pre-filled with "https://": a pasted address used to land after the
     // pre-filled scheme as https://https://… (#361). normalizeBaseUrl assumes https:// anyway.
@@ -744,17 +748,22 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
     // server's own wording explains which of expiry, revocation or a reset put the user here.
     val notice = error ?: sessionEnd?.message
     var probed by remember { mutableStateOf<ServerCapabilities?>(null) }
+    var unreachable by remember { mutableStateOf(false) }
 
     // Capability discovery is public, so the URL can be checked before any credentials are typed.
-    // Only once the host looks finished (#361) — half-typed names must not become DNS lookups — and
-    // still debounced, because a finished-looking "home.ex" is often on its way to "home.example.dk".
-    // A failure stays silent since an unreachable server here is usually just a typo in progress.
+    // Only once the host could be a real one (#361), and debounced, because "https://n" is usually
+    // on its way to "https://nas" and a finished-looking "home.ex" to "home.example.dk" (#513).
+    // No answer at all is said quietly once typing pauses; it never blocks Sign in, since the
+    // server may simply not be up yet. A 404 is an older server and stays silent.
     val probeUrl = remember(serverUrl) { probeableBaseUrl(serverUrl) }
     LaunchedEffect(probeUrl) {
         probed = null
+        unreachable = false
         val url = probeUrl ?: return@LaunchedEffect
         delay(800)
-        probed = repository.capabilities(url).takeIf { it.serverVersion != null }
+        val found = repository.resolvedCapabilitiesFor(url)
+        probed = found?.takeIf { it.serverVersion != null }
+        unreachable = found == null
     }
 
     Column(
@@ -787,6 +796,10 @@ private fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
             ),
             supportingText = probed?.let { found ->
                 { MetaText(text = "${found.serverName} ${found.serverVersion}", color = AarisColor.Accent) }
+            } ?: if (unreachable) {
+                { MetaText(text = "Can't reach this address yet") }
+            } else {
+                null
             },
         )
         Spacer(modifier = Modifier.height(12.dp))
@@ -1069,7 +1082,7 @@ internal fun AppBottomBar(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainScaffold(
+internal fun MainScaffold(
     session: SessionState,
     screen: AppScreen,
     selectedRoot: AppRoot,
@@ -1085,6 +1098,10 @@ private fun MainScaffold(
     newChapters: NewChaptersState,
 ) {
     val context = LocalContext.current
+    // Chapters playback went on to finish after the moment just jumped back to, by fiction (#342).
+    // Held here rather than by the player because the library's "Resume there" banner raises it and
+    // the player answers it (#484). Sign-out leaves the scaffold, so no other account inherits it.
+    var playedAfterJump by remember { mutableStateOf<Map<Int, Set<Int>>>(emptyMap()) }
     // Saved UI state (scroll offsets, search text) is kept per stack entry, so returning to a
     // screen lands where it was left. Dropping an entry drops its state with it.
     val stateHolder = rememberSaveableStateHolder()
@@ -1173,6 +1190,7 @@ private fun MainScaffold(
                     onOpenFiction = { onScreenChange(AppScreen.Fiction(it)) },
                     onOpenPlayer = { onScreenChange(AppScreen.Player) },
                     onBrowseFictions = { onRootChange(AppRoot.Browse) },
+                    onUnmarkOffer = { playedAfterJump = it },
                 )
 
                 AppScreen.Fictions -> FictionsScreen(
@@ -1239,6 +1257,8 @@ private fun MainScaffold(
                     skipIntervalMs = skipIntervalMs,
                     onOpenReader = { onScreenChange(it) },
                     onOpenQueue = { onScreenChange(AppScreen.Queue) },
+                    playedAfterJump = playedAfterJump,
+                    onUnmarkOffer = { playedAfterJump = it },
                 )
 
                 is AppScreen.Reader -> ReaderScreen(
@@ -1346,6 +1366,7 @@ internal fun LibraryScreen(
     onOpenFiction: (FictionSummary) -> Unit,
     onOpenPlayer: () -> Unit,
     onBrowseFictions: () -> Unit,
+    onUnmarkOffer: (Map<Int, Set<Int>>) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -1448,7 +1469,11 @@ internal fun LibraryScreen(
                                         lastHeardBusy = true
                                         lastHeardError = null
                                         scope.launch {
-                                            val failure = jumpToSnapshot(lastHeard.snapshot, playbackController, repository)
+                                            val failure = jumpBackAndOffer(
+                                                lastHeard.snapshot,
+                                                history,
+                                                onUnmarkOffer,
+                                            ) { jumpToSnapshot(it, playbackController, repository) }
                                             lastHeardBusy = false
                                             // Only open the player once there is something in it.
                                             if (failure == null) onOpenPlayer() else lastHeardError = failure
@@ -1832,6 +1857,7 @@ private fun FictionScreen(
             val visible = remember(chapters, filter, ascending, chapterQuery) {
                 chapters.chapterView(filter, ascending, chapterQuery)
             }
+            val rowKeys = remember(visible) { visible.chapterRowKeys() }
             val currentChapterId = playerState.queue.getOrNull(playerState.currentIndex)
                 ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
             // Where a batch download starts: what is playing, else the furthest-progressed chapter,
@@ -2039,7 +2065,7 @@ private fun FictionScreen(
                             },
                         )
                     }
-                    itemsIndexed(visible, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
+                    itemsIndexed(visible, key = { index, _ -> rowKeys[index] }) { _, chapter ->
                         ChapterRow(
                             chapter = chapter,
                             fiction = fiction,
@@ -3284,6 +3310,8 @@ private fun PlayerScreen(
     skipIntervalMs: Long,
     onOpenReader: (AppScreen.Reader) -> Unit,
     onOpenQueue: () -> Unit,
+    playedAfterJump: Map<Int, Set<Int>>,
+    onUnmarkOffer: (Map<Int, Set<Int>>) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -3316,9 +3344,6 @@ private fun PlayerScreen(
     // should show where you are, not the last thing you went looking for.
     var queueQuery by remember(showChapters) { mutableStateOf("") }
     var showJumpBack by remember { mutableStateOf(false) }
-    // Chapters playback went on to finish after the moment just jumped back to, by fiction (#342).
-    // Non-empty only right after a jump, and only while the offer to unmark them is on screen.
-    var playedAfterJump by remember { mutableStateOf<Map<Int, Set<Int>>>(emptyMap()) }
     LaunchedEffect(showJumpBack) {
         if (!showJumpBack) return@LaunchedEffect
         remoteBreadcrumbs = runCatching {
@@ -3728,7 +3753,7 @@ private fun PlayerScreen(
 
     if (playedAfterJump.isNotEmpty()) {
         val count = playedAfterJump.values.sumOf { it.size }
-        val dismiss = { playedAfterJump = emptyMap() }
+        val dismiss = { onUnmarkOffer(emptyMap()) }
         AlertDialog(
             onDismissRequest = dismiss,
             containerColor = AarisColor.BgRaise,
@@ -3747,7 +3772,7 @@ private fun PlayerScreen(
                 Button(
                     onClick = {
                         val marked = playedAfterJump
-                        playedAfterJump = emptyMap()
+                        onUnmarkOffer(emptyMap())
                         scope.launch {
                             actionFeedback = unmarkPlayedAfterJump(marked, repository, context)
                         }
@@ -3800,10 +3825,11 @@ private fun PlayerScreen(
             jumping = true
             jumpError = null
             scope.launch {
-                val failure = jumpToSnapshot(snap, playbackController, repository)
+                val failure = jumpBackAndOffer(snap, history, onUnmarkOffer) {
+                    jumpToSnapshot(it, playbackController, repository)
+                }
                 jumping = false
                 if (failure == null) {
-                    playedAfterJump = chaptersPlayedAfter(history, snap)
                     showJumpBack = false
                 } else {
                     jumpError = failure
@@ -4475,6 +4501,7 @@ internal fun SettingsScreen(
     // far more often than to do any of this, and the confirmation is the only thing that needs it.
     var confirmEmptyShelf by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
+    var unsyncedAtSignOut by remember { mutableStateOf<Int?>(null) }
     var shelfCount by remember { mutableStateOf<Int?>(null) }
     var shelfNote by remember { mutableStateOf<String?>(null) }
     var backupError by remember { mutableStateOf<String?>(null) }
@@ -5320,20 +5347,49 @@ internal fun SettingsScreen(
         }
     }
 
+    val progressSync = remember { ServiceLocator.progressSync(context) }
+    fun startSignOut(force: Boolean) {
+        if (isBusy) return
+        isBusy = true
+        scope.launch {
+            try {
+                val step = signOut(
+                    force = force,
+                    flush = { progressSync.flushBeforeSignOut() },
+                    logout = { repository.logout() },
+                )
+                if (step is SignOutStep.Unsynced) unsyncedAtSignOut = step.positions
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
     if (confirmSignOut) {
         ConfirmDialog(
             title = "SIGN OUT?",
             body = "This phone stops playing and syncing until you sign in again, which needs the " +
-                "server address and your password. Your listening progress stays on the server.",
+                "server address and your password. We will try to sync this phone's pending " +
+                "listening progress first and warn you if any remains unsent. Progress already on " +
+                "the server stays there.",
             confirmLabel = "SIGN OUT",
             onDismiss = { confirmSignOut = false },
             onConfirm = {
                 confirmSignOut = false
-                scope.launch {
-                    isBusy = true
-                    repository.logout()
-                    isBusy = false
-                }
+                startSignOut(force = false)
+            },
+        )
+    }
+
+    unsyncedAtSignOut?.let { positions ->
+        ConfirmDialog(
+            title = "PROGRESS NOT SYNCED",
+            body = unsyncedSignOutMessage(positions),
+            confirmLabel = "SIGN OUT ANYWAY",
+            onDismiss = { unsyncedAtSignOut = null },
+            onConfirm = {
+                unsyncedAtSignOut = null
+                startSignOut(force = true)
             },
         )
     }

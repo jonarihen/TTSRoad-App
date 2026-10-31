@@ -21,6 +21,12 @@ enum class SessionEndReason {
 
     /** A 401 with no reason this build understands: an older server, a proxy, or an empty body. */
     Unknown,
+
+    /**
+     * Signed out on this phone while the server could not be told (#480). The token may still be
+     * valid there until it is removed from the device list or ages out.
+     */
+    NotRevoked,
 }
 
 /**
@@ -92,4 +98,16 @@ private fun defaultMessage(reason: SessionEndReason): String = when (reason) {
     SessionEndReason.Revoked -> "This device was signed out - sign in again"
     SessionEndReason.Invalid -> "The server no longer accepts this session - sign in again"
     SessionEndReason.Unknown -> "Session expired - sign in again"
+    SessionEndReason.NotRevoked -> NotRevokedSessionEnd.message
 }
+
+/**
+ * What the login screen says after a sign-out the server never heard about. Worded as a possibility,
+ * because the server may have revoked it anyway (the request can fail after it arrived).
+ */
+val NotRevokedSessionEnd = SessionEnd(
+    reason = SessionEndReason.NotRevoked,
+    message = "Signed out on this phone, but the server did not confirm revoking the token. This device's session " +
+        "may still be valid there - remove it from the device list in the web console or on another " +
+        "signed-in device.",
+)

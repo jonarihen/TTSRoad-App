@@ -21,6 +21,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -53,6 +56,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Rule
@@ -201,6 +206,69 @@ class SettingsNavigationTest {
     }
 
     @Test
+    fun `failed sign out flush warns before discarding and renders revoke notice on login`() {
+        MockWebServer().use { server ->
+            val flushing = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                    "/api/mobile/capabilities" -> MockResponse().setBody("""{"capabilities":{"batch_progress":true}}""")
+                    "/api/mobile/playback/sync" -> {
+                        flushing.countDown()
+                        release.await(10, TimeUnit.SECONDS)
+                        MockResponse().setResponseCode(503)
+                    }
+                    else -> MockResponse().setResponseCode(503)
+                }
+            }
+            server.start()
+            val context = ApplicationProvider.getApplicationContext<Application>()
+            val tokenStore = ServiceLocator.tokenStore(context)
+            val repository = ServiceLocator.repository(context)
+            runBlocking {
+                tokenStore.saveLogin(server.url("/").toString(), LoginResponse(token = "test", user = MobileUser(1, "Listener")))
+            }
+            val session = runBlocking { tokenStore.current() }
+            val pending = ServiceLocator.pendingProgress(context)
+            pending.clear()
+            pending.record(1, 7, 30.0, false, session)
+            compose.setContent {
+                val current = resolvedSession(tokenStore.session, onSignedIn = {}, onSignedOut = {})
+                TtsRoadTheme {
+                    if (current?.isLoggedIn == true) {
+                        SettingsScreen(PaddingValues(), current, repository, SettingsCategory.Profile, {})
+                    } else if (current != null) {
+                        LoginScreen(repository, current)
+                    }
+                }
+            }
+            try {
+                compose.onNodeWithText("SIGN OUT").performScrollTo().performClick()
+                compose.onNode(hasText("SIGN OUT") and hasAnyAncestor(isDialog())).performClick()
+                compose.waitUntil(10_000) { flushing.count == 0L }
+                compose.onNodeWithText("SIGNING OUT").assertIsNotEnabled()
+                release.countDown()
+                compose.waitUntil(10_000) {
+                    compose.onAllNodes(hasText("PROGRESS NOT SYNCED")).fetchSemanticsNodes().isNotEmpty()
+                }
+                assertEquals(1, pending.pending().size)
+                assertTrue(runBlocking { tokenStore.current().isLoggedIn })
+                compose.onNodeWithText("SIGN OUT ANYWAY").performClick()
+                compose.waitUntil(10_000) {
+                    compose.onAllNodes(hasText("may still be valid", substring = true)).fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithText("may still be valid", substring = true).performScrollTo().assertIsDisplayed()
+                assertFalse(runBlocking { tokenStore.current().isLoggedIn })
+                assertTrue(pending.isEmpty())
+                assertEquals(3, server.requestCount)
+            } finally {
+                release.countDown()
+                pending.clear()
+            }
+        }
+    }
+
+    @Test
     fun `playback retains every baseline preference`() {
         show(SettingsCategory.Playback)
         controls("SKIP INTERVAL", "PLAYBACK SPEED", "SLEEP TIMER DEFAULT",
@@ -333,6 +401,7 @@ class SettingsNavigationTest {
                                         onOpenFiction = {},
                                         onOpenPlayer = {},
                                         onBrowseFictions = {},
+                                        onUnmarkOffer = {},
                                     )
                                     AppScreen.Fictions -> FictionsScreen(
                                         padding = PaddingValues(),
