@@ -40,7 +40,8 @@ internal fun updateSignerProblem(installed: SigningIdentity?, candidate: Signing
         candidate.history.containsAll(installed.signers) -> null
     else ->
         "This update is signed with a different key than the app on this phone. Android would " +
-            "refuse to install it over this version, so it was not installed."
+            "refuse to install it over this version, so it was not installed. Ask whoever gave you " +
+            "this app for the right version."
 }
 
 /** Default verifier: compares the APK at [apk] with the installed app. */

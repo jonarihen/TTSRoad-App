@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.media
 
+import androidx.media3.common.Player
 import androidx.media3.session.CommandButton
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -54,6 +55,19 @@ class TtsRoadSessionCommandsTest {
             ),
             actions(buttons),
         )
+    }
+
+    @Test
+    fun `chapter skip is reachable from the overflow without taking a main slot`() {
+        val buttons = TtsRoadSessionCommands.mediaButtonPreferences()
+        val byCommand = buttons.associateBy { it.playerCommand }
+
+        for (command in listOf(
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+        )) {
+            assertEquals(listOf(CommandButton.SLOT_OVERFLOW), byCommand.getValue(command).slots.toArray().toList())
+        }
     }
 
     @Test
@@ -161,6 +175,15 @@ class TtsRoadSessionCommandsTest {
         val sleep = buttons.last()
         assertEquals(listOf(CommandButton.SLOT_OVERFLOW), sleep.slots.asList())
         assertEquals("Sleep timer: off", sleep.displayName.toString())
+    }
+
+    @Test
+    fun `the sleep timer icon differs between armed and off`() {
+        fun icon(armed: Boolean) = TtsRoadSessionCommands.mediaButtonPreferences(
+            sleepTimerLabel = "Sleep timer", sleepTimerArmed = armed,
+        ).last().iconResId
+        assertEquals(dk.perspektiva.ttsroad.R.drawable.ic_sleep_timer, icon(true))
+        assertEquals(dk.perspektiva.ttsroad.R.drawable.ic_sleep_timer_off, icon(false))
     }
 
     @Test

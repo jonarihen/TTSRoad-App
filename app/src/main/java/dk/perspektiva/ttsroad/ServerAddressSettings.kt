@@ -14,6 +14,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,8 +48,10 @@ import kotlinx.coroutines.launch
  */
 @Composable
 internal fun ServerAddressSettings(session: SessionState, repository: TtsRoadRepository) {
+    val failover by repository.addressFailover.collectAsState()
     ServerAddressCard(
         inUse = session.serverUrl,
+        autoSwitchedFrom = failover?.takeIf { it.to == session.serverUrl }?.from,
         saved = session.alternateUrls,
         check = repository::verifyServerAddress,
         forget = repository::forgetServerAddress,
@@ -65,6 +68,7 @@ internal fun ServerAddressCard(
     saved: List<String>,
     check: suspend (String, ServerAddressAction) -> ServerAddressResult,
     forget: suspend (String) -> Unit,
+    autoSwitchedFrom: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf("") }
@@ -108,6 +112,14 @@ internal fun ServerAddressCard(
             )
             MetaText(text = "In use")
             Text(text = inUse, style = MaterialTheme.typography.bodyMedium)
+            autoSwitchedFrom?.let {
+                MetaText(
+                    text = "Switched here automatically because $it could not be reached. " +
+                        "The app tries your other saved addresses when the one in use is " +
+                        "unreachable, and only ones that pass the same checks as SWITCH.",
+                    color = AarisColor.Accent,
+                )
+            }
 
             saved.forEach { address ->
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)

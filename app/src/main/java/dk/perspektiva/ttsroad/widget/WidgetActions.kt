@@ -150,3 +150,10 @@ class SkipForwardAction : ActionCallback {
         sendSkip(context, TtsRoadSessionCommands.skipForwardCommand)
     }
 }
+
+/** Same button the notification has: arms the default, steps up through presets, then turns off (#500). */
+class SleepTimerToggleAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        sendSkip(context, TtsRoadSessionCommands.sleepTimerCommand)
+    }
+}

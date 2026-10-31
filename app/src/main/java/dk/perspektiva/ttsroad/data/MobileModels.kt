@@ -471,7 +471,7 @@ data class ChapterSummary(
      * `preprocessing` or `converting`.
      *
      * Null on a chapter nobody is working on, and on a server too old to send it. Both read as
-     * "no finer detail than [status]", which is what [statusLabel] falls back to.
+     * "no finer detail than [status]", which is what [statusDetail] falls back to.
      */
     @param:Json(name = "sub_status") val subStatus: String? = null,
     /** Percent complete, sent while a chapter is in `converting`. */
@@ -554,31 +554,70 @@ data class ChapterSummary(
         get() = status == ChapterStatus.Error
 
     /**
-     * What the row's status tag should say.
+     * What the row's status tag should say, in a listener's words (#488).
      *
-     * The flat [status] is too coarse to be useful on its own: every chapter that is not yet
-     * playable reads "pending" whether it is queued behind two hundred others or ninety percent
-     * converted. This folds in [subStatus] and [ttsProgress], which the server has always sent.
+     * "Pending", "cleaning" and "fetching" are pipeline vocabulary — to someone who has never seen
+     * the backend, "PENDING" reads like a payment problem. Every not-yet-playable stage is "getting
+     * ready" to a listener; only conversion's percentage is worth surfacing, because it is the one
+     * stage that takes long enough for progress to be worth watching. The pipeline words are still
+     * one tap away, in [statusDetail].
      *
      * Deliberately lowercase — [dk.perspektiva.ttsroad.ui.AarisTag] uppercases what it is given,
      * and doing it twice is how a label ends up shouting in one place and not another.
      */
     val statusLabel: String
         get() = when {
-            excluded -> "excluded"
-            hasError -> "failed"
-            status == ChapterStatus.Processing || subStatus != null -> when (subStatus) {
-                ChapterSubStatus.FetchingHtml -> "fetching"
-                ChapterSubStatus.Preprocessing -> "cleaning"
-                // The percentage is the whole point of showing this stage rather than "processing":
-                // it is the only one that takes long enough for progress to be worth watching.
-                ChapterSubStatus.Converting ->
-                    ttsProgress?.let { "converting $it%" } ?: "converting"
+            excluded -> "skipped"
+            hasError -> "couldn't prepare"
+            subStatus == ChapterSubStatus.Converting && ttsProgress != null -> "getting ready $ttsProgress%"
+            // Including a "done" chapter with no audio: the tag is only drawn where there is no Play
+            // button, and "ready to listen" beside a row that cannot be played would be a lie.
+            else -> "getting ready…"
+        }
 
-                else -> status ?: "processing"
+    /**
+     * The sentence under a chapter that cannot be played yet, saying what the tag means (#488).
+     *
+     * Null for a chapter that can be played — there is nothing to explain.
+     */
+    val statusSentence: String?
+        get() = when {
+            audio != null -> null
+            excluded -> "This chapter is left out of the book."
+            hasError -> "Couldn't prepare this chapter."
+            else -> "Not ready to listen yet - it is still being prepared."
+        }
+
+    /**
+     * The pipeline's own words for this chapter, for whoever runs the server (#488).
+     *
+     * The flat [status] is too coarse to be useful on its own: every chapter that is not yet
+     * playable reads "pending" whether it is queued behind two hundred others or ninety percent
+     * converted. This folds in [subStatus] and [ttsProgress], which the server has always sent, and
+     * the server's [errorMessage] — the line that tells a chapter locked behind a paywall from one
+     * transiently broken (#106).
+     */
+    val statusDetail: String
+        get() {
+            val stage = when {
+                excluded -> "excluded"
+                hasError -> "failed"
+                status == ChapterStatus.Processing || subStatus != null -> when (subStatus) {
+                    ChapterSubStatus.FetchingHtml -> "fetching"
+                    ChapterSubStatus.Preprocessing -> "cleaning"
+                    ChapterSubStatus.Converting ->
+                        ttsProgress?.let { "converting $it%" } ?: "converting"
+
+                    else -> status ?: "processing"
+                }
+
+                else -> status ?: "pending"
             }
-
-            else -> status ?: "pending"
+            return listOfNotNull(
+                "Status: $stage",
+                subStatus?.let { "Stage: $it" },
+                errorMessage?.takeIf { it.isNotBlank() }?.let { "Server said: ${it.trim()}" },
+            ).joinToString("\n")
         }
 
     /**
