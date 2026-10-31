@@ -272,6 +272,9 @@ object ServiceLocator {
             progressSync ?: ProgressSync(
                 repository = repository(context),
                 store = pendingProgress(context),
+                // The service shares this process with the UI, so the open chapter list hears of
+                // chapters the service marks played (#526).
+                onPlayed = { fictionId, ids -> libraryCache(context).applyPlayed(fictionId, ids, played = true) },
             ).also { progressSync = it }
         }
 
