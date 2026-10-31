@@ -17,6 +17,7 @@ import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.newlyReady
 import dk.perspektiva.ttsroad.data.readyNotificationText
+import dk.perspektiva.ttsroad.data.readySerialLines
 import dk.perspektiva.ttsroad.player.historyAccountKeys
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -101,7 +102,9 @@ internal suspend fun announceNewlyReady(
         if (!stillOwns()) return
         store.write(account, seen)
         readyNotificationText(fresh)?.let { (title, body) ->
-            notifier.notifyReady(title, body, fresh.singleOrNull(), session)
+            // A group's Play starts its first playable chapter; the fiction queue follows from there.
+            val target = fresh.singleOrNull() ?: fresh.firstOrNull { it.playable }
+            notifier.notifyReady(title, body, target, session, if (fresh.size > 1) readySerialLines(fresh) else emptyList())
         }
     }
 }
