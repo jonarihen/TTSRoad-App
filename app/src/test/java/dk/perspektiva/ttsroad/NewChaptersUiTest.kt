@@ -350,4 +350,11 @@ class NewChaptersUiTest {
         compose.onNodeWithText("Serial 1").assertIsDisplayed()
         compose.onAllNodesWithText("Serial 200").assertCountEquals(0)
     }
+
+    @Test
+    fun `an id-less fiction never merges with a real fiction`() {
+        val title = ready(1, 0, "Zeta")
+        val groups = newChapterGroups(listOf(title, ready(2, "Zeta".hashCode(), "Other"), ready(3, 0, "Zeta")))
+        assertEquals(listOf(2, 1), groups.map { it.entries.size })
+    }
 }

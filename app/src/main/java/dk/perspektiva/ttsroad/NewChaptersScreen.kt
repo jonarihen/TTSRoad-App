@@ -188,7 +188,7 @@ internal fun NewChaptersScreen(
                 }
             } else {
                 newChapterGroups(rows).forEach { group ->
-                    item(key = "group-${group.fictionId}") {
+                    item(key = "group-${group.key}") {
                         NewChapterGroupHeader(
                             group = group,
                             busy = busyId != null,
@@ -258,7 +258,7 @@ internal fun NewChaptersScreen(
 }
 
 /** The rows of one fiction, in the order the server listed them. */
-internal class NewChapterGroup(val fictionId: Int, val title: String, val entries: List<ChapterNotificationEntry>) {
+internal class NewChapterGroup(val key: String, val title: String, val entries: List<ChapterNotificationEntry>) {
     /** The oldest playable row: the chapter a "play new" starts at, with the fiction queue after it. */
     val firstPlayable: ChapterNotificationEntry? get() = entries.firstOrNull { it.playable }
     val playableCount: Int get() = entries.count { it.playable }
@@ -266,8 +266,9 @@ internal class NewChapterGroup(val fictionId: Int, val title: String, val entrie
 
 /** Groups by fiction id (title when the id is absent), keeping first-seen order. */
 internal fun newChapterGroups(rows: List<ChapterNotificationEntry>): List<NewChapterGroup> =
-    rows.groupBy { if (it.fiction.id > 0) it.fiction.id else it.fiction.title.hashCode() }
-        .map { (id, entries) -> NewChapterGroup(id, entries.first().fiction.title, entries) }
+    // String keys: a title fallback can never collide with a real fiction id.
+    rows.groupBy { if (it.fiction.id > 0) "id:${it.fiction.id}" else "title:${it.fiction.title}" }
+        .map { (key, entries) -> NewChapterGroup(key, entries.first().fiction.title, entries) }
 
 @Composable
 private fun NewChapterGroupHeader(group: NewChapterGroup, busy: Boolean, onPlayNew: () -> Unit, onOpen: () -> Unit) {
