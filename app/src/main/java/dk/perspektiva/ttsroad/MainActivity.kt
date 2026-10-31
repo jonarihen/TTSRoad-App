@@ -379,6 +379,7 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
+import dk.perspektiva.ttsroad.update.installedSignerDigests
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdatePreferences
 import dk.perspektiva.ttsroad.update.UpdateState
@@ -5523,6 +5524,8 @@ internal fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
+                val signerDigests = remember { installedSignerDigests(context) }
+                signerDigests.forEach { SettingsItem(label = "Signed with (SHA-256)", value = it) }
                 CrashReportingSetting()
                 AutoUpdateCheckSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->

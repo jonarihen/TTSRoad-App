@@ -63,6 +63,15 @@ class UpdateDialogBehaviourTest {
     }
 
     @Test
+    fun `a changelog with no plain opening still gets a plain line and stays collapsed`() {
+        show(UpdateState.Available(release.copy(notes = "### Fixed\n- Keystore rebind (#12)")))
+        compose.onNodeWithText(PlainUpdateSummary).assertIsDisplayed()
+        compose.onNodeWithText("Keystore rebind", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("WHAT CHANGED IN DETAIL").performClick()
+        compose.onNodeWithText("Keystore rebind", substring = true).assertIsDisplayed()
+    }
+
+    @Test
     fun `an unannounced release opens nothing`() {
         show(UpdateState.Available(release, announce = false))
         compose.onNodeWithText("UPDATE AVAILABLE").assertDoesNotExist()
