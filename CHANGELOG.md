@@ -6,6 +6,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Android Auto and the media notification gain overflow "Previous chapter" / "Next chapter" buttons,
+  so a chapter can be skipped without browsing while the +/-30 s skips keep the main slots. Not
+  verified on a head unit. (#498)
 - Automatic address failover: when the address in use cannot be reached at all (no DNS, refused, no
   route, connect timeout), the app tries your other saved addresses, each through the same
   same-server and same-account checks as SWITCH, and keeps the first that passes. Settings > Profile
