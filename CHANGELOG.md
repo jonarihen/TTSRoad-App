@@ -9,7 +9,11 @@ Notable changes to the TTSRoad Android client.
 - Diagnostics: inline errors (feeds, backups, exports, bookmarks, queue, sessions and more) and the
   address check now fold the raw text under Details; Settings > About has COPY DIAGNOSTICS (app,
   Android, server version, capabilities, last error; no token, server address redacted); each server
-
+  log line has COPY LINE and selectable text. (#506)
+- Updates: failures read in plain words (rate-limited, not found, no connection) instead of "GitHub
+  returned 403"; the update dialog always opens with one plain line and keeps the changelog behind
+  WHAT CHANGED IN DETAIL; Settings > About shows the SHA-256 of the certificate this install is
+  signed with. (#507)
 - Stats has a range picker (4, 12, 26 or 52 weeks) for the activity grid. (#514)
 - Settings: "Arm the sleep timer automatically after" 21:00-00:00. Starting playback from then until
   05:00 arms the default timer, once a night. (#503)

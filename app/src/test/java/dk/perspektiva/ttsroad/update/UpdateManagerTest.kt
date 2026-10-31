@@ -598,6 +598,25 @@ class UpdateManagerTest {
     }
 
     @Test
+    fun `a rate-limited check says so in plain words`() = runTest {
+        val manager = updateManager(this)
+        server.enqueue(MockResponse().setResponseCode(403))
+
+        manager.check(currentVersionName = "1.0.0", manual = true)
+
+        val message = (manager.state.value as UpdateState.Failed).message
+        assertTrue(message, message.startsWith("GitHub is limiting update checks"))
+    }
+
+    @Test
+    fun `friendly wording covers missing, broken and unreachable`() {
+        assertTrue(friendlyUpdateError(GithubHttpException(404), "x").contains("could not be found"))
+        assertTrue(friendlyUpdateError(GithubHttpException(502), "x").contains("having trouble"))
+        assertTrue(friendlyUpdateError(java.net.UnknownHostException("api.github.com"), "x").contains("internet connection"))
+        assertEquals("Incomplete download", friendlyUpdateError(IOException("Incomplete download"), "x"))
+    }
+
+    @Test
     fun `checking when up to date transitions to UpToDate`() = runTest {
         val manager = updateManager(this)
         val releaseJson = """
