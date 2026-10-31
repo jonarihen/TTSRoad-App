@@ -4,6 +4,7 @@ import androidx.media3.common.MediaItem
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.widget.NowPlayingSnapshot
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Read where to resume only once the offline progress backlog has had its chance (#314).
@@ -60,3 +61,15 @@ internal fun offlineResume(
     val fromLibrary = chapter.startPositionSeconds.takeIf { it > 0.0 }?.let { (it * 1000).toLong() }
     return OfflineResume.Play(item, fromNote ?: fromLibrary ?: 0L)
 }
+
+/**
+ * Run [online]; if it has not answered within [deadlineMs], or answers nothing, run [offline] (#483).
+ *
+ * A null from [online] means the network could not build a queue, which is what an offline resume
+ * is for too. [offline] may throw to say why nothing can play.
+ */
+internal suspend fun <T : Any> withinResumeDeadline(
+    deadlineMs: Long,
+    online: suspend () -> T?,
+    offline: suspend () -> T?,
+): T? = withTimeoutOrNull(deadlineMs) { online() } ?: offline()
