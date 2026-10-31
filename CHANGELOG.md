@@ -4,6 +4,11 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+### Added
+
+- Long-press a chapter, then "Mark a range of chapters…" to mark chapters from one number to another
+  (say 400 to 650) played or unplayed in one request, with the count shown first. (#512)
+
 ### Changed
 
 - Android Auto: Continue Listening and Recent show at most 20 rows (newest first) instead of
@@ -13,6 +18,9 @@ Notable changes to the TTSRoad Android client.
 
 - Chapters the player marks played show as played in an open fiction's chapter list straight
   away, without a pull-to-refresh. (#526)
+- Resuming from Android Auto or a headset on weak signal serves the saved library or downloaded
+  chapter after 12 seconds instead of waiting out every network timeout, and skips capability
+  discovery on a fresh process. (#483)
 - Chapter lists are kept on disk per fiction, so a fiction opens and its Android Auto folder lists
   chapters after a cold start with no network. (#486)
 - Chapter rows are keyed by chapter id instead of list position, so changing sort or filter on a

@@ -246,6 +246,10 @@ class SettingsNavigationTest {
                 compose.onNodeWithText("SIGN OUT").performScrollTo().performClick()
                 compose.onNode(hasText("SIGN OUT") and hasAnyAncestor(isDialog())).performClick()
                 compose.waitUntil(10_000) { flushing.count == 0L }
+                // The latch trips on the server thread; the busy label lands on a later recomposition.
+                compose.waitUntil(10_000) {
+                    compose.onAllNodes(hasText("SIGNING OUT")).fetchSemanticsNodes().isNotEmpty()
+                }
                 compose.onNodeWithText("SIGNING OUT").assertIsNotEnabled()
                 release.countDown()
                 compose.waitUntil(10_000) {
