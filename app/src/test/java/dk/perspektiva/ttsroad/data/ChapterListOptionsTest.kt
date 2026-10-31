@@ -27,6 +27,35 @@ class ChapterListOptionsTest {
     )
 
     @Test
+    fun `range is inclusive and order of the bounds does not matter`() {
+        assertEquals(listOf(2, 3), chapters.chapterIdsInRange(2.0, 3.0))
+        assertEquals(listOf(2, 3), chapters.chapterIdsInRange(3.0, 2.0))
+        assertEquals(listOf(3), chapters.chapterIdsInRange(3.0, 3.0))
+        assertEquals(emptyList<Int>(), chapters.chapterIdsInRange(10.0, 20.0))
+    }
+
+    @Test
+    fun `typed chapter numbers accept a decimal comma`() {
+        assertEquals(12.5, parseChapterNumber(" 12,5 ")!!, 0.0)
+        assertEquals(12.5, parseChapterNumber("12.5")!!, 0.0)
+    }
+
+    @Test
+    fun `typed chapter numbers reject blank and non-finite input`() {
+        listOf("", " ", "abc", "NaN", "Infinity", "-Infinity").forEach {
+            assertEquals(it, null, parseChapterNumber(it))
+        }
+    }
+
+    @Test
+    fun `range skips unnumbered chapters and returns reading order`() {
+        val list = listOf(chapter(9, 9.0), chapter(7, 7.0), chapter(8, null), chapter(5, 5.0))
+
+        assertEquals(listOf(7, 9), list.chapterIdsInRange(0.0, 9.5).filter { it != 5 })
+        assertEquals(listOf(5, 7, 9), list.chapterIdsInRange(0.0, 9.5))
+    }
+
+    @Test
     fun `all filter keeps every chapter in reading order`() {
         val view = chapters.chapterView(ChapterFilter.All, ascending = true)
 
