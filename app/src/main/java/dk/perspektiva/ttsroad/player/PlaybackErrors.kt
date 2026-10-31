@@ -83,3 +83,26 @@ private val RetryDelaysMs = listOf(2_000L, 5_000L, 15_000L)
 
 /** How many automatic attempts happen before the error is left on screen for the user. */
 val MaxAutomaticRetries: Int = RetryDelaysMs.size
+
+/**
+ * The delay before retry [attempt] of a [PlaybackFailure.Transient] failure (#482).
+ *
+ * The fast backoff from [retryDelayMs] first, unchanged and regardless of [playWhenReady]. After it
+ * runs out, keep asking — [SlowRetryIntervalMs], then every [MaxSlowRetryIntervalMs] — for as long
+ * as [playWhenReady] holds: a cellular link in a long patch of bad coverage can stay "connected"
+ * while every request times out, so no network callback ever fires to restart playback, and a
+ * driver should not have to reach for the screen when the signal finally carries again. Null once
+ * playback is no longer wanted, which ends the loop.
+ */
+fun transientRetryDelayMs(attempt: Int, playWhenReady: Boolean): Long? = when {
+    attempt <= MaxAutomaticRetries -> retryDelayMs(attempt)
+    !playWhenReady -> null
+    attempt == MaxAutomaticRetries + 1 -> SlowRetryIntervalMs
+    else -> MaxSlowRetryIntervalMs
+}
+
+/** The first retry after the fast backoff; see [transientRetryDelayMs]. */
+const val SlowRetryIntervalMs: Long = 30_000L
+
+/** The cap the slow retries settle at, so a long dead zone costs one request a minute. */
+const val MaxSlowRetryIntervalMs: Long = 60_000L

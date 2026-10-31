@@ -2,6 +2,7 @@ package dk.perspektiva.ttsroad.player
 
 import androidx.media3.common.PlaybackException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -145,5 +146,35 @@ class PlaybackErrorsTest {
     fun `a non-positive attempt does not wrap around to the last delay`() {
         assertNull(retryDelayMs(0))
         assertNull(retryDelayMs(-1))
+    }
+
+    /**
+     * #482: a server that times out on every attempt while the phone still reports a network.
+     * Nothing will call back, so the retries themselves must not run out while playback is wanted.
+     */
+    @Test
+    fun `a server that keeps timing out is retried slowly for as long as playback is wanted`() {
+        val timeout = classifyPlaybackError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)
+        assertTrue(timeout is PlaybackFailure.Transient)
+
+        var waitedMs = 0L
+        for (attempt in 1..60) {
+            val delay = transientRetryDelayMs(attempt, playWhenReady = true)
+            assertNotNull("attempt $attempt gave up", delay)
+            waitedMs += delay!!
+        }
+        assertEquals(2_000L, transientRetryDelayMs(1, playWhenReady = true))
+        assertEquals(15_000L, transientRetryDelayMs(MaxAutomaticRetries, playWhenReady = true))
+        assertEquals(30_000L, transientRetryDelayMs(MaxAutomaticRetries + 1, playWhenReady = true))
+        assertEquals(60_000L, transientRetryDelayMs(MaxAutomaticRetries + 2, playWhenReady = true))
+        assertEquals(MaxSlowRetryIntervalMs, transientRetryDelayMs(Int.MAX_VALUE, playWhenReady = true))
+        assertTrue("well past the old 22 s budget", waitedMs > 30 * 60_000L)
+    }
+
+    @Test
+    fun `slow retries stop once playback is no longer wanted, the fast backoff does not`() {
+        assertNull(transientRetryDelayMs(MaxAutomaticRetries + 1, playWhenReady = false))
+        assertEquals(5_000L, transientRetryDelayMs(2, playWhenReady = false))
+        assertNull(transientRetryDelayMs(0, playWhenReady = true))
     }
 }
