@@ -58,6 +58,10 @@ internal fun certificateDigest(signature: Signature): String = certificateDigest
 internal fun certificateDigest(certificate: ByteArray): String =
     MessageDigest.getInstance("SHA-256").digest(certificate).joinToString("") { "%02x".format(it) }
 
+/** SHA-256 of the certificate(s) this install is signed with, for an admin to compare with a release (#507). */
+fun installedSignerDigests(context: Context): List<String> =
+    installedSigningIdentity(context.packageManager, context.packageName)?.signers?.sorted().orEmpty()
+
 private fun installedSigningIdentity(pm: PackageManager, packageName: String): SigningIdentity? = runCatching {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
         signingIdentityOf(pm.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES))
