@@ -78,6 +78,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -108,6 +112,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -331,6 +336,7 @@ import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
 import dk.perspektiva.ttsroad.player.jumpBackAndOffer
 import dk.perspektiva.ttsroad.player.jumpBackOptions
+import dk.perspektiva.ttsroad.player.excerptAt
 import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.jumpBackTo
@@ -2974,6 +2980,7 @@ private fun PlayerToggleButton(
  * @param accent draws the glyph in the accent colour, for the actions that mark the moment being
  *   heard. The content description carries the same meaning, so this is never the only signal.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerIconAction(
     icon: ImageVector,
@@ -2982,6 +2989,12 @@ private fun PlayerIconAction(
     badge: String? = null,
     accent: Boolean = false,
 ) {
+    // A long press names the icon (#502); the description is what TalkBack already reads.
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(contentDescription) } },
+        state = rememberTooltipState(),
+    ) {
     Row(
         modifier = Modifier
             .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
@@ -3011,6 +3024,7 @@ private fun PlayerIconAction(
         badge?.let {
             MetaText(text = it, color = AarisColor.Muted, maxLines = 1)
         }
+    }
     }
 }
 
@@ -4058,6 +4072,14 @@ private fun PlayerScreen(
                                 text = "${relativeAgo(now - snap.timestamp)}  ·  " +
                                     listOfNotNull(snap.fictionTitle, snap.title).joinToString("  ·  "),
                             )
+                            // A line of the story itself, when the server has timed text (#502).
+                            // Per visible row; the repository caches the document per chapter.
+                            val excerpt by produceState<String?>(null, snap.chapterId, capabilities.readAlong) {
+                                if (!capabilities.readAlong || snap.chapterId <= 0) return@produceState
+                                value = runCatching { repository.readAlong(snap.chapterId) }.getOrNull()
+                                    ?.let { excerptAt(it, snap.positionMs) }
+                            }
+                            excerpt?.let { MetaText(text = "“$it”", color = AarisColor.Dim, maxLines = 2) }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         MetaText(text = formatDuration(snap.positionMs))
@@ -4302,6 +4324,7 @@ private fun LastHeardBanner(
                 text = when (lastHeard.kind) {
                     LastHeardKind.TimerSet -> "// Sleep timer set at"
                     LastHeardKind.AudioStopped -> "// Audio stopped at"
+                    LastHeardKind.LastTouched -> "// Last touched around"
                 },
                 color = AarisColor.Accent,
             )
@@ -4309,9 +4332,10 @@ private fun LastHeardBanner(
                 text = formatClockTime(context, snapshot.timestamp),
                 style = MaterialTheme.typography.titleLarge,
             )
-            if (lastHeard.kind == LastHeardKind.TimerSet) {
+            if (lastHeard.kind != LastHeardKind.AudioStopped) {
                 MetaText(
-                    text = "Timer stopped the audio at ${formatClockTime(context, lastHeard.stoppedAtMs)}",
+                    text = (if (lastHeard.kind == LastHeardKind.LastTouched) "Estimated; the audio kept playing until " else "Timer stopped the audio at ") +
+                        formatClockTime(context, lastHeard.stoppedAtMs),
                     color = AarisColor.Muted,
                 )
             }
@@ -5241,6 +5265,11 @@ internal fun SettingsScreen(
                 ) {
                     Text("DELETE ALL DOWNLOADS")
                 }
+                DownloadsOverview(
+                    downloads = downloads,
+                    cache = remember { ServiceLocator.libraryCache(context) },
+                    onError = { deleteDownloadsError = it },
+                )
                 deleteDownloadsError?.let { MetaText(text = it, color = AarisColor.Danger) }
             }
         }
@@ -6742,7 +6771,7 @@ private fun DeviceDetail(label: String, value: String) {
 
 /** Square, orange-accented confirmation for the two irreversible actions on the devices screen. */
 @Composable
-private fun ConfirmDialog(
+internal fun ConfirmDialog(
     title: String,
     body: String,
     confirmLabel: String,
