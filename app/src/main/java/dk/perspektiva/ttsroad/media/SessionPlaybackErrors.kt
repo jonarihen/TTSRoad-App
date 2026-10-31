@@ -3,6 +3,8 @@ package dk.perspektiva.ttsroad.media
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Proxy
 import dk.perspektiva.ttsroad.player.readablePlaybackException
 
 /**
@@ -23,48 +25,46 @@ internal class SessionPlaybackErrors(player: Player) : ForwardingPlayer(player) 
 
     override fun getPlayerError(): PlaybackException? {
         val error = super.getPlayerError() ?: return null
-        val mediaId = getCurrentMediaItem()?.mediaId
-        return if (mediaId == failedMediaId) readableFor(error, mediaId) else null
+        return present(error, getCurrentMediaItem()?.mediaId)
     }
 
+    private val presenters = HashMap<Player.Listener, Player.Listener>()
+
     override fun addListener(listener: Player.Listener) {
-        super.addListener(ListenerPresenter(listener))
+        super.addListener(presenters.getOrPut(listener) { presenting(listener) })
     }
 
     override fun removeListener(listener: Player.Listener) {
-        super.removeListener(ListenerPresenter(listener))
+        presenters.remove(listener)?.let { super.removeListener(it) }
     }
 
-    private fun readableFor(error: PlaybackException, mediaId: String?): PlaybackException {
-        if (error !== rawError || mediaId != failedMediaId) {
+    private fun present(error: PlaybackException, mediaId: String?): PlaybackException? {
+        if (error !== rawError) {
             rawError = error
             failedMediaId = mediaId
             readableError = readablePlaybackException(error)
         }
-        return readableError!!
+        if (mediaId != failedMediaId) readableError = null
+        return readableError
     }
 
-    private inner class ListenerPresenter(
-        private val delegate: Player.Listener,
-    ) : Player.Listener by delegate {
-
-        override fun onEvents(player: Player, events: Player.Events) {
-            delegate.onEvents(this@SessionPlaybackErrors, events)
+    // A proxy, not Kotlin delegation: `by` skips Java default methods, and every Player.Listener
+    // callback is one, so a delegating class would silently drop all but the two overridden here.
+    private fun presenting(delegate: Player.Listener): Player.Listener = Proxy.newProxyInstance(
+        Player.Listener::class.java.classLoader, arrayOf(Player.Listener::class.java),
+    ) { _, method, args ->
+        val arguments = args ?: emptyArray()
+        when (method.name) {
+            "onPlayerError" -> arguments[0] = present(arguments[0] as PlaybackException, currentMediaItem?.mediaId)
+                ?: readablePlaybackException(arguments[0] as PlaybackException)
+            "onPlayerErrorChanged" -> arguments[0] = (arguments[0] as PlaybackException?)?.let {
+                present(it, currentMediaItem?.mediaId)
+            }.also { if (it == null) { rawError = null; readableError = null; failedMediaId = null } }
         }
-
-        override fun onPlayerError(error: PlaybackException) {
-            delegate.onPlayerError(readableFor(error, currentMediaItem?.mediaId))
+        try {
+            method.invoke(delegate, *arguments)
+        } catch (e: InvocationTargetException) {
+            throw e.targetException
         }
-
-        override fun onPlayerErrorChanged(error: PlaybackException?) {
-            if (error == null) {
-                rawError = null
-                readableError = null
-                failedMediaId = null
-                delegate.onPlayerErrorChanged(null)
-            } else {
-                delegate.onPlayerErrorChanged(readableFor(error, currentMediaItem?.mediaId))
-            }
-        }
-    }
+    } as Player.Listener
 }

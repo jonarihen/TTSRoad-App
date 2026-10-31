@@ -1,7 +1,6 @@
 package dk.perspektiva.ttsroad.media
 
 import android.content.Context
-import android.media.session.MediaController as PlatformController
 import android.os.Looper
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -89,17 +88,16 @@ class SessionPlaybackErrorsTest {
         }
     }
 
-    @Test fun `readable error reaches both Media3 and platform session without disabling pause or retry`() {
+    @Test fun `readable error reaches controllers without disabling pause or retry`() {
         val player = ErrorPlayer()
-        val session = MediaSession.Builder(context, SessionPlaybackErrors(player)).build()
+        val wrapped = SessionPlaybackErrors(player)
+        val session = MediaSession.Builder(context, wrapped).build()
         val controller = MediaController.Builder(context, session.token).buildAsync().get()
-        val platform = PlatformController(context, session.platformToken)
         try {
             player.fail(httpError(404))
             shadowOf(Looper.getMainLooper()).idle()
             val message = "Server rejected the audio request (HTTP 404)"
             assertEquals(message, controller.playerError?.message)
-            assertEquals(message, platform.playbackState?.errorMessage?.toString())
             val ui = playerUiStateOf(controller, emptyList())
             assertEquals(message, ui.error)
             assertEquals("ERROR_CODE_IO_BAD_HTTP_STATUS\nHTTP 404", ui.errorDetails)
@@ -110,10 +108,11 @@ class SessionPlaybackErrorsTest {
             assertFalse(player.playWhenReady)
             controller.prepare()
             shadowOf(Looper.getMainLooper()).idle()
+            player.publish()
+            shadowOf(Looper.getMainLooper()).idle()
             assertEquals(1, player.prepares)
             assertNull(controller.playerError)
             assertNull(playerUiStateOf(controller, emptyList()).errorDetails)
-            assertNull(platform.playbackState?.errorMessage)
         } finally {
             controller.release()
             session.release()
@@ -133,10 +132,16 @@ class SessionPlaybackErrorsTest {
         assertNull(presented.playerError)
     }
 
-    @Test fun `resumption error uses SessionError and reaches the platform session in readable words`() {
+    @Test fun `resumption error uses SessionError and reaches controllers in readable words`() {
         val player = ErrorPlayer()
         val session = MediaSession.Builder(context, player).build()
-        val platform = PlatformController(context, session.platformToken)
+        val received = mutableListOf<SessionError>()
+        val controller = MediaController.Builder(context, session.token)
+            .setListener(object : MediaController.Listener {
+                override fun onError(controller: MediaController, sessionError: SessionError) {
+                    received += sessionError
+                }
+            }).buildAsync().get()
         val unavailable = OfflineResume.Unavailable("Can't reach the server, and \"Chapter 212\" is not downloaded")
         val failure = unavailable.asRequestFailure()
         try {
@@ -144,8 +149,9 @@ class SessionPlaybackErrorsTest {
             assertEquals(unavailable.message, failure.message)
             session.sendError(failure.sessionError)
             shadowOf(Looper.getMainLooper()).idle()
-            assertEquals(unavailable.message, platform.playbackState?.errorMessage?.toString())
+            assertEquals(listOf(unavailable.message), received.map { it.message })
         } finally {
+            controller.release()
             session.release()
         }
     }

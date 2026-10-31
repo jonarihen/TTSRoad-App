@@ -2,6 +2,14 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
+  "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP
+  status. (#481)
+
 ## 0.21.0 — 2026-10-17
 
 ### Fixed
