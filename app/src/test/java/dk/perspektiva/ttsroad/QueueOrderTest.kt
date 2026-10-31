@@ -75,4 +75,29 @@ class QueueWhenEmptyTest {
         assertEquals(QueueWhenEmptyStop, sanitizeQueueWhenEmpty(""))
         assertEquals(QueueWhenEmptyStop, sanitizeQueueWhenEmpty("shuffle"))
     }
+
+    private val heights = listOf(100, 100, 100, 100)
+
+    @Test
+    fun `a drag lands once it passes the neighbour's midpoint`() {
+        // 100 px rows with a 16 px gap: the midpoint of the next row is 58 px away.
+        assertEquals(1, queueDropIndex(from = 0, dragPx = 60f, heights = heights, gapPx = 16f))
+        assertEquals(0, queueDropIndex(from = 0, dragPx = 50f, heights = heights, gapPx = 16f))
+        assertEquals(2, queueDropIndex(from = 3, dragPx = -140f, heights = heights, gapPx = 16f))
+    }
+
+    @Test
+    fun `a long drag crosses several rows and stops at the ends`() {
+        assertEquals(3, queueDropIndex(from = 0, dragPx = 5_000f, heights = heights, gapPx = 16f))
+        assertEquals(0, queueDropIndex(from = 2, dragPx = -5_000f, heights = heights, gapPx = 16f))
+        assertEquals(3, queueDropIndex(from = 3, dragPx = 40f, heights = heights, gapPx = 16f))
+    }
+
+    @Test
+    fun `a drop becomes one full-list order`() {
+        val to = queueDropIndex(from = 0, dragPx = 240f, heights = heights, gapPx = 16f)
+
+        val items = listOf(11, 12, 13, 14).map { QueueItem(id = it) }
+        assertEquals(listOf(12, 13, 11, 14), items.moveItem(0, to))
+    }
 }

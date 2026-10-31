@@ -11,6 +11,8 @@ Notable changes to the TTSRoad Android client.
   same-server and same-account checks as SWITCH, and keeps the first that passes. Settings > Profile
   says when it switched and from where. At most one attempt a minute; the failed call still fails and
   the next one uses the new address. (#505)
+- Queue: drag a row by its handle to reorder it; the drop sends one request with the whole order
+  instead of one per step. The arrows stay. (#511)
 - Settings > Offline lists what is downloaded per book, with DELETE PLAYED and DELETE ALL for each
   book and one DELETE PLAYED DOWNLOADS across the library. (#497)
 - Jump back: each row shows the sentence being read at that moment (when the server has timed text),
