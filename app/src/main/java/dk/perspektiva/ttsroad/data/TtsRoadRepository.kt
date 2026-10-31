@@ -724,7 +724,7 @@ class TtsRoadRepository(
             )
         } catch (e: Exception) {
             val described = e.toUserFacingError("Could not reach that address")
-            return@withContext ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.")
+            return@withContext ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.", details = described.details)
         }
         val reportedInstance = offered.serverInstanceId
         val reportedBase = DownloadCacheKeys.serverIdentity(offered.serverBaseUrl)
@@ -850,7 +850,7 @@ class TtsRoadRepository(
             )
         } catch (e: Exception) {
             val described = e.toUserFacingError("Could not reach that address")
-            return ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.")
+            return ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.", details = described.details)
         }
         val provedInstance = normalizeInstanceId(answer.instanceId)
         if (!SessionProof.matches(token, nonce, answer.proof) ||

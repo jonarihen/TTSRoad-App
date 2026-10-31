@@ -370,6 +370,7 @@ import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisPalette
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.ErrorDetails
+import dk.perspektiva.ttsroad.ui.ErrorLine
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
@@ -380,6 +381,10 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
+import dk.perspektiva.ttsroad.core.LastError
+import dk.perspektiva.ttsroad.core.diagnosticsReport
+import dk.perspektiva.ttsroad.ui.copyToClipboard
+import dk.perspektiva.ttsroad.update.installedSignerDigests
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdatePreferences
 import dk.perspektiva.ttsroad.update.UpdateState
@@ -4378,7 +4383,7 @@ private fun LastHeardBanner(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onResume, enabled = !busy, shape = RectangleShape) {
                     Text(if (error != null) "RETRY" else "RESUME THERE")
@@ -5308,7 +5313,7 @@ internal fun SettingsScreen(
                     cache = remember { ServiceLocator.libraryCache(context) },
                     onError = { deleteDownloadsError = it },
                 )
-                deleteDownloadsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                deleteDownloadsError?.let { ErrorLine(it) }
             }
         }
 
@@ -5342,7 +5347,7 @@ internal fun SettingsScreen(
                             "password — anyone holding one can read your library.",
                         color = AarisColor.Dim,
                     )
-                    feedsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    feedsError?.let { ErrorLine(it) }
                     val library = feeds?.library
                     ShareUrlRow(
                         label = "Every fiction, newest first",
@@ -5389,7 +5394,7 @@ internal fun SettingsScreen(
                             "serial cannot.",
                         color = AarisColor.Dim,
                     )
-                    backupError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    backupError?.let { ErrorLine(it) }
                     backupNote?.let { MetaText(text = it, color = AarisColor.Ok) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
@@ -5487,7 +5492,7 @@ internal fun SettingsScreen(
                             "the web console.",
                         color = AarisColor.Dim,
                     )
-                    exportsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    exportsError?.let { ErrorLine(it) }
                     // ffmpeg is reported per request, not as a capability: the route existing and
                     // the machine behind it being able to encode are two different questions, and
                     // an empty list would answer the wrong one.
@@ -5548,7 +5553,23 @@ internal fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
+                val signerDigests = remember { installedSignerDigests(context) }
+                signerDigests.forEach { SettingsItem(label = "Signed with (SHA-256)", value = it) }
                 CrashReportingSetting()
+                OutlinedButton(
+                    onClick = {
+                        val report = diagnosticsReport(
+                            appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                            androidVersion = "${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})",
+                            device = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+                            capabilities = capabilities,
+                            lastError = LastError.latest,
+                            serverAddresses = session.knownAddresses,
+                        )
+                        copyToClipboard(context, "TTSRoad diagnostics", report)
+                    },
+                    shape = RectangleShape,
+                ) { Text("COPY DIAGNOSTICS") }
                 AutoUpdateCheckSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->
                     MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
@@ -5832,7 +5853,7 @@ private fun BookmarksScreen(
             if (isLoading) {
                 ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
 
             if (loaded.isEmpty()) {
                 SectionHeader(kicker = "BM", title = "No bookmarks")
@@ -6072,7 +6093,7 @@ internal fun PronunciationReportsBody(
         if (isLoading) {
             ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
         }
-        error?.let { MetaText(text = it, color = AarisColor.Danger) }
+        error?.let { ErrorLine(it) }
 
         AarisChoiceRow(
             options = listOf(false, true),
@@ -6295,7 +6316,7 @@ private fun QueueScreen(
             if (isLoading || isBusy) {
                 ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
 
             val items = loaded?.items.orEmpty()
             if (items.isEmpty()) {
@@ -6661,7 +6682,7 @@ private fun DevicesScreen(
                     if (isLoading) {
                         ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
                     }
-                    error?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    error?.let { ErrorLine(it) }
 
                     SectionHeader(kicker = "01", title = "This device")
                     val current = loaded.orEmpty().firstOrNull { it.isCurrent(session) }
@@ -9963,7 +9984,7 @@ internal fun FictionEditScreen(
                     }
                     when {
                         voiceLoadError != null -> {
-                            MetaText(text = voiceLoadError.orEmpty(), color = AarisColor.Danger)
+                            ErrorLine(voiceLoadError.orEmpty())
                             TextButton(
                                 onClick = { voiceLoadRequest += 1 },
                                 enabled = !isBusy && !isLoadingVoices,

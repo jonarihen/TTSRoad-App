@@ -188,12 +188,12 @@ class PlaybackHistoryStoreOrderingTest {
 
     @Test
     fun `a full history batches 240 playback ticks without postponing writes indefinitely`() = runTest {
-        val initial = (0 until 2000).joinToString(prefix = "[", postfix = "]") { index ->
+        val initial = (0 until HistorySnapshotCapacity).joinToString(prefix = "[", postfix = "]") { index ->
             """{"timestamp":${index * 15_000L},"mediaId":"chapter:1","fictionId":10,"chapterId":1,"title":"C1","fictionTitle":"F","positionMs":${index * 15_000L}}"""
         }
         val persistence = RecordingPersistence(initial)
         val store = store(persistence, this)
-        assertEquals(2000, store.snapshots.value.size)
+        assertEquals(HistorySnapshotCapacity, store.snapshots.value.size)
 
         repeat(240) { tick ->
             store.record(
@@ -211,7 +211,7 @@ class PlaybackHistoryStoreOrderingTest {
         }
 
         assertEquals(12, persistence.operations.count { it == "write" })
-        assertEquals(2000, store.snapshots.value.size)
+        assertEquals(HistorySnapshotCapacity, store.snapshots.value.size)
         val restarted = store(persistence, this)
         assertEquals(store.snapshots.value, restarted.snapshots.value)
         assertEquals(239 * 15_000L, restarted.snapshots.value.last().positionMs)

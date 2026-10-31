@@ -337,9 +337,9 @@ class RecentListeningSummaryTest {
 
         assertEquals(HistorySnapshotCapacity, summary.snapshots)
         assertTrue(summary.atCapacity)
-        // 1999 intervals of 15s — the eight and a half hours the cap is worth, and the reason the
-        // surface cannot claim an all-time total.
-        assertEquals(29_985_000L, summary.retainedMs)
+        // One fewer interval than snapshots, at 15s each — and the reason the surface cannot
+        // claim an all-time total.
+        assertEquals((HistorySnapshotCapacity - 1) * 15_000L, summary.retainedMs)
         assertEquals(at(today, 8, 0), summary.oldestAt)
     }
 
@@ -352,15 +352,15 @@ class RecentListeningSummaryTest {
 
     @Test
     fun `the cap is a sliding window, so the total only covers what is left`() {
-        // Six hours of listening, but only the newest 2000 snapshots survived — exactly what the
+        // More than the cap's worth of listening, but only the newest snapshots survived — exactly what the
         // store does. The summary must report the window it has, not the six hours.
-        val everything = run(start = at(today, 6, 0), ticks = 2_400)
+        val everything = run(start = at(today, 6, 0), ticks = HistorySnapshotCapacity + 400)
         val kept = everything.takeLast(HistorySnapshotCapacity)
 
         val summary = summarise(kept)
 
         assertTrue(summary.atCapacity)
-        assertEquals(29_985_000L, summary.retainedMs)
+        assertEquals((HistorySnapshotCapacity - 1) * 15_000L, summary.retainedMs)
         assertEquals(everything[400].timestamp, summary.oldestAt)
         assertEquals(everything.last().timestamp, summary.newestAt)
     }

@@ -34,6 +34,7 @@ import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
+import dk.perspektiva.ttsroad.ui.ErrorDetails
 import dk.perspektiva.ttsroad.ui.MetaText
 import kotlinx.coroutines.launch
 
@@ -91,7 +92,7 @@ internal fun ServerAddressCard(
                     AddressOutcome(serverAddressDoneMessage(action), isError = false)
                 }
 
-                is ServerAddressResult.Refused -> AddressOutcome(result.message, isError = true)
+                is ServerAddressResult.Refused -> AddressOutcome(result.message, isError = true, details = result.details)
             }
         }
     }
@@ -194,12 +195,13 @@ internal fun ServerAddressCard(
             if (checking != null) MetaText(text = "Checking ${checking.orEmpty()}…", color = AarisColor.Dim)
             outcome?.let {
                 MetaText(text = it.message, color = if (it.isError) AarisColor.Danger else AarisColor.Accent)
+                ErrorDetails(details = it.details)
             }
         }
     }
 }
 
-private data class AddressOutcome(val message: String, val isError: Boolean)
+private data class AddressOutcome(val message: String, val isError: Boolean, val details: String? = null)
 
 private fun sameDraft(draft: String, address: String): Boolean = draft.trim() == address.trim()
 
