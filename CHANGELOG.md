@@ -37,6 +37,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- Opening a fiction no longer refetches the whole feed list (fetched once per session) and paints
+  its bookmarks, the Bookmarks screen and the Stats screen from the last visit while they refresh
+  behind it. (#509)
 - New chapters groups rows under their fiction with a "Play new" button per fiction, scrolls as a
   lazy list, and the Listening tab badge reads "3 new" instead of a bare number. (#496)
 - The empty Home cards ("No active chapters", "No fictions found") offer "Find something to listen

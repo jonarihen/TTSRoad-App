@@ -257,6 +257,17 @@ class ListeningStatsRepositoryTest {
     }
 
     @Test
+    fun `the last figures can be read back without a request`() = runTest {
+        val repository = repository()
+        assertNull(repository.peekListeningStats())
+        server.enqueue(json(fullPayload).setHeader("ETag", etag))
+        repository.listeningStats()
+
+        assertEquals("97h 30m", repository.peekListeningStats()?.stats?.timeLabel)
+        assertEquals(2, server.requestCount) // capabilities + the one stats call
+    }
+
+    @Test
     fun `logout and login on the same server do not reuse another account's stats`() = runTest {
         val repository = repository()
         server.enqueue(json(fullPayload).setHeader("ETag", etag))
