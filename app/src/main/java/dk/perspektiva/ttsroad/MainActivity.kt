@@ -281,6 +281,7 @@ import dk.perspektiva.ttsroad.data.canPickVoice
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterIdsFrom
 import dk.perspektiva.ttsroad.data.chapterNumberText
+import dk.perspektiva.ttsroad.data.chapterRowKeys
 import dk.perspektiva.ttsroad.data.chapterView
 import dk.perspektiva.ttsroad.data.fictionNarrationPatch
 import dk.perspektiva.ttsroad.data.initiallyExpandedVoiceLocale
@@ -1832,6 +1833,7 @@ private fun FictionScreen(
             val visible = remember(chapters, filter, ascending, chapterQuery) {
                 chapters.chapterView(filter, ascending, chapterQuery)
             }
+            val rowKeys = remember(visible) { visible.chapterRowKeys() }
             val currentChapterId = playerState.queue.getOrNull(playerState.currentIndex)
                 ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
             // Where a batch download starts: what is playing, else the furthest-progressed chapter,
@@ -2039,7 +2041,7 @@ private fun FictionScreen(
                             },
                         )
                     }
-                    itemsIndexed(visible, key = { index, chapter -> "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}-$index" }) { _, chapter ->
+                    itemsIndexed(visible, key = { index, _ -> rowKeys[index] }) { _, chapter ->
                         ChapterRow(
                             chapter = chapter,
                             fiction = fiction,
