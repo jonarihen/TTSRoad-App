@@ -64,6 +64,37 @@ class PlaybackPreferencesTest {
     }
 
     @Test
+    fun `fine steps reach speeds between presets`() {
+        assertEquals(2.05f, stepSpeed(2.0f, 1), 0.0001f)
+        assertEquals(2.2f, stepSpeed(2.0f, 4), 0.0001f)
+        assertEquals(1.95f, stepSpeed(2.0f, -1), 0.0001f)
+    }
+
+    @Test
+    fun `a speed set off the grid snaps to it before stepping`() {
+        assertEquals(1.35f, stepSpeed(1.33f, 1), 0.0001f)
+        assertEquals(1.3f, stepSpeed(1.33f, -1), 0.0001f)
+    }
+
+    @Test
+    fun `fine steps stop at the sanitized range`() {
+        assertEquals(3.0f, stepSpeed(3.0f, 1), 0.0001f)
+        assertEquals(0.5f, stepSpeed(0.5f, -1), 0.0001f)
+        assertFalse(canStepSpeed(3.0f, 1))
+        assertFalse(canStepSpeed(0.5f, -1))
+        assertTrue(canStepSpeed(3.0f, -1))
+        assertTrue(canStepSpeed(0.5f, 1))
+    }
+
+    @Test
+    fun `repeated steps do not drift off the grid`() {
+        var speed = 1.0f
+        repeat(24) { speed = stepSpeed(speed, 1) }
+        assertEquals(2.2f, speed, 0.0001f)
+        assertEquals("2.20", String.format(java.util.Locale.US, "%.2f", speed))
+    }
+
+    @Test
     fun `skip labels read as seconds until they are whole minutes`() {
         assertEquals("10s", formatSkipInterval(10_000L))
         assertEquals("15s", formatSkipInterval(15_000L))
