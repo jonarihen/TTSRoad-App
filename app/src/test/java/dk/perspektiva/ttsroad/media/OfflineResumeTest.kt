@@ -62,4 +62,13 @@ class OfflineResumeTest {
             (unavailable as OfflineResume.Unavailable).message,
         )
     }
+
+    @Test
+    fun `an unsent newer position beats the older saved library`() {
+        fun play(note: NowPlayingSnapshot?) = offlineResume(
+            chapter, fiction, server, isDownloaded = { true }, note = note, pendingPositionSeconds = 250.0,
+        ) as OfflineResume.Play
+
+        assertEquals(250_000L, play(null).startPositionMs)
+    }
 }

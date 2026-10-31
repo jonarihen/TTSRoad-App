@@ -54,4 +54,19 @@ class ResumeDeadlineTest {
             offline = { throw UnsupportedOperationException("not downloaded") },
         )
     }
+
+    @Test
+    fun `resume never builds a queue from the saved chapter list`() = runTest {
+        var consulted = false
+        val result = chaptersOrSaved<String>(allowSaved = false, fetch = { null }, saved = { consulted = true; "saved" })
+
+        assertNull(result)
+        assertEquals(false, consulted)
+    }
+
+    @Test
+    fun `browsing falls back to the saved chapter list, but only when the fetch fails`() = runTest {
+        assertEquals("saved", chaptersOrSaved(allowSaved = true, fetch = { null }, saved = { "saved" }))
+        assertEquals("live", chaptersOrSaved(allowSaved = true, fetch = { "live" }, saved = { error("no") }))
+    }
 }

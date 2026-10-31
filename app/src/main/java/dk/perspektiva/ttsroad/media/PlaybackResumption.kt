@@ -48,6 +48,13 @@ internal fun offlineResume(
     serverUrl: String?,
     isDownloaded: (mediaId: String) -> Boolean,
     note: NowPlayingSnapshot?,
+    /**
+     * The newest unsent position queued for [chapter]. A resume cut off by the deadline (#483) may
+     * not have flushed it, and the saved library is older: starting from the library's position
+     * would let the next progress tick replace this newer entry (the pending store keeps one per
+     * chapter, see #314). Ranks below the note, above the library.
+     */
+    pendingPositionSeconds: Double? = null,
 ): OfflineResume {
     val item = TtsRoadMediaItems.chapter(chapter, fiction, serverUrl)
     val title = chapter.resolvedTitle.takeIf { it.isNotBlank() } ?: "the last chapter"
@@ -59,7 +66,8 @@ internal fun offlineResume(
         ?.positionMs
         ?.takeIf { it > 0L }
     val fromLibrary = chapter.startPositionSeconds.takeIf { it > 0.0 }?.let { (it * 1000).toLong() }
-    return OfflineResume.Play(item, fromNote ?: fromLibrary ?: 0L)
+    val fromPending = pendingPositionSeconds?.takeIf { it > 0.0 }?.let { (it * 1000).toLong() }
+    return OfflineResume.Play(item, fromNote ?: fromPending ?: fromLibrary ?: 0L)
 }
 
 /**
@@ -73,3 +81,15 @@ internal suspend fun <T : Any> withinResumeDeadline(
     online: suspend () -> T?,
     offline: suspend () -> T?,
 ): T? = withTimeoutOrNull(deadlineMs) { online() } ?: offline()
+
+/**
+ * The chapter list for a resume: the server's, or [saved] when that fails and [allowSaved] (#483).
+ *
+ * Resume passes false so that offline it falls to the downloaded-chapter path instead of building
+ * a streaming queue from a saved list (#486) whose audio cannot be fetched.
+ */
+internal suspend fun <T : Any> chaptersOrSaved(
+    allowSaved: Boolean,
+    fetch: suspend () -> T?,
+    saved: suspend () -> T?,
+): T? = fetch() ?: if (allowSaved) saved() else null

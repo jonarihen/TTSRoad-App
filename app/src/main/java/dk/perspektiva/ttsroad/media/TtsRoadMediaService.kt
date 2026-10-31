@@ -51,6 +51,7 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.download.ChapterDownloadState
+import dk.perspektiva.ttsroad.data.ChapterListStore
 import dk.perspektiva.ttsroad.data.LibrarySnapshotStore
 import dk.perspektiva.ttsroad.data.DefaultHeadsetButtonsSeek
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
@@ -135,7 +136,7 @@ private const val SpeechMaxBufferMs = 300_000
 private const val DownloadIndexWaitMs = 2_000L
 
 /** How long a cold-start resume waits on the network before serving the saved library (#483). */
-private const val ResumeDeadlineMs = 5_000L
+private const val ResumeDeadlineMs = 12_000L
 
 @OptIn(UnstableApi::class)
 class TtsRoadMediaService : MediaLibraryService() {
@@ -152,6 +153,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var fictionSpeeds: FictionSpeedPreferences
     private lateinit var nowPlayingStore: NowPlayingStore
     private lateinit var librarySnapshots: LibrarySnapshotStore
+    private lateinit var chapterLists: ChapterListStore
     private var playbackSessionGeneration = 0L
     private var playbackSessionActive = false
 
@@ -247,6 +249,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         progressSync = ServiceLocator.progressSync(this)
         nowPlayingStore = NowPlayingStore(this)
         librarySnapshots = LibrarySnapshotStore(this)
+        chapterLists = ChapterListStore(this)
         // When the app's own discovery for the signed-in server succeeds (after a sign-in, or once
         // the network is back), a backlog that waited on it can go out without waiting for playback.
         serviceScope.launch {
@@ -1332,11 +1335,38 @@ class TtsRoadMediaService : MediaLibraryService() {
         return live.isLoggedIn && (live.serverUrl to live.username) == lastSessionIdentity
     }
 
-    private suspend fun fictionChapters(fictionId: Int): Pair<FictionSummary, List<ChapterSummary>>? {
-        val response = runCatching {
-            repository.chapters(fictionId = fictionId, playableOnly = true)
-        }.getOrNull() ?: return null
-        return response.fiction to response.chapters
+    /**
+     * [allowSaved] false is for resuming: the saved list would build a streaming queue offline, and
+     * resume must instead fall to [offlineResumeQueue], which keeps only downloaded audio (#483).
+     */
+    private suspend fun fictionChapters(
+        fictionId: Int,
+        allowSaved: Boolean = true,
+    ): Pair<FictionSummary, List<ChapterSummary>>? {
+        val generation = librarySessionGeneration
+        val keys = historyAccountKeys(tokenStore.current())
+        return chaptersOrSaved(
+            allowSaved = allowSaved,
+            fetch = {
+                runCatching { repository.chapters(fictionId = fictionId, playableOnly = true) }.getOrNull()
+                    ?.also { response ->
+                        // A sign-out mid-fetch has already cleared the store; writing now would recreate it.
+                        if (sessionStillCurrent(generation)) {
+                            withContext(Dispatchers.IO) {
+                                chapterLists.write(keys.firstOrNull(), fictionId, playableOnly = true, response = response)
+                            }
+                        }
+                    }?.let { it.fiction to it.chapters }
+            },
+            // No network: the list saved by an earlier visit, so the car's folder is not empty (#486).
+            // The app's full list is used when the playable-only one was never saved; unplayable rows are dropped.
+            saved = {
+                withContext(Dispatchers.IO) {
+                    chapterLists.read(keys.firstOrNull(), fictionId, playableOnly = true, formerKeys = keys)
+                        ?: chapterLists.read(keys.firstOrNull(), fictionId, playableOnly = false, formerKeys = keys)
+                }?.let { it.response.fiction to it.response.chapters.filter { chapter -> chapter.playable } }
+            },
+        )
     }
 
     /**
@@ -1349,8 +1379,9 @@ class TtsRoadMediaService : MediaLibraryService() {
         fictionId: Int,
         startChapterId: Int?,
         session: Long = librarySessionGeneration,
+        allowSaved: Boolean = true,
     ): MediaSession.MediaItemsWithStartPosition? {
-        val (fiction, chapters) = fictionChapters(fictionId) ?: return null
+        val (fiction, chapters) = fictionChapters(fictionId, allowSaved) ?: return null
         val serverUrl = serverUrl()
         // Null asks for the fiction's own resume point: a fiction played as a whole (#328).
         val resolvedStart = startChapterId
@@ -1452,7 +1483,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 // carry no documented timestamp to re-sort on, so the server's order is the contract (#330).
                 val chapter = library?.continueListening?.firstOrNull()
                 val fictionId = chapter?.resolvedFictionId?.takeIf { it > 0 }
-                if (fictionId == null) null else buildFictionQueue(fictionId, chapter.resolvedChapterId, session)
+                if (fictionId == null) null else buildFictionQueue(fictionId, chapter.resolvedChapterId, session, allowSaved = false)
             },
             offline = {
                 val library = savedLibrary() ?: return@withinResumeDeadline null
@@ -1487,6 +1518,9 @@ class TtsRoadMediaService : MediaLibraryService() {
                 serverUrl = serverUrl(),
                 isDownloaded = { known[it]?.state == ChapterDownloadState.Downloaded },
                 note = note,
+                pendingPositionSeconds = pendingProgress.pendingFor(tokenStore.current())
+                    .filter { it.chapterId == chapter.resolvedChapterId }
+                    .maxByOrNull { it.recordedAtMillis }?.positionSeconds,
             )
         ) {
             is OfflineResume.Play ->
