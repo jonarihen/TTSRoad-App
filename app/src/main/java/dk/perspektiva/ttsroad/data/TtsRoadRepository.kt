@@ -10,6 +10,9 @@ import dk.perspektiva.ttsroad.download.DownloadCacheKeys
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
@@ -172,9 +175,57 @@ class TtsRoadRepository(
         val authorizationHeader: String?,
     )
 
+    private val failoverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val failingOver = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var lastFailoverAttemptMs = Long.MIN_VALUE / 2
+
+    private val _addressFailover = MutableStateFlow<AddressFailover?>(null)
+
+    /** The last automatic switch to another saved address (#505), or null if there has been none. */
+    val addressFailover: StateFlow<AddressFailover?> = _addressFailover.asStateFlow()
+
+    /**
+     * The address in use could not be reached at all (no DNS answer, refused, no route, connect
+     * timeout): try the session's other saved addresses, each through the same identity and
+     * account checks as a manual switch, and keep the first that passes (#505). The call that
+     * failed still fails; the next one goes to the new address. Single-flight and rate-limited, so
+     * an offline phone does not probe every address on every request.
+     */
+    private fun noteUnreachable(requestUrl: String) {
+        val now = clock()
+        if (now - lastFailoverAttemptMs < FailoverCooldownMs) return
+        if (!failingOver.compareAndSet(false, true)) return
+        lastFailoverAttemptMs = now
+        failoverScope.launch {
+            try {
+                val session = tokenStore.current()
+                if (!session.isLoggedIn || session.alternateUrls.isEmpty()) return@launch
+                // Only a failure of the address in use counts; a probe of a candidate failing is
+                // exactly what this loop is for.
+                if (!ServerUrls.isSameOrigin(requestUrl, session.serverUrl)) return@launch
+                for (alternate in session.alternateUrls) {
+                    if (verifyServerAddress(alternate, ServerAddressAction.Use) == ServerAddressResult.Done) {
+                        _addressFailover.value = AddressFailover(session.serverUrl, alternate, clock())
+                        return@launch
+                    }
+                }
+            } finally {
+                failingOver.set(false)
+            }
+        }
+    }
+
     private val client = httpClient.newBuilder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            try {
+                chain.proceed(chain.request())
+            } catch (e: java.io.IOException) {
+                if (isHostUnreachable(e)) noteUnreachable(chain.request().url.toString())
+                throw e
+            }
+        }
         .addInterceptor { chain ->
             val request = chain.request()
             val builder = request.newBuilder().removeHeader("Authorization")
@@ -286,7 +337,34 @@ class TtsRoadRepository(
         val token: String,
     )
 
+    /**
+     * Last-seen feeds and bookmarks, so a screen can paint them at once and refresh behind them.
+     * In memory, and keyed by the session (server, user, token) that fetched them: a response that
+     * lands after a sign-out can never be read back by the next account.
+     */
+    private val peekCache = HashMap<String, Any>()
+
+    private fun SessionState.cacheKey(what: String) = "$serverUrl|$username|$token|$what"
+
+    /** Bumped by every drop, so a response that was in flight across one cannot be cached. */
+    private var peekGeneration = 0L
+
+    private fun dropPeeked(prefix: String) = synchronized(peekCache) {
+        peekGeneration++
+        peekCache.keys.removeAll { it.substringAfterLast('|').startsWith(prefix) }
+    }
+
+    private fun peekGeneration() = synchronized(peekCache) { peekGeneration }
+
+    private fun putPeeked(key: String, value: Any, generation: Long) = synchronized(peekCache) {
+        if (generation == peekGeneration) peekCache[key] = value
+    }
+
     private fun invalidateListeningStats() = synchronized(listeningStatsCache) {
+        synchronized(peekCache) {
+            peekGeneration++
+            peekCache.clear()
+        }
         listeningStatsCache.clear()
         listeningStatsOwner = null
         listeningStatsGeneration++
@@ -646,7 +724,7 @@ class TtsRoadRepository(
             )
         } catch (e: Exception) {
             val described = e.toUserFacingError("Could not reach that address")
-            return@withContext ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.")
+            return@withContext ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.", details = described.details)
         }
         val reportedInstance = offered.serverInstanceId
         val reportedBase = DownloadCacheKeys.serverIdentity(offered.serverBaseUrl)
@@ -772,7 +850,7 @@ class TtsRoadRepository(
             )
         } catch (e: Exception) {
             val described = e.toUserFacingError("Could not reach that address")
-            return ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.")
+            return ServerAddressResult.Refused("${described.message} Your sign-in was not sent there.", details = described.details)
         }
         val provedInstance = normalizeInstanceId(answer.instanceId)
         if (!SessionProof.matches(token, nonce, answer.proof) ||
@@ -1685,10 +1763,33 @@ class TtsRoadRepository(
         return withAuthorizedApi { it.feeds(scope) }
     }
 
+    /**
+     * One fiction's podcast URL. The server only offers the whole list, so that list is fetched
+     * once per session and every fiction screen after the first reads it from memory; rotating a
+     * link drops it. Null when the server has no feeds or the fiction is not in the list.
+     */
+    suspend fun feedUrlFor(fictionId: Int): String? {
+        if (!_currentCapabilities.value.feedUrls) return null
+        return withContext(Dispatchers.IO) {
+            authorizedWithSession { api, session ->
+                val key = session.cacheKey("feeds:all")
+                val cached = synchronized(peekCache) { peekCache[key] as? FeedsResponse }
+                cached?.fictions?.firstOrNull { it.fictionId == fictionId }?.feedUrl
+                    // A miss may only mean the list is older than the fiction: ask once more.
+                    ?: run {
+                        val generation = peekGeneration()
+                        val fresh = api.feeds(LibraryScopeAll)
+                        putPeeked(key, fresh, generation)
+                        fresh.fictions.firstOrNull { it.fictionId == fictionId }?.feedUrl
+                    }
+            }
+        }
+    }
+
     /** Revoke and reissue this account's combined feed and OPML links. Self-service. */
     suspend fun rotateLibraryFeed(): LibraryFeedRotateResponse? {
         if (!_currentCapabilities.value.feedUrls) return null
-        return withAuthorizedApi { it.rotateLibraryFeed() }
+        return withAuthorizedApi { it.rotateLibraryFeed() }.also { dropPeeked("feeds:") }
     }
 
     /**
@@ -1699,7 +1800,7 @@ class TtsRoadRepository(
      */
     suspend fun rotateFictionFeedToken(fictionId: Int): MaintenanceResponse? {
         if (!_currentCapabilities.value.fictionMaintenance) return null
-        return withAuthorizedApi { it.rotateFictionFeedToken(fictionId) }
+        return withAuthorizedApi { it.rotateFictionFeedToken(fictionId) }.also { dropPeeked("feeds:") }
     }
 
     /**
@@ -1985,9 +2086,30 @@ class TtsRoadRepository(
      */
     suspend fun bookmarks(fictionId: Int? = null, chapterId: Int? = null): List<Bookmark>? {
         if (!_currentCapabilities.value.bookmarks) return null
-        return withAuthorizedApi {
-            it.bookmarks(fictionId = fictionId, chapterId = chapterId)
-        }.bookmarks
+        return withContext(Dispatchers.IO) {
+            authorizedWithSession { api, session ->
+                val generation = peekGeneration()
+                api.bookmarks(fictionId = fictionId, chapterId = chapterId).bookmarks.also {
+                    putPeeked(session.cacheKey("bookmarks:$fictionId:$chapterId"), it, generation)
+                }
+            }
+        }
+    }
+
+    /** The last list [bookmarks] returned for these filters this session, or null if none yet. */
+    @Suppress("UNCHECKED_CAST")
+    suspend fun peekBookmarks(fictionId: Int? = null, chapterId: Int? = null): List<Bookmark>? {
+        val key = tokenStore.current().cacheKey("bookmarks:$fictionId:$chapterId")
+        return synchronized(peekCache) { peekCache[key] as? List<Bookmark> }
+    }
+
+    /** The last stats [listeningStats] returned for [weeks] this session, or null if none yet. */
+    suspend fun peekListeningStats(weeks: Int = DefaultActivityWeeks): ListeningStatsResponse? {
+        val session = tokenStore.current()
+        val owner = StatsSessionKey(session.serverUrl, session.username, session.token ?: return null)
+        return synchronized(listeningStatsCache) {
+            if (listeningStatsOwner == owner) listeningStatsCache[weeks.coerceIn(MinActivityWeeks, MaxActivityWeeks)]?.response else null
+        }
     }
 
     /**
@@ -2021,14 +2143,14 @@ class TtsRoadRepository(
                     kind = kind,
                 ),
             )
-        }.bookmark
+        }.bookmark.also { dropPeeked("bookmarks:") }
     }
 
     suspend fun updateBookmark(bookmarkId: Int, label: String?, note: String?): Bookmark? {
         if (!_currentCapabilities.value.bookmarks) return null
         return withAuthorizedApi {
             it.updateBookmark(bookmarkId, UpdateBookmarkRequest(label = label, note = note))
-        }.bookmark
+        }.bookmark.also { dropPeeked("bookmarks:") }
     }
 
     /** True when the bookmark is gone. A 404 counts: it is already not there. */
@@ -2036,6 +2158,7 @@ class TtsRoadRepository(
         if (!_currentCapabilities.value.bookmarks) return false
         return try {
             withAuthorizedApi { it.deleteBookmark(bookmarkId) }
+            dropPeeked("bookmarks:")
             true
         } catch (e: HttpException) {
             // Deleting something already deleted — from the browser, or a double tap — is the

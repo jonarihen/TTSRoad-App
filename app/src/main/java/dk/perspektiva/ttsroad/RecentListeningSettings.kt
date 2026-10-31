@@ -156,12 +156,12 @@ internal fun todayBreakdown(summary: RecentListeningSummary): String {
  */
 internal fun keptLogExplanation(summary: RecentListeningSummary): String {
     val window = if (summary.atCapacity) {
-        "The log is full at $HistorySnapshotCapacity positions — roughly eight hours of " +
-            "listening — so anything older has already been dropped. This is a recent window, " +
+        "The log is full at $HistorySnapshotCapacity positions, so anything older has already " +
+            "been dropped. This is a recent window, " +
             "not an all-time total; the account figures below are."
     } else {
-        "The log keeps the most recent $HistorySnapshotCapacity positions, roughly eight hours " +
-            "of listening, and drops the oldest as it fills. This is a recent window, not an " +
+        "The log keeps the last three days of listening and drops the oldest as it fills. " +
+            "This is a recent window, not an " +
             "all-time total; the account figures below are."
     }
     return "$window Time counts only while the audio was moving, so pauses and a chapter left " +

@@ -11,6 +11,7 @@ import java.security.cert.CertPathValidatorException
 import javax.net.ssl.SSLHandshakeException
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,6 +64,30 @@ class UserFacingErrorsTest {
     }
 
     @Test
+    fun `a hostname mismatch is not reported as an untrusted certificate`() {
+        val mismatch = javax.net.ssl.SSLPeerUnverifiedException(
+            "Hostname 100.64.0.7 not verified:\n    certificate: sha256/abc\n    DN: CN=nas.example.ts.net",
+        )
+
+        val error = mismatch.toUserFacingError("x")
+
+        assertEquals(HostnameMismatchMessage, error.message)
+        assertTrue(error.details!!.contains("subject alternative names"))
+    }
+
+    @Test
+    fun `listener copy names someone to ask and the admin advice stays under details`() {
+        val cert = CertPathValidatorException("Trust anchor for certification path not found.").toUserFacingError("x")
+        assertTrue(cert.message.contains("Ask whoever set up your server"))
+        assertFalse(cert.message.contains("Let's Encrypt"))
+        assertTrue(cert.details!!.contains("Let's Encrypt"))
+
+        val http = UnknownServiceException("CLEARTEXT communication not permitted").toUserFacingError("x")
+        assertFalse(http.message.contains("tailscale"))
+        assertTrue(http.details!!.contains("tailscale cert"))
+    }
+
+    @Test
     fun `other TLS failures get the generic secure-connection wording`() {
         assertEquals(SecureConnectionMessage, SSLHandshakeException("Handshake failed").userMessage("x"))
     }
@@ -73,7 +98,7 @@ class UserFacingErrorsTest {
         assertEquals(ForbiddenMessage, httpError(403).userMessage("x"))
         assertEquals(NotFoundMessage, httpError(404).userMessage("x"))
         assertEquals(ServerProblemMessage, httpError(503).userMessage("x"))
-        assertEquals("The server refused the request (HTTP 418).", httpError(418).userMessage("x"))
+        assertEquals("The server turned that request down - try again, or ask whoever set up your server.", httpError(418).userMessage("x"))
         assertTrue(httpError(503).toUserFacingError("x").details!!.contains("503"))
     }
 

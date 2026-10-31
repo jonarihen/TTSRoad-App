@@ -35,6 +35,8 @@ import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.layout.width
+import androidx.glance.semantics.contentDescription
+import androidx.glance.semantics.semantics
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -46,6 +48,9 @@ import dk.perspektiva.ttsroad.ui.AarisColor
 
 /** Below this height the widget is one launcher cell tall and only the essentials fit. */
 private val CompactCeiling = 100.dp
+
+/** Smallest touch target Android accessibility guidance allows; the widget is used one-handed in the dark (#501). */
+internal val WidgetMinTouchTarget = 48.dp
 
 /**
  * "What am I listening to, and pause it" — one tap from the home screen (#150).
@@ -113,7 +118,9 @@ private fun WidgetBody(view: WidgetView, cover: Bitmap?, open: Intent, skips: Sk
             .background(AarisColor.Bg)
             // The whole surface opens the app; the transport buttons below claim their own taps.
             .clickable(actionStartActivity(open))
-            .padding(12.dp),
+            // 60 dp - 2 x 6 dp leaves exactly the 48 dp the compact layout's one button needs; 12 dp
+            // padding would have clipped it by 12 dp.
+            .padding(if (LocalSize.current.height < CompactCeiling) 6.dp else 12.dp),
         verticalAlignment = Alignment.Vertical.CenterVertically,
     ) {
         when (view) {
@@ -187,6 +194,11 @@ private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?, skips: SkipB
         if (compact) {
             Spacer(GlanceModifier.width(8.dp))
             PlayPauseButton(view)
+        } else {
+            // Beside the title rather than in the transport row, where a fourth button would be
+            // under 48 dp wide; fixed width keeps the target at 48 dp or more.
+            Spacer(GlanceModifier.width(8.dp))
+            TransportButton("Sleep", actionRunCallback<SleepTimerToggleAction>(), modifier = GlanceModifier.width(64.dp))
         }
     }
     if (!compact) {
@@ -195,17 +207,28 @@ private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?, skips: SkipB
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.Vertical.CenterVertically,
         ) {
-            TransportButton(skips.back, actionRunCallback<SkipBackAction>())
+            // Equal shares of a full-width row (at least 250 dp here), so each is well over 48 dp wide.
+            TransportButton(
+                skips.back,
+                actionRunCallback<SkipBackAction>(),
+                modifier = GlanceModifier.defaultWeight(),
+                description = skips.backDescription,
+            )
             Spacer(GlanceModifier.width(6.dp))
-            PlayPauseButton(view)
+            PlayPauseButton(view, GlanceModifier.defaultWeight())
             Spacer(GlanceModifier.width(6.dp))
-            TransportButton(skips.forward, actionRunCallback<SkipForwardAction>())
+            TransportButton(
+                skips.forward,
+                actionRunCallback<SkipForwardAction>(),
+                modifier = GlanceModifier.defaultWeight(),
+                description = skips.forwardDescription,
+            )
         }
     }
 }
 
 @Composable
-private fun PlayPauseButton(view: WidgetView.Playback) {
+private fun PlayPauseButton(view: WidgetView.Playback, modifier: GlanceModifier = GlanceModifier) {
     TransportButton(
         // Labelled for what the tap will do, not for what is happening. A stale note that still
         // claims to be playing has already been resolved to false by widgetView, so this cannot
@@ -213,20 +236,30 @@ private fun PlayPauseButton(view: WidgetView.Playback) {
         text = if (view.isPlaying) "Pause" else "Play",
         action = actionRunCallback<TogglePlayPauseAction>(),
         accent = true,
+        modifier = modifier,
     )
 }
 
 @Composable
-private fun TransportButton(text: String, action: Action, accent: Boolean = false) {
+private fun TransportButton(
+    text: String,
+    action: Action,
+    accent: Boolean = false,
+    modifier: GlanceModifier = GlanceModifier,
+    description: String = text,
+) {
     Button(
         text = text,
         onClick = action,
         style = TextStyle(
             color = ColorProvider(if (accent) Color.Black else Color.White),
-            fontSize = 12.sp,
+            fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
         ),
-        modifier = GlanceModifier.background(if (accent) AarisColor.Accent else AarisColor.Line),
+        modifier = modifier
+            .height(WidgetMinTouchTarget)
+            .background(if (accent) AarisColor.Accent else AarisColor.Line)
+            .semantics { contentDescription = description },
     )
 }
 

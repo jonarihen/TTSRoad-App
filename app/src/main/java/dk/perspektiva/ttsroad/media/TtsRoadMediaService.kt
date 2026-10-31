@@ -54,6 +54,8 @@ import dk.perspektiva.ttsroad.download.ChapterDownloadState
 import dk.perspektiva.ttsroad.data.ChapterListStore
 import dk.perspektiva.ttsroad.data.LibrarySnapshotStore
 import dk.perspektiva.ttsroad.data.DefaultHeadsetButtonsSeek
+import dk.perspektiva.ttsroad.data.SleepAutoArmOff
+import dk.perspektiva.ttsroad.data.sleepAutoArmNight
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
 import dk.perspektiva.ttsroad.data.DefaultSleepTimerMinutes
 import dk.perspektiva.ttsroad.data.DownloadPreferences
@@ -85,6 +87,7 @@ import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.PlayedThreshold
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.ShakeDetector
+import dk.perspektiva.ttsroad.player.vibrateExtended
 import dk.perspektiva.ttsroad.player.SleepTimerAction
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
@@ -233,6 +236,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     // Read by the sleep-timer button on the notification for the same reason (#337).
     @Volatile
     private var sleepTimerDefaultMinutes: Int = DefaultSleepTimerMinutes
+    @Volatile
+    private var sleepAutoArmFromHour: Int = SleepAutoArmOff
 
     // Read by onMediaButtonEvent, which is not suspending either (#336).
     @Volatile
@@ -342,6 +347,12 @@ class TtsRoadMediaService : MediaLibraryService() {
         }
         serviceScope.launch {
             preferences.prefs
+                .map { it.sleepAutoArmFromHour }
+                .distinctUntilChanged()
+                .collect { sleepAutoArmFromHour = it }
+        }
+        serviceScope.launch {
+            preferences.prefs
                 .map { it.sleepTimerDefaultMinutes }
                 .distinctUntilChanged()
                 .collect { sleepTimerDefaultMinutes = it }
@@ -380,6 +391,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     if (!isPlaying) {
                         pauseSave = serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
                     } else {
+                        autoArmSleepTimer()
                         // Do not wait for the first 15-second progress tick to turn Play into Pause.
                         serviceScope.launch { publishNowPlaying(forcePlaying = true) }
                     }
@@ -467,6 +479,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 TtsRoadSessionCommands.mediaButtonPreferences(
                     skipIntervalMs = skipIntervalMs,
                     sleepTimerLabel = SleepTimerController.buttonLabel(sleepTimer.state.value),
+                    sleepTimerArmed = sleepTimer.state.value.isArmed,
                 ),
             )
             .build()
@@ -481,17 +494,18 @@ class TtsRoadMediaService : MediaLibraryService() {
             // what a press does, and the preference can change while the session is up (#335).
             combine(
                 repository.currentCapabilities.map { it.bookmarks to it.pronunciationReports },
-                sleepTimer.state.map { SleepTimerController.buttonLabel(it) },
+                sleepTimer.state.map { SleepTimerController.buttonLabel(it) to it.isArmed },
                 preferences.prefs.map { it.skipIntervalMs },
-            ) { capabilities, sleepLabel, skipInterval -> Triple(capabilities, sleepLabel, skipInterval) }
+            ) { capabilities, sleep, skipInterval -> Triple(capabilities, sleep, skipInterval) }
                 .distinctUntilChanged()
-                .collect { (capabilities, sleepLabel, skipInterval) ->
+                .collect { (capabilities, sleep, skipInterval) ->
                     session.setMediaButtonPreferences(
                         TtsRoadSessionCommands.mediaButtonPreferences(
                             skipIntervalMs = skipInterval,
                             bookmarks = capabilities.first,
                             pronunciationReports = capabilities.second,
-                            sleepTimerLabel = sleepLabel,
+                            sleepTimerLabel = sleep.first,
+                            sleepTimerArmed = sleep.second,
                         ),
                     )
                 }
@@ -809,7 +823,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     @OptIn(UnstableApi::class)
     private fun startSleepTimer() {
         // The next tick picks the extension up and lifts the volume back out of the fade.
-        shakeDetector = ShakeDetector(this) { sleepTimer.extend(SleepTimerController.ExtendMs) }
+        shakeDetector = ShakeDetector(this) {
+            sleepTimer.extend(SleepTimerController.ExtendMs)
+            // The only other cue is the volume returning, which is easy to miss half asleep (#500).
+            vibrateExtended(this)
+        }
 
         // Tick only while a timer is actually armed. The fade needs a half-second tick to be
         // smooth, but this app's whole job is playing all night, and waking twice a second for a
@@ -846,6 +864,23 @@ class TtsRoadMediaService : MediaLibraryService() {
                 .map { it.isFading }
                 .distinctUntilChanged()
                 .collect { fading -> if (fading) shakeDetector?.start() else shakeDetector?.stop() }
+        }
+    }
+
+    /**
+     * Arm the default timer when playback starts inside the listener's night window (#503), once a
+     * night: cancelling it and carrying on is a decision this must not undo at the next resume.
+     */
+    private fun autoArmSleepTimer() {
+        if (sleepTimer.state.value.isArmed) return
+        val zone = java.util.TimeZone.getDefault()
+        val now = System.currentTimeMillis()
+        val night = sleepAutoArmNight(now + zone.getOffset(now), sleepAutoArmFromHour) ?: return
+        serviceScope.launch {
+            // Persisted: a reaped service must not re-arm a timer the listener cancelled tonight.
+            if (preferences.current().sleepAutoArmedNight == night) return@launch
+            preferences.setSleepAutoArmedNight(night)
+            if (!sleepTimer.state.value.isArmed) sleepTimer.cyclePreset(sleepTimerDefaultMinutes)
         }
     }
 

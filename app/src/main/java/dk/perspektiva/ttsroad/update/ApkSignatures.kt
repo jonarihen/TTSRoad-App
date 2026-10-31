@@ -40,7 +40,8 @@ internal fun updateSignerProblem(installed: SigningIdentity?, candidate: Signing
         candidate.history.containsAll(installed.signers) -> null
     else ->
         "This update is signed with a different key than the app on this phone. Android would " +
-            "refuse to install it over this version, so it was not installed."
+            "refuse to install it over this version, so it was not installed. Ask whoever gave you " +
+            "this app for the right version."
 }
 
 /** Default verifier: compares the APK at [apk] with the installed app. */
@@ -56,6 +57,10 @@ internal fun certificateDigest(signature: Signature): String = certificateDigest
 
 internal fun certificateDigest(certificate: ByteArray): String =
     MessageDigest.getInstance("SHA-256").digest(certificate).joinToString("") { "%02x".format(it) }
+
+/** SHA-256 of the certificate(s) this install is signed with, for an admin to compare with a release (#507). */
+fun installedSignerDigests(context: Context): List<String> =
+    installedSigningIdentity(context.packageManager, context.packageName)?.signers?.sorted().orEmpty()
 
 private fun installedSigningIdentity(pm: PackageManager, packageName: String): SigningIdentity? = runCatching {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

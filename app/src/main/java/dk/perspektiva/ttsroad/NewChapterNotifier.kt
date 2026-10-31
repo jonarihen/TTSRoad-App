@@ -72,7 +72,10 @@ class NewChapterNotifier(private val context: Context) {
     /**
      * Posts one notification for [fresh], or nothing when it is empty.
      */
-    fun notifyReady(title: String, body: String, single: ChapterNotificationEntry?, session: SessionState? = null) {
+    fun notifyReady(title: String, body: String, single: ChapterNotificationEntry?,
+        session: SessionState? = null,
+        serialLines: List<String> = emptyList(),
+    ) {
         // Checked rather than assumed: POST_NOTIFICATIONS is denied by default on Android 13+, and
         // the per-app toggle can be turned off at any time afterwards.
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
@@ -82,7 +85,13 @@ class NewChapterNotifier(private val context: Context) {
             .setSmallIcon(R.drawable.ic_stat_new_chapter)
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setStyle(
+                if (serialLines.isEmpty()) {
+                    NotificationCompat.BigTextStyle().bigText(body)
+                } else {
+                    NotificationCompat.InboxStyle().also { style -> serialLines.forEach(style::addLine) }
+                },
+            )
             .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
             .setAutoCancel(true)
             .setContentIntent(openIntent())
@@ -90,7 +99,7 @@ class NewChapterNotifier(private val context: Context) {
                 if (single?.playable == true && single.fiction.id > 0 && single.chapter.id > 0) {
                     addAction(
                         0,
-                        "Play",
+                        if (serialLines.isEmpty()) "Play" else "Play first",
                         openIntent(single, session),
                     )
                 }

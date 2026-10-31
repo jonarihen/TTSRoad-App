@@ -118,8 +118,28 @@ sealed interface ServerAddressResult {
      * the check got as far as presenting the token there — false whenever the address failed the
      * unauthenticated identity check, which is the case the wording should reassure about.
      */
-    data class Refused(val message: String, val tokenSent: Boolean = false) : ServerAddressResult
+    data class Refused(val message: String, val tokenSent: Boolean = false, val details: String? = null) : ServerAddressResult
 }
 
 /** What to do with an address once it has passed. */
 enum class ServerAddressAction { Remember, Use }
+
+/** An automatic switch from [from] to [to] at [atMs] (#505), for the settings card to report. */
+data class AddressFailover(val from: String, val to: String, val atMs: Long)
+
+/** Minimum time between failover attempts, so a phone with no network at all does not keep probing. */
+internal const val FailoverCooldownMs: Long = 60_000L
+
+/**
+ * Whether [failure] says the host could not be reached at all, as opposed to answering badly:
+ * no DNS answer, refused, no route, or a connect (not read) timeout. These are the failures a
+ * different network can fix; a TLS or HTTP error is the server's, and another address would not.
+ */
+internal fun isHostUnreachable(failure: java.io.IOException): Boolean = when (failure) {
+    is java.net.UnknownHostException,
+    is java.net.ConnectException,
+    is java.net.NoRouteToHostException,
+    -> true
+    is java.net.SocketTimeoutException -> failure.message.orEmpty().contains("connect", ignoreCase = true)
+    else -> false
+}

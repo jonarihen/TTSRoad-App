@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import androidx.compose.foundation.clickable
 import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,8 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
@@ -20,7 +21,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.unit.dp
@@ -32,10 +35,12 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.canRetryConversion
 import dk.perspektiva.ttsroad.data.chapterNotificationsEmptyNote
 import dk.perspektiva.ttsroad.data.detailLabel
+import dk.perspektiva.ttsroad.data.rawStateDetail
 import dk.perspektiva.ttsroad.data.notificationBody
 import dk.perspektiva.ttsroad.data.presentation
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
+import dk.perspektiva.ttsroad.ui.ErrorDetails
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
@@ -73,16 +78,42 @@ internal fun NewChaptersScreen(
         state.refreshRequest += 1
     }
 
-    Column(
+    fun open(entry: ChapterNotificationEntry) {
+        scope.launch {
+            actionError = null
+            runCatching { onOpenFiction(entry) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    actionError = it.message ?: "Could not open that fiction"
+                }
+        }
+    }
+
+    // Awaited here rather than fired into another scope, so a failure lands on this screen as an
+    // inline error instead of vanishing (#348).
+    fun play(entry: ChapterNotificationEntry) {
+        scope.launch {
+            busyId = entry.id
+            actionError = null
+            runCatching { onPlay(entry) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    actionError = it.message ?: "Could not play that chapter"
+                }
+            busyId = null
+        }
+    }
+
+    // Lazy: a large backlog composes only what is on screen, not every row at once (#496).
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(padding)
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Spacer(Modifier.heightIn(min = 8.dp))
-        SectionHeader(
+        item { Spacer(Modifier.heightIn(min = 8.dp)) }
+        item { SectionHeader(
             kicker = "09",
             title = "New chapters",
             actionLabel = if (state.hasClearable && !clearing) "Clear ${state.ready} ready" else null,
@@ -114,69 +145,68 @@ internal fun NewChaptersScreen(
             } else {
                 null
             },
-        )
-        MetaText(
-            "// A chapter stays here from the moment it is pulled until it can be played",
-            color = AarisColor.Dim,
-        )
+        ) }
+        item {
+            MetaText(
+                "// A chapter stays here from the moment it is pulled until it can be played",
+                color = AarisColor.Dim,
+            )
+        }
 
         if (state.isLoading) {
-            ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
+            item { ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp) }
         }
 
         if (state.isUnsupported) {
-            MetaText(
-                "This server does not support new chapter notifications. Update the backend to track new chapters.",
-                color = AarisColor.Muted,
-            )
+            item {
+                MetaText(
+                    "This server can't tell the app about new chapters yet. Ask whoever set up your server to update it.",
+                    color = AarisColor.Muted,
+                )
+            }
         } else {
             val visibleError = actionError ?: state.error
             visibleError?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-                TextButton(onClick = { actionError = null; refresh() }, enabled = !state.isLoading) {
-                    Text(labelCase("Retry"))
+                item {
+                    Column {
+                        Text(it, color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { actionError = null; refresh() }, enabled = !state.isLoading) {
+                            Text(labelCase("Retry"))
+                        }
+                    }
                 }
             }
 
             val rows = state.rows
             if (!state.loadedOnce && state.isLoading) {
-                MetaText("Loading new chapters…", color = AarisColor.Muted)
+                item { MetaText("Loading new chapters…", color = AarisColor.Muted) }
             } else if (!state.loadedOnce && state.error != null) {
                 Unit
             } else if (rows.isEmpty()) {
-                MetaText(
-                    chapterNotificationsEmptyNote(followsAnything = state.followsAnything != false),
-                    color = AarisColor.Muted,
-                )
+                item {
+                    MetaText(
+                        chapterNotificationsEmptyNote(followsAnything = state.followsAnything != false),
+                        color = AarisColor.Muted,
+                    )
+                }
             } else {
-                rows.forEach { entry ->
+                newChapterGroups(rows).forEach { group ->
+                    item(key = "group-${group.key}") {
+                        NewChapterGroupHeader(
+                            group = group,
+                            busy = busyId != null,
+                            onPlayNew = { group.firstPlayable?.let { play(it) } },
+                            onOpen = { open(group.entries.first()) },
+                        )
+                    }
+                    items(group.entries, key = { it.id }) { entry ->
                     NewChapterRow(
                         entry = entry,
                         busy = busyId == entry.id,
                         // Awaited here rather than fired into another scope, so a failure lands
                         // on this screen as an inline error instead of vanishing (#348).
-                        onPlay = {
-                            scope.launch {
-                                busyId = entry.id
-                                actionError = null
-                                runCatching { onPlay(entry) }
-                                    .onFailure {
-                                        if (it is CancellationException) throw it
-                                        actionError = it.message ?: "Could not play that chapter"
-                                    }
-                                busyId = null
-                            }
-                        },
-                        onOpen = {
-                            scope.launch {
-                                actionError = null
-                                runCatching { onOpenFiction(entry) }
-                                    .onFailure {
-                                        if (it is CancellationException) throw it
-                                        actionError = it.message ?: "Could not open that fiction"
-                                    }
-                            }
-                        },
+                        onPlay = { play(entry) },
+                        onOpen = { open(entry) },
                         // The same route as "Convert again" on the fiction screen (#350), offered
                         // only on a row whose chapter actually failed: a stalled row can also be an
                         // excluded chapter, which the server answers with a 409.
@@ -222,10 +252,46 @@ internal fun NewChaptersScreen(
                             }
                         },
                     )
+                    }
                 }
             }
         }
-        Spacer(Modifier.heightIn(min = 24.dp))
+        item { Spacer(Modifier.heightIn(min = 24.dp)) }
+    }
+}
+
+/** The rows of one fiction, in the order the server listed them. */
+internal class NewChapterGroup(val key: String, val title: String, val entries: List<ChapterNotificationEntry>) {
+    /** The oldest playable row: the chapter a "play new" starts at, with the fiction queue after it. */
+    val firstPlayable: ChapterNotificationEntry? get() = entries.firstOrNull { it.playable }
+    val playableCount: Int get() = entries.count { it.playable }
+}
+
+/** Groups by fiction id (title when the id is absent), keeping first-seen order. */
+internal fun newChapterGroups(rows: List<ChapterNotificationEntry>): List<NewChapterGroup> =
+    // String keys: a title fallback can never collide with a real fiction id.
+    rows.groupBy { if (it.fiction.id > 0) "id:${it.fiction.id}" else "title:${it.fiction.title}" }
+        .map { (key, entries) -> NewChapterGroup(key, entries.first().fiction.title, entries) }
+
+@Composable
+private fun NewChapterGroupHeader(group: NewChapterGroup, busy: Boolean, onPlayNew: () -> Unit, onOpen: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().testTag("new-chapter-group"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f).clickable(onClick = onOpen).heightIn(min = MinTouchTargetSize)) {
+            Text(group.title, style = MaterialTheme.typography.titleSmall, color = AarisColor.Ink)
+            MetaText("${group.entries.size} new", color = AarisColor.Muted)
+        }
+        if (group.playableCount > 0) {
+            OutlinedButton(
+                onClick = onPlayNew,
+                enabled = !busy,
+                shape = RectangleShape,
+                modifier = Modifier.heightIn(min = MinTouchTargetSize),
+            ) { Text(labelCase("Play new")) }
+        }
     }
 }
 
@@ -243,11 +309,6 @@ private fun NewChapterRow(
             Modifier.fillMaxWidth().padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                entry.fiction.title,
-                style = MaterialTheme.typography.titleSmall,
-                color = AarisColor.Ink,
-            )
             if (entry.kind == "backlog") {
                 AarisTag("Backlog alert", color = AarisColor.Accent)
             }
@@ -272,6 +333,7 @@ private fun NewChapterRow(
                     else -> AarisColor.Muted
                 },
             )
+            ErrorDetails(details = entry.rawStateDetail())
             // Only a chapter with audio offers Play, and only the server's own `dismissible` offers
             // Dismiss. Neither is inferred from the state name.
             if (entry.playable || entry.dismissible || onRetry != null) {

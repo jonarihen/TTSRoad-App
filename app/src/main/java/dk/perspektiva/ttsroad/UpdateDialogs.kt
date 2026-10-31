@@ -120,6 +120,8 @@ internal fun UpdateOverlay(
     }
 }
 
+internal const val PlainUpdateSummary = "A new version is available. It installs over this one and keeps your library."
+
 @Composable
 private fun UpdateAvailableDialog(
     release: ReleaseInfo,
@@ -134,7 +136,7 @@ private fun UpdateAvailableDialog(
         .coerceIn(96.dp, 320.dp)
     val notes = remember(release.notes) { splitReleaseNotes(release.notes) }
     // With a plain-language lead, the changelog under it is for whoever wants it (#363).
-    var showDetails by remember(release.notes) { mutableStateOf(notes.summary == null) }
+    var showDetails by remember(release.notes) { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onLater,
         containerColor = AarisColor.BgRaise,
@@ -152,9 +154,10 @@ private fun UpdateAvailableDialog(
                     .testTag("update-notes"),
             ) {
                 MetaText(text = "Version ${release.versionName}", color = AarisColor.Accent)
-                notes.summary?.let { summary ->
+                // Always a plain line first, so a changelog that opens with "### Fixed" never does.
+                if (notes.details.isNotBlank() || notes.summary != null) {
                     Text(
-                        text = renderReleaseNotes(summary),
+                        text = renderReleaseNotes(notes.summary ?: PlainUpdateSummary),
                         style = MaterialTheme.typography.bodyMedium,
                         color = AarisColor.Ink,
                         textAlign = TextAlign.Start,

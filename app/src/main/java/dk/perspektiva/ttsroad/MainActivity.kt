@@ -78,6 +78,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -102,7 +106,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -130,6 +140,7 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -265,7 +276,10 @@ import dk.perspektiva.ttsroad.data.signOut
 import dk.perspektiva.ttsroad.data.unsyncedSignOutMessage
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
+import dk.perspektiva.ttsroad.data.SleepAutoArmOptions
 import dk.perspektiva.ttsroad.data.speedOptions
+import dk.perspektiva.ttsroad.data.canStepSpeed
+import dk.perspektiva.ttsroad.data.stepSpeed
 import dk.perspektiva.ttsroad.data.TextSpan
 import dk.perspektiva.ttsroad.data.VoiceChoice
 import dk.perspektiva.ttsroad.data.VolumeBoost
@@ -326,6 +340,7 @@ import dk.perspektiva.ttsroad.player.FictionListeningSummary
 import dk.perspektiva.ttsroad.player.fictionListeningSummary
 import dk.perspektiva.ttsroad.player.jumpBackAndOffer
 import dk.perspektiva.ttsroad.player.jumpBackOptions
+import dk.perspektiva.ttsroad.player.excerptAt
 import dk.perspektiva.ttsroad.player.formatListeningSpan
 import dk.perspektiva.ttsroad.player.HistorySnapshot
 import dk.perspektiva.ttsroad.player.jumpBackTo
@@ -357,6 +372,7 @@ import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisPalette
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.ErrorDetails
+import dk.perspektiva.ttsroad.ui.ErrorLine
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
@@ -367,6 +383,10 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
+import dk.perspektiva.ttsroad.core.LastError
+import dk.perspektiva.ttsroad.core.diagnosticsReport
+import dk.perspektiva.ttsroad.ui.copyToClipboard
+import dk.perspektiva.ttsroad.update.installedSignerDigests
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdatePreferences
 import dk.perspektiva.ttsroad.update.UpdateState
@@ -783,6 +803,7 @@ internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = "TTSROAD",
+            modifier = Modifier.semantics { heading() },
             style = MaterialTheme.typography.displaySmall,
         )
         Spacer(modifier = Modifier.height(6.dp))
@@ -927,6 +948,7 @@ internal fun AppTopBar(title: String, canGoBack: Boolean, onBack: () -> Unit) {
             title = {
                 Text(
                     text = labelCase(title),
+                    modifier = Modifier.semantics { heading() },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleLarge,
@@ -1060,7 +1082,8 @@ private val NavigationTabLabelMinSize = 6.sp
 private fun NavigationCountBadge(count: Int) {
     val spoken = if (count == 1) "1 new chapter ready" else "$count new chapters ready"
     Text(
-        text = if (count > 99) "99+" else count.toString(),
+        // "new" is spelled out so the bare number is not mistaken for part of the tab name.
+        text = (if (count > 99) "99+" else count.toString()) + " new",
         modifier = Modifier
             .testTag("nav-badge")
             .semantics { contentDescription = spoken }
@@ -1500,7 +1523,7 @@ internal fun LibraryScreen(
                                 onAction = cache::refreshLibrary,
                             )
                             if (library.continueListening.isEmpty()) {
-                                EmptyCard("No active chapters")
+                                EmptyCard("No active chapters", FindSomethingLabel, onBrowseFictions)
                             } else {
                                 val hero = library.continueListening.first()
                                 val heroFiction = fictionForChapter(hero)
@@ -1540,7 +1563,7 @@ internal fun LibraryScreen(
                                 onAction = { sortSheetOpen = true }.takeIf { library.fictions.isNotEmpty() },
                             )
                             if (library.fictions.isEmpty()) {
-                                EmptyCard("No fictions found")
+                                EmptyCard("No fictions found", FindSomethingLabel, onBrowseFictions)
                             } else {
                                 HorizontalFictionRail(
                                     fictions = sortedFictions,
@@ -1761,22 +1784,20 @@ private fun FictionScreen(
             // Asked for the whole server rather than the shelf: a fiction screen can be opened
             // from browse-all for a book this account does not follow, and the followed-only
             // default would answer nothing for exactly that case.
-            runCatching {
-                repository.feeds(scope = LibraryScopeAll)
-                    ?.fictions
-                    ?.firstOrNull { it.fictionId == fiction.id }
-                    ?.feedUrl
-            }.getOrNull()
+            runCatching { repository.feedUrlFor(fiction.id) }.getOrNull()
         }
     }
     LaunchedEffect(fiction.id, capabilities.bookmarks) {
         fictionBookmarks = if (!capabilities.bookmarks) {
             emptyList()
         } else {
+            // Last visit's list first, so the section does not pop in; the fetch below replaces it.
+            val seeded = repository.peekBookmarks(fictionId = fiction.id).orEmpty()
+            fictionBookmarks = seeded
             // A failure leaves the section absent, which is what it always was. Nothing to report:
             // this is not the list the user opened the screen for.
             runCatching { repository.bookmarks(fictionId = fiction.id).orEmpty() }
-                .getOrDefault(emptyList())
+                .getOrDefault(seeded)
         }
     }
 
@@ -2913,11 +2934,15 @@ private fun PlayerActionButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     color: Color = Color.Unspecified,
+    /** What a screen reader says instead of [label], whose digits and symbols read badly aloud. */
+    description: String? = null,
 ) {
     TextButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        modifier = Modifier.heightIn(min = MinTouchTargetSize).then(
+            if (description != null) Modifier.semantics { contentDescription = description } else Modifier,
+        ),
     ) {
         Text(text = label, color = color, maxLines = 1, softWrap = false)
     }
@@ -2970,6 +2995,7 @@ private fun PlayerToggleButton(
  * @param accent draws the glyph in the accent colour, for the actions that mark the moment being
  *   heard. The content description carries the same meaning, so this is never the only signal.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerIconAction(
     icon: ImageVector,
@@ -2978,6 +3004,12 @@ private fun PlayerIconAction(
     badge: String? = null,
     accent: Boolean = false,
 ) {
+    // A long press names the icon (#502); the description is what TalkBack already reads.
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(contentDescription) } },
+        state = rememberTooltipState(),
+    ) {
     Row(
         modifier = Modifier
             .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
@@ -3007,6 +3039,7 @@ private fun PlayerIconAction(
         badge?.let {
             MetaText(text = it, color = AarisColor.Muted, maxLines = 1)
         }
+    }
     }
 }
 
@@ -3284,7 +3317,12 @@ internal fun PlayerScreenBody(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            MetaText(text = formatDuration(dragMs?.toLong() ?: playerState.positionMs))
+            MetaText(
+                text = formatDuration(dragMs?.toLong() ?: playerState.positionMs),
+                modifier = Modifier.semantics {
+                    contentDescription = "${spokenDuration(dragMs?.toLong() ?: playerState.positionMs)} played"
+                },
+            )
             // Time left beats total duration here: the scrubber already shows how far in this is,
             // and "how much longer" is the thing being asked. At anything but 1x the wall-clock
             // answer differs from the audio one, so say both rather than the misleading one.
@@ -3307,6 +3345,13 @@ internal fun PlayerScreenBody(
                             )
                             append(" at ${formatSpeed(playerState.speed)}")
                         }
+                    },
+                    modifier = Modifier.semantics {
+                        contentDescription = spokenTimeLeft(
+                            remainingMs(position, playerState.durationMs),
+                            playerState.speed,
+                            remainingMsAtSpeed(position, playerState.durationMs, playerState.speed),
+                        )
                     },
                 )
             } else {
@@ -3378,6 +3423,7 @@ internal fun PlayerScreenBody(
             // cycle-only button.
             PlayerActionButton(
                 label = "SPEED ${formatSpeed(playerState.speed)}",
+                description = "Speed ${spokenSpeed(playerState.speed)}",
                 onClick = onOpenSpeed,
             )
             PlayerActionButton(
@@ -3385,6 +3431,11 @@ internal fun PlayerScreenBody(
                     "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
                 } else {
                     "SLEEP"
+                },
+                description = if (sleepTimerState.isArmed) {
+                    "Sleep timer, ${spokenDuration(sleepTimerState.remainingMs)} left"
+                } else {
+                    "Sleep timer"
                 },
                 onClick = onOpenSleepTimer,
                 enabled = playerState.hasMedia || sleepTimerState.isArmed,
@@ -3629,19 +3680,28 @@ private fun PlayerScreen(
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             }
+            // One store-routing rule for presets and fine steps alike: pinned, the tap edits this
+            // book's override; otherwise the global speed.
+            val applySpeed: (Float) -> Unit = { speed ->
+                if (isPinnedToBook && speedFictionId != null) {
+                    playbackController.setSpeedForFiction(speedFictionId, speed)
+                } else {
+                    playbackController.setSpeed(speed)
+                }
+            }
+            FineSpeedStepper(
+                speed = playerState.speed,
+                speedLabel = formatSpeed(playerState.speed),
+                onSpeedChange = applySpeed,
+            )
+            HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             Column(modifier = Modifier.selectableGroup()) {
                 speedOptions(playerState.speed).forEach { preset ->
                     SpeedOptionRow(
                         label = formatSpeed(preset),
                         selected = kotlin.math.abs(preset - playerState.speed) < 0.01f,
                         onClick = {
-                            // Which store the tap lands in is the switch's whole job: pinned,
-                            // it edits this book's override; otherwise the global speed.
-                            if (isPinnedToBook && speedFictionId != null) {
-                                playbackController.setSpeedForFiction(speedFictionId, preset)
-                            } else {
-                                playbackController.setSpeed(preset)
-                            }
+                            applySpeed(preset)
                             showSpeed = false
                         },
                     )
@@ -4045,6 +4105,14 @@ private fun PlayerScreen(
                                 text = "${relativeAgo(now - snap.timestamp)}  ·  " +
                                     listOfNotNull(snap.fictionTitle, snap.title).joinToString("  ·  "),
                             )
+                            // A line of the story itself, when the server has timed text (#502).
+                            // Per visible row; the repository caches the document per chapter.
+                            val excerpt by produceState<String?>(null, snap.chapterId, capabilities.readAlong) {
+                                if (!capabilities.readAlong || snap.chapterId <= 0) return@produceState
+                                value = runCatching { repository.readAlong(snap.chapterId) }.getOrNull()
+                                    ?.let { excerptAt(it, snap.positionMs) }
+                            }
+                            excerpt?.let { MetaText(text = "“$it”", color = AarisColor.Dim, maxLines = 2) }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         MetaText(text = formatDuration(snap.positionMs))
@@ -4090,6 +4158,58 @@ internal fun PerBookSpeedSwitch(
         }
         Spacer(modifier = Modifier.width(12.dp))
         Switch(checked = isPinned, onCheckedChange = null)
+    }
+}
+
+/**
+ * The speed sheet's fine adjustment (#487): -/+ in [dk.perspektiva.ttsroad.data.FineSpeedStep]
+ * steps, for the speeds between presets. Unlike a preset it leaves the sheet open, since reaching
+ * 2.2x from 2.0x is four taps. Each button is a 48 dp target with a spoken name, and the readout is
+ * a polite live region so TalkBack says the new speed after each tap.
+ */
+@Composable
+internal fun FineSpeedStepper(
+    speed: Float,
+    speedLabel: String,
+    onSpeedChange: (Float) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedButton(
+            onClick = { onSpeedChange(stepSpeed(speed, -1)) },
+            enabled = canStepSpeed(speed, -1),
+            shape = RectangleShape,
+            modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .testTag("speed_step_down")
+                .semantics { contentDescription = "Slower" },
+        ) {
+            Text(text = "−", style = MaterialTheme.typography.titleMedium)
+        }
+        Text(
+            text = speedLabel,
+            style = MaterialTheme.typography.titleMedium,
+            color = AarisColor.Accent,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .weight(1f)
+                .semantics { liveRegion = LiveRegionMode.Polite },
+        )
+        OutlinedButton(
+            onClick = { onSpeedChange(stepSpeed(speed, 1)) },
+            enabled = canStepSpeed(speed, 1),
+            shape = RectangleShape,
+            modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .testTag("speed_step_up")
+                .semantics { contentDescription = "Faster" },
+        ) {
+            Text(text = "+", style = MaterialTheme.typography.titleMedium)
+        }
     }
 }
 
@@ -4237,6 +4357,7 @@ private fun LastHeardBanner(
                 text = when (lastHeard.kind) {
                     LastHeardKind.TimerSet -> "// Sleep timer set at"
                     LastHeardKind.AudioStopped -> "// Audio stopped at"
+                    LastHeardKind.LastTouched -> "// Last touched around"
                 },
                 color = AarisColor.Accent,
             )
@@ -4244,9 +4365,10 @@ private fun LastHeardBanner(
                 text = formatClockTime(context, snapshot.timestamp),
                 style = MaterialTheme.typography.titleLarge,
             )
-            if (lastHeard.kind == LastHeardKind.TimerSet) {
+            if (lastHeard.kind != LastHeardKind.AudioStopped) {
                 MetaText(
-                    text = "Timer stopped the audio at ${formatClockTime(context, lastHeard.stoppedAtMs)}",
+                    text = (if (lastHeard.kind == LastHeardKind.LastTouched) "Estimated; the audio kept playing until " else "Timer stopped the audio at ") +
+                        formatClockTime(context, lastHeard.stoppedAtMs),
                     color = AarisColor.Muted,
                 )
             }
@@ -4265,7 +4387,7 @@ private fun LastHeardBanner(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onResume, enabled = !busy, shape = RectangleShape) {
                     Text(if (error != null) labelCase("Retry") else labelCase("Resume there"))
@@ -4923,6 +5045,20 @@ internal fun SettingsScreen(
                     color = AarisColor.Dim,
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                MetaText(text = "Arm the sleep timer automatically after")
+                AarisChoiceRow(
+                    options = SleepAutoArmOptions,
+                    selected = prefs.sleepAutoArmFromHour,
+                    label = { if (it < 0) "Off" else "%02d:00".format(it) },
+                    onSelect = { scope.launch { preferences.setSleepAutoArmFromHour(it) } },
+                )
+                MetaText(
+                    text = "Starting playback from then until 05:00 arms the default timer, once " +
+                        "a night. Cancel it and it stays off until the next night. " +
+                        PreferenceScope.DevicePlayer,
+                    color = AarisColor.Dim,
+                )
+                HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -5176,7 +5312,12 @@ internal fun SettingsScreen(
                 ) {
                     Text(labelCase("Delete all downloads"))
                 }
-                deleteDownloadsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                DownloadsOverview(
+                    downloads = downloads,
+                    cache = remember { ServiceLocator.libraryCache(context) },
+                    onError = { deleteDownloadsError = it },
+                )
+                deleteDownloadsError?.let { ErrorLine(it) }
             }
         }
 
@@ -5210,7 +5351,7 @@ internal fun SettingsScreen(
                             "password — anyone holding one can read your library.",
                         color = AarisColor.Dim,
                     )
-                    feedsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    feedsError?.let { ErrorLine(it) }
                     val library = feeds?.library
                     ShareUrlRow(
                         label = "Every fiction, newest first",
@@ -5257,7 +5398,7 @@ internal fun SettingsScreen(
                             "serial cannot.",
                         color = AarisColor.Dim,
                     )
-                    backupError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    backupError?.let { ErrorLine(it) }
                     backupNote?.let { MetaText(text = it, color = AarisColor.Ok) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
@@ -5355,7 +5496,7 @@ internal fun SettingsScreen(
                             "the web console.",
                         color = AarisColor.Dim,
                     )
-                    exportsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    exportsError?.let { ErrorLine(it) }
                     // ffmpeg is reported per request, not as a capability: the route existing and
                     // the machine behind it being able to encode are two different questions, and
                     // an empty list would answer the wrong one.
@@ -5416,7 +5557,23 @@ internal fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
+                val signerDigests = remember { installedSignerDigests(context) }
+                signerDigests.forEach { SettingsItem(label = "Signed with (SHA-256)", value = it) }
                 CrashReportingSetting()
+                OutlinedButton(
+                    onClick = {
+                        val report = diagnosticsReport(
+                            appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                            androidVersion = "${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})",
+                            device = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+                            capabilities = capabilities,
+                            lastError = LastError.latest,
+                            serverAddresses = session.knownAddresses,
+                        )
+                        copyToClipboard(context, "TTSRoad diagnostics", report)
+                    },
+                    shape = RectangleShape,
+                ) { Text(labelCase("Copy diagnostics")) }
                 AutoUpdateCheckSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->
                     MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
@@ -5674,7 +5831,11 @@ private fun BookmarksScreen(
         }
     }
 
-    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(Unit) {
+        // Painted from the last visit while the refresh runs.
+        bookmarks = repository.peekBookmarks()
+        load()
+    }
 
     val loaded = bookmarks
     when {
@@ -5696,7 +5857,7 @@ private fun BookmarksScreen(
             if (isLoading) {
                 ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
 
             if (loaded.isEmpty()) {
                 SectionHeader(kicker = "BM", title = "No bookmarks")
@@ -5936,7 +6097,7 @@ internal fun PronunciationReportsBody(
         if (isLoading) {
             ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
         }
-        error?.let { MetaText(text = it, color = AarisColor.Danger) }
+        error?.let { ErrorLine(it) }
 
         AarisChoiceRow(
             options = listOf(false, true),
@@ -6058,6 +6219,8 @@ private fun QueueScreen(
     var isBusy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var dragIndex by remember { mutableStateOf(-1) }
+    var dragOffset by remember { mutableStateOf(0f) }
 
     fun load() {
         scope.launch {
@@ -6148,7 +6311,7 @@ private fun QueueScreen(
             if (unsupported) {
                 SectionHeader(kicker = "Q", title = "Not available")
                 EmptyCard(
-                    "This server has no cross-library queue. Update the backend to line chapters " +
+                    "This server has no cross-library queue. Ask whoever set up your server to update it to line chapters " +
                         "up across books.",
                 )
                 return@Column
@@ -6157,7 +6320,7 @@ private fun QueueScreen(
             if (isLoading || isBusy) {
                 ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
 
             val items = loaded?.items.orEmpty()
             if (items.isEmpty()) {
@@ -6171,8 +6334,42 @@ private fun QueueScreen(
                     kicker = "Q",
                     title = if (items.size == 1) "1 queued" else "${items.size} queued",
                 )
+                val rowHeights = remember { mutableStateMapOf<Int, Int>() }
+                val gapPx = with(LocalDensity.current) { 16.dp.toPx() }
+                fun endDrag(): Int {
+                    val to = queueDropIndex(
+                        from = dragIndex,
+                        dragPx = dragOffset,
+                        heights = items.indices.map { rowHeights[it] ?: 0 },
+                        gapPx = gapPx,
+                    )
+                    val from = dragIndex
+                    dragIndex = -1
+                    dragOffset = 0f
+                    return if (from >= 0 && to != from) to - from else 0
+                }
                 items.forEachIndexed { index, item ->
                     QueueRow(
+                        modifier = Modifier
+                            .onSizeChanged { rowHeights[index] = it.height }
+                            .zIndex(if (dragIndex == index) 1f else 0f)
+                            .graphicsLayer { translationY = if (dragIndex == index) dragOffset else 0f },
+                        // One request for wherever the row was dropped, not one per step.
+                        dragHandle = Modifier.pointerInput(items.map { it.id }, isBusy) {
+                            if (isBusy) return@pointerInput
+                            detectDragGestures(
+                                onDragStart = { dragIndex = index; dragOffset = 0f },
+                                onDrag = { change, delta ->
+                                    change.consume()
+                                    dragOffset += delta.y
+                                },
+                                onDragEnd = {
+                                    val offset = endDrag()
+                                    if (offset != 0) mutate { repository.reorderQueue(items.moveItem(index, offset)) }
+                                },
+                                onDragCancel = { endDrag() },
+                            )
+                        },
                         item = item,
                         position = index + 1,
                         // The ends of the list have nowhere to go, and a disabled arrow says that
@@ -6249,6 +6446,25 @@ private fun QueueScreen(
 }
 
 /**
+ * Where a row dragged [dragPx] pixels from [from] lands, given each row's measured [heights] and the
+ * [gapPx] between rows: it passes a neighbour once it is past that neighbour's midpoint.
+ */
+internal fun queueDropIndex(from: Int, dragPx: Float, heights: List<Int>, gapPx: Float): Int {
+    if (from !in heights.indices) return from
+    var to = from
+    var remaining = dragPx
+    while (remaining > 0 && to < heights.lastIndex && remaining > (heights[to + 1] + gapPx) / 2) {
+        remaining -= heights[to + 1] + gapPx
+        to++
+    }
+    while (remaining < 0 && to > 0 && -remaining > (heights[to - 1] + gapPx) / 2) {
+        remaining += heights[to - 1] + gapPx
+        to--
+    }
+    return to
+}
+
+/**
  * The whole order with the item at [index] shifted by [offset], as the row ids the server takes.
  *
  * A complete order rather than a move instruction because that is the endpoint's shape, and it is
@@ -6266,6 +6482,8 @@ internal fun List<QueueItem>.moveItem(index: Int, offset: Int): List<Int> {
 
 @Composable
 internal fun QueueRow(
+    modifier: Modifier = Modifier,
+    dragHandle: Modifier? = null,
     item: QueueItem,
     position: Int,
     onMoveUp: (() -> Unit)?,
@@ -6273,7 +6491,7 @@ internal fun QueueRow(
     onRemove: (() -> Unit)?,
     onPlay: (() -> Unit)?,
 ) {
-    AarisCard {
+    AarisCard(modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -6281,6 +6499,18 @@ internal fun QueueRow(
                 .padding(12.dp),
         ) {
             Row(verticalAlignment = Alignment.Top) {
+                if (dragHandle != null) {
+                    // The arrows below stay as the non-gesture way to reorder (TalkBack, switch access).
+                    Box(
+                        modifier = Modifier
+                            .sizeIn(minWidth = MinTouchTargetSize, minHeight = MinTouchTargetSize)
+                            .semantics { contentDescription = "Drag to reorder" }
+                            .then(dragHandle),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        MetaText(text = "≡", color = AarisColor.Muted)
+                    }
+                }
                 MetaText(
                     text = position.toString().padStart(2, '0'),
                     color = AarisColor.Dim,
@@ -6449,14 +6679,14 @@ private fun DevicesScreen(
                 if (unsupported) {
                     SectionHeader(kicker = "DEV", title = "Not available")
                     EmptyCard(
-                        "This server is older than the device-session API. Update the backend to " +
+                        "This server is older than the device-session API. Ask whoever set up your server to update it to " +
                             "manage sign-ins from here.",
                     )
                 } else {
                     if (isLoading) {
                         ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
                     }
-                    error?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    error?.let { ErrorLine(it) }
 
                     SectionHeader(kicker = "01", title = "This device")
                     val current = loaded.orEmpty().firstOrNull { it.isCurrent(session) }
@@ -6608,7 +6838,7 @@ private fun DeviceDetail(label: String, value: String) {
 
 /** Square, orange-accented confirmation for the two irreversible actions on the devices screen. */
 @Composable
-private fun ConfirmDialog(
+internal fun ConfirmDialog(
     title: String,
     body: String,
     confirmLabel: String,
@@ -7154,12 +7384,18 @@ internal fun ChapterRow(
                         },
                     )
                 }
-                // Why it failed, on the row rather than only behind a long press. A list of rows
-                // reading "FAILED" and nothing else is what #106 was filed about; one line of the
-                // server's own message is usually enough to tell a locked chapter from a broken one.
-                chapter.errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                // Why it cannot be played, in a listener's words, with the pipeline's own words and
+                // the server's message one tap away (#488). A list of rows reading "FAILED" and
+                // nothing else is what #106 was filed about; the server's message is still how an
+                // admin tells a locked chapter from a broken one, it just no longer greets everyone.
+                chapter.statusSentence?.let { sentence ->
                     Spacer(modifier = Modifier.height(2.dp))
-                    MetaText(text = message, color = AarisColor.Danger, maxLines = 2)
+                    MetaText(
+                        text = sentence,
+                        color = if (chapter.hasError) AarisColor.Danger else AarisColor.Dim,
+                        maxLines = 2,
+                    )
+                    ErrorDetails(details = chapter.statusDetail)
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
@@ -9601,7 +9837,7 @@ internal fun FictionEditScreen(
                         adopt(
                             result,
                             "Cover updated.",
-                            "This server is older than cover uploads. Update the backend to change " +
+                            "This server is older than cover uploads. Ask whoever set up your server to update it to change " +
                                 "cover art from here.",
                         )
                     }
@@ -9670,7 +9906,7 @@ internal fun FictionEditScreen(
             ) {
                 if (!editsEverything) {
                     MetaText(
-                        text = "This server can only edit the title and author. Update the backend " +
+                        text = "This server can only edit the title and author. Ask whoever set up your server to update it " +
                             "for the synopsis, tags and cover art.",
                         color = AarisColor.Warning,
                     )
@@ -9752,7 +9988,7 @@ internal fun FictionEditScreen(
                     }
                     when {
                         voiceLoadError != null -> {
-                            MetaText(text = voiceLoadError.orEmpty(), color = AarisColor.Danger)
+                            ErrorLine(voiceLoadError.orEmpty())
                             TextButton(
                                 onClick = { voiceLoadRequest += 1 },
                                 enabled = !isBusy && !isLoadingVoices,
@@ -10157,13 +10393,28 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
     }
 }
 
+internal const val FindSomethingLabel = "Find something to listen to"
+
 @Composable
-internal fun EmptyCard(message: String) {
+internal fun EmptyCard(
+    message: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
     AarisCard {
-        MetaText(
-            text = message,
-            modifier = Modifier.padding(16.dp),
-        )
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            MetaText(text = message)
+            // A new account lands here with nothing to resume: say where to find something (#508).
+            if (actionLabel != null && onAction != null) {
+                Button(
+                    onClick = onAction,
+                    shape = RectangleShape,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text(actionLabel)
+                }
+            }
+        }
     }
 }
 
@@ -10884,7 +11135,15 @@ private fun skipForwardIcon(skipIntervalMs: Long): ImageVector = when {
 private fun formatSleepTimerDefault(minutes: Int): String =
     if (minutes <= 0) "Ask" else "${minutes}m"
 
-private fun formatSpeed(speed: Float): String {
+/** "1.5 times" — a speed as a screen reader should say it, not as "1.5 multiplication sign". */
+internal fun spokenSpeed(speed: Float): String = "${formatSpeed(speed).removeSuffix("×")} times"
+
+/** "28 minutes left", plus the wall-clock answer when [speed] is not 1x. */
+internal fun spokenTimeLeft(remainingMs: Long, speed: Float, atSpeedMs: Long): String =
+    "${spokenDuration(remainingMs)} left" +
+        if (speed != 1f) ", ${spokenDuration(atSpeedMs)} at ${spokenSpeed(speed)} speed" else ""
+
+internal fun formatSpeed(speed: Float): String {
     val text = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')
     return "${text}×"
 }

@@ -17,6 +17,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dk.perspektiva.ttsroad.core.ServiceLocator
+import dk.perspektiva.ttsroad.core.redactServerUrls
 import dk.perspektiva.ttsroad.data.ServerLogLevels
 import dk.perspektiva.ttsroad.data.ServerLogRow
 import dk.perspektiva.ttsroad.data.ServerLogsResponse
@@ -48,6 +51,7 @@ import dk.perspektiva.ttsroad.ui.AarisChoiceRow
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
+import dk.perspektiva.ttsroad.ui.copyToClipboard
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
 import dk.perspektiva.ttsroad.ui.ThinProgress
@@ -193,6 +197,7 @@ internal fun ServerLogsScreen(
                             }
                             ServerLogListItem(
                                 row = row,
+                                serverAddresses = session.knownAddresses,
                                 onFilterFiction = { id, label ->
                                     state.applyFilters(level, id, label)
                                 },
@@ -368,7 +373,12 @@ private val LogLevelChoices: List<String?> = listOf(null) + ServerLogLevels
  * book done", and the server takes a `fiction_id` filter precisely for that.
  */
 @Composable
-private fun ServerLogListItem(row: ServerLogRow, onFilterFiction: (Int, String?) -> Unit) {
+private fun ServerLogListItem(
+    row: ServerLogRow,
+    serverAddresses: List<String>,
+    onFilterFiction: (Int, String?) -> Unit,
+) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -385,11 +395,19 @@ private fun ServerLogListItem(row: ServerLogRow, onFilterFiction: (Int, String?)
             // not the point.
             MetaText(text = row.time ?: "Undated", color = AarisColor.Muted)
         }
-        Text(
-            text = row.message.ifBlank { "(no message)" },
-            style = MaterialTheme.typography.bodyMedium,
-            color = AarisColor.Ink,
-        )
+        // Selectable for a word or a stack frame; COPY LINE below takes the whole line (#506).
+        SelectionContainer {
+            Text(
+                text = row.message.ifBlank { "(no message)" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = AarisColor.Ink,
+            )
+        }
+        TextButton(
+            onClick = { copyToClipboard(context, "Server log line", serverLogLineText(row, serverAddresses)) },
+            modifier = Modifier.heightIn(min = MinTouchTargetSize),
+            shape = RectangleShape,
+        ) { Text(labelCase("Copy line")) }
         val fiction = row.fictionId
         if (fiction != null) {
             OutlinedButton(
@@ -410,4 +428,10 @@ private fun logLevelColor(level: String): Color = when (level) {
     "ERROR" -> AarisColor.Danger
     "WARNING" -> AarisColor.Warning
     else -> AarisColor.Muted
+}
+
+/** One log line as plain text for a clipboard, with the server's own address removed (#506). */
+internal fun serverLogLineText(row: ServerLogRow, serverAddresses: Collection<String>): String {
+    val line = listOfNotNull(row.time, row.level, row.source, row.message.ifBlank { "(no message)" }).joinToString(" ")
+    return redactServerUrls(line, serverAddresses) ?: line
 }

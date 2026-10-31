@@ -104,6 +104,23 @@ class BookmarksRepositoryTest {
     }
 
     @Test
+    fun `the last list is remembered for this session until a mark changes`() = runTest {
+        val repository = repository(bookmarks = true)
+        server.enqueue(json("""{"bookmarks": [{"id": 3, "chapter_id": 7}], "deleted": []}"""))
+        server.enqueue(json("""{"bookmark": {"id": 9, "chapter_id": 7}}"""))
+
+        assertNull(repository.peekBookmarks(fictionId = 5))
+        repository.bookmarks(fictionId = 5)
+
+        assertEquals(3, repository.peekBookmarks(fictionId = 5)?.single()?.id)
+        // A different filter is a different list.
+        assertNull(repository.peekBookmarks(fictionId = 6))
+
+        repository.createBookmark(chapterId = 7, positionSeconds = 1.0)
+        assertNull(repository.peekBookmarks(fictionId = 5))
+    }
+
+    @Test
     fun `a created bookmark is sent as a manual one`() = runTest {
         val repository = repository(bookmarks = true)
         server.enqueue(json("""{"bookmark": {"id": 9, "chapter_id": 7, "position_seconds": 30.0}}"""))

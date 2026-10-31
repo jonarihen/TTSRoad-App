@@ -15,6 +15,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +35,7 @@ import dk.perspektiva.ttsroad.data.SessionState
 import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
+import dk.perspektiva.ttsroad.ui.ErrorDetails
 import dk.perspektiva.ttsroad.ui.MetaText
 import kotlinx.coroutines.launch
 
@@ -48,8 +50,10 @@ import kotlinx.coroutines.launch
  */
 @Composable
 internal fun ServerAddressSettings(session: SessionState, repository: TtsRoadRepository) {
+    val failover by repository.addressFailover.collectAsState()
     ServerAddressCard(
         inUse = session.serverUrl,
+        autoSwitchedFrom = failover?.takeIf { it.to == session.serverUrl }?.from,
         saved = session.alternateUrls,
         check = repository::verifyServerAddress,
         forget = repository::forgetServerAddress,
@@ -66,6 +70,7 @@ internal fun ServerAddressCard(
     saved: List<String>,
     check: suspend (String, ServerAddressAction) -> ServerAddressResult,
     forget: suspend (String) -> Unit,
+    autoSwitchedFrom: String? = null,
 ) {
     val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf("") }
@@ -88,7 +93,7 @@ internal fun ServerAddressCard(
                     AddressOutcome(serverAddressDoneMessage(action), isError = false)
                 }
 
-                is ServerAddressResult.Refused -> AddressOutcome(result.message, isError = true)
+                is ServerAddressResult.Refused -> AddressOutcome(result.message, isError = true, details = result.details)
             }
         }
     }
@@ -109,6 +114,14 @@ internal fun ServerAddressCard(
             )
             MetaText(text = "In use")
             Text(text = inUse, style = MaterialTheme.typography.bodyMedium)
+            autoSwitchedFrom?.let {
+                MetaText(
+                    text = "Switched here automatically because $it could not be reached. " +
+                        "The app tries your other saved addresses when the one in use is " +
+                        "unreachable, and only ones that pass the same checks as SWITCH.",
+                    color = AarisColor.Accent,
+                )
+            }
 
             saved.forEach { address ->
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
@@ -183,12 +196,13 @@ internal fun ServerAddressCard(
             if (checking != null) MetaText(text = "Checking ${checking.orEmpty()}…", color = AarisColor.Dim)
             outcome?.let {
                 MetaText(text = it.message, color = if (it.isError) AarisColor.Danger else AarisColor.Accent)
+                ErrorDetails(details = it.details)
             }
         }
     }
 }
 
-private data class AddressOutcome(val message: String, val isError: Boolean)
+private data class AddressOutcome(val message: String, val isError: Boolean, val details: String? = null)
 
 private fun sameDraft(draft: String, address: String): Boolean = draft.trim() == address.trim()
 

@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import dk.perspektiva.ttsroad.core.LastError
 
 /**
  * The raw text behind a plain-language error, folded away until asked for (#360).
@@ -53,3 +54,15 @@ fun ErrorDetails(
 }
 
 const val ErrorDetailsToggleTag = "error-details-toggle"
+
+/**
+ * An inline error sentence with its Details fold (#506). The raw text comes from the newest failure
+ * the app described ([LastError]); if the sentence is not that failure's, there is nothing to fold.
+ */
+@Composable
+fun ErrorLine(message: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        MetaText(text = message, color = AarisColor.Danger)
+        ErrorDetails(details = LastError.latest?.takeIf { it.message == message }?.details)
+    }
+}

@@ -39,11 +39,14 @@ data class UserFacingError(val message: String, val details: String? = null)
  * JSON `detail` into an exception message, and that is better wording than any guess made here.
  * [fallback] is for a failure with no message at all.
  */
-fun Throwable.toUserFacingError(fallback: String): UserFacingError {
+fun Throwable.toUserFacingError(fallback: String): UserFacingError =
+    describeFailure(fallback).also { LastError.latest = it }
+
+private fun Throwable.describeFailure(fallback: String): UserFacingError {
     val raw = rawDescription()
     val plain = plainLanguageFor(this)
     return when {
-        plain != null -> UserFacingError(plain, raw)
+        plain != null -> UserFacingError(plain, listOfNotNull(AdminHints[plain], raw).joinToString("\n\n"))
         !message.isNullOrBlank() -> UserFacingError(message!!.trim())
         else -> UserFacingError(fallback, raw)
     }
@@ -61,22 +64,44 @@ internal const val TimeoutMessage =
 internal const val ConnectionLostMessage =
     "The connection to the server was lost - try again."
 internal const val CleartextBlockedMessage =
-    "This app only connects with https:// - plain http:// addresses are blocked. " +
-        "Put the server behind HTTPS (for example with `tailscale cert`) and use its https:// address."
+    "This app only connects securely, and that address isn't. Ask whoever set up your server " +
+        "for its https:// address."
 internal const val UntrustedCertificateMessage =
-    "This phone doesn't trust the server's security certificate. A self-signed or private-CA " +
-        "certificate is not accepted - use a certificate from a public CA, such as Let's Encrypt " +
-        "or `tailscale cert`."
+    "This phone doesn't trust the server's security certificate. Ask whoever set up your server to fix it."
+internal const val HostnameMismatchMessage =
+    "The server's security certificate was issued for a different address than the one you entered. " +
+        "Check the address, or ask whoever set up your server."
 internal const val SecureConnectionMessage =
-    "A secure connection to the server couldn't be set up - check the address and the server's HTTPS setup."
+    "A secure connection to the server couldn't be set up - check the address, or ask whoever set up your server."
 internal const val SessionExpiredMessage = "Your session has expired - sign in again."
-internal const val ForbiddenMessage = "Your account isn't allowed to do that."
+internal const val ForbiddenMessage =
+    "Your account isn't allowed to do that. Ask whoever set up your server if you should be."
 internal const val NotFoundMessage =
-    "The server doesn't have that. It may be running an older TTSRoad version, or the address may point somewhere else."
+    "The server doesn't have that. Check the address, or ask whoever set up your server."
 internal const val ServerProblemMessage =
     "The server ran into a problem - try again in a moment."
 internal const val UnreadableAnswerMessage =
-    "The server sent an answer this app doesn't understand - the app or the server may need updating."
+    "The server sent an answer this app doesn't understand - ask whoever set up your server " +
+        "whether it needs updating."
+
+/** The technical advice for the person running the server, kept under Details (#489). */
+private val AdminHints = mapOf(
+    CleartextBlockedMessage to
+        "For the admin: plain http:// is blocked. Put the server behind HTTPS (for example with " +
+            "`tailscale cert`) and use its https:// address.",
+    UntrustedCertificateMessage to
+        "For the admin: a self-signed or private-CA certificate is not accepted. Use a certificate " +
+            "from a public CA, such as Let's Encrypt or `tailscale cert`.",
+    HostnameMismatchMessage to
+        "For the admin: the certificate is valid but does not list this host name. Connect with a " +
+            "name the certificate covers (its subject alternative names), or issue one that covers " +
+            "this address.",
+    SecureConnectionMessage to "For the admin: check the address and the server's HTTPS setup.",
+    NotFoundMessage to
+        "For the admin: the server may be running an older TTSRoad version, or the address may point " +
+            "somewhere else.",
+    UnreadableAnswerMessage to "For the admin: the app or the server may be out of date.",
+)
 
 private fun plainLanguageFor(failure: Throwable): String? {
     // A Retrofit failure carries the status; nothing beneath it is more specific.
@@ -95,7 +120,8 @@ private fun plainLanguageFor(failure: Throwable): String? {
                 cause.message.orEmpty().contains("Trust anchor", ignoreCase = true) ->
                 return UntrustedCertificateMessage
 
-            cause is SSLPeerUnverifiedException -> return UntrustedCertificateMessage
+            // OkHttp's "Hostname x not verified": the chain is fine, the name is not.
+            cause is SSLPeerUnverifiedException -> return HostnameMismatchMessage
         }
     }
     chain.forEach { cause ->
@@ -131,7 +157,7 @@ fun plainLanguageForStatus(status: Int): String = when {
     status == 404 -> NotFoundMessage
     status == 408 || status == 429 -> TimeoutMessage
     status in 500..599 -> ServerProblemMessage
-    else -> "The server refused the request (HTTP $status)."
+    else -> "The server turned that request down - try again, or ask whoever set up your server."
 }
 
 private fun Throwable.rawDescription(): String {

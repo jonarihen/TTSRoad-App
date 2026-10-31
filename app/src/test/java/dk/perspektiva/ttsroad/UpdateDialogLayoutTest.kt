@@ -5,6 +5,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
 import dk.perspektiva.ttsroad.update.ReleaseInfo
@@ -52,6 +53,7 @@ class UpdateDialogLayoutTest {
         // and the text inside it is taller than the cap. Both are measured here, against the real
         // dialog rather than a hand-built stand-in that could pass without the production code.
         show((1..60).joinToString("\n") { "- change number $it" })
+        compose.onNodeWithText("WHAT CHANGED IN DETAIL").performClick()
 
         val container = compose.onNodeWithTag("update-notes").getUnclippedBoundsInRoot()
         val containerHeight = container.bottom - container.top
@@ -83,6 +85,7 @@ class UpdateDialogLayoutTest {
     @Test
     fun `markdown markers never reach the screen`() {
         show("## Added\n- **Recently listened** ordering\n- Fixed `EPUB` downloads")
+        compose.onNodeWithText("WHAT CHANGED IN DETAIL").performClick()
 
         compose.onNodeWithText("Added", substring = true).assertIsDisplayed()
         compose.onNodeWithText("**", substring = true).assertDoesNotExist()
