@@ -15,6 +15,7 @@ private fun playbackHttpStatus(error: PlaybackException): Int? =
             .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
             .firstOrNull()?.responseCode
 
+@androidx.annotation.OptIn(UnstableApi::class)
 internal fun readablePlaybackException(error: PlaybackException): PlaybackException {
     val status = playbackHttpStatus(error)
     val message = classifyPlaybackError(error.errorCode, status).message
@@ -24,10 +25,12 @@ internal fun readablePlaybackException(error: PlaybackException): PlaybackExcept
     })
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 internal fun playbackErrorMessage(error: PlaybackException): String =
     error.extras.getString(PlaybackMessageExtra)
         ?: classifyPlaybackError(error.errorCode, playbackHttpStatus(error)).message
 
+@androidx.annotation.OptIn(UnstableApi::class)
 internal fun playbackErrorDetails(error: PlaybackException): String = buildString {
     append(error.errorCodeName)
     playbackHttpStatus(error)?.let { append("\nHTTP $it") }

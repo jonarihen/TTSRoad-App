@@ -17,6 +17,7 @@ import dk.perspektiva.ttsroad.player.readablePlaybackException
  * URL) ever crosses a binder. It clears with the underlying one — or when a different item plays:
  * an error the raw player has not cleared yet must not follow the user into another chapter.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class SessionPlaybackErrors(player: Player) : ForwardingPlayer(player) {
 
     private var rawError: PlaybackException? = null

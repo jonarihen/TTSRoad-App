@@ -33,8 +33,10 @@ internal sealed interface OfflineResume {
     data class Unavailable(val message: String) : OfflineResume
 }
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class PlaybackRequestFailure(val sessionError: SessionError) : Exception(sessionError.message)
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal fun OfflineResume.Unavailable.asRequestFailure(): PlaybackRequestFailure =
     PlaybackRequestFailure(SessionError(SessionError.ERROR_IO, message))
 
