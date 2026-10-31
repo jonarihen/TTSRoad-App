@@ -1320,14 +1320,17 @@ class TtsRoadMediaService : MediaLibraryService() {
     }
 
     private suspend fun fictionChapters(fictionId: Int): Pair<FictionSummary, List<ChapterSummary>>? {
-        val session = tokenStore.current()
-        val keys = historyAccountKeys(session)
+        val generation = librarySessionGeneration
+        val keys = historyAccountKeys(tokenStore.current())
         val response = runCatching {
             repository.chapters(fictionId = fictionId, playableOnly = true)
         }.getOrNull()
         if (response != null) {
-            withContext(Dispatchers.IO) {
-                chapterLists.write(keys.firstOrNull(), fictionId, playableOnly = true, response = response)
+            // A sign-out mid-fetch has already cleared the store; writing now would recreate it.
+            if (sessionStillCurrent(generation)) {
+                withContext(Dispatchers.IO) {
+                    chapterLists.write(keys.firstOrNull(), fictionId, playableOnly = true, response = response)
+                }
             }
             return response.fiction to response.chapters
         }

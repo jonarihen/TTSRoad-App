@@ -14,7 +14,8 @@ import java.io.File
 data class StoredChapters(
     val accountKey: String = "",
     val savedAt: Long = 0L,
-    val response: ChaptersResponse = ChaptersResponse(fiction = FictionSummary(id = 0, title = "")),
+    // No default: a file without it must fail to parse rather than read back as an empty list.
+    val response: ChaptersResponse,
 )
 
 /**

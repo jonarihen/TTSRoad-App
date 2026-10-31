@@ -62,4 +62,12 @@ class ChapterListStoreTest {
         assertNull(store.read("a", 3, playableOnly = false))
         assertNull(store.read("a", 3, playableOnly = true))
     }
+
+    @Test
+    fun `a file without a response reads as nothing, not an empty list`() {
+        store.write("a", 3, playableOnly = false, response = response(1))
+        File(dir, "${ChapterListStore.DirName}/3.json").writeText("""{"accountKey":"a","savedAt":1}""")
+
+        assertNull(store.read("a", 3, playableOnly = false))
+    }
 }
