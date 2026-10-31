@@ -6,6 +6,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Settings > Offline lists what is downloaded per book, with DELETE PLAYED and DELETE ALL for each
+  book and one DELETE PLAYED DOWNLOADS across the library. (#497)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)
