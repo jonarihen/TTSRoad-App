@@ -6,6 +6,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Android Auto and the media notification gain overflow "Previous chapter" / "Next chapter" buttons,
+  so a chapter can be skipped without browsing while the +/-30 s skips keep the main slots. Not
+  verified on a head unit. (#498)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)

@@ -103,6 +103,24 @@ object TtsRoadSessionCommands {
                     .setSlots(CommandButton.SLOT_FORWARD, CommandButton.SLOT_OVERFLOW)
                     .build(),
             )
+        // Chapter skip without browsing (#498). The skips own the slots either side of play/pause,
+        // so these two are overflow-only: a driver can step over an author's-note chapter from the
+        // transport's overflow instead of the browse tree. Player commands, so the player's own
+        // queue logic (and its enabled state at either end of the queue) applies.
+        buttons.add(
+            CommandButton.Builder(CommandButton.ICON_PREVIOUS)
+                .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .setDisplayName("Previous chapter")
+                .setSlots(CommandButton.SLOT_OVERFLOW)
+                .build(),
+        )
+        buttons.add(
+            CommandButton.Builder(CommandButton.ICON_NEXT)
+                .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .setDisplayName("Next chapter")
+                .setSlots(CommandButton.SLOT_OVERFLOW)
+                .build(),
+        )
         if (bookmarks) {
             // Overflow only, and last. The skips are what a driver reaches for constantly
             // and they own the slots either side of play/pause; a bookmark button that displaced one
