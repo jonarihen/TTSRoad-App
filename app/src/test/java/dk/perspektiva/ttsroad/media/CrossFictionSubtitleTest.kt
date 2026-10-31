@@ -46,6 +46,26 @@ class CrossFictionSubtitleTest {
     }
 
     @Test
+    fun `car rows are capped, newest first, and still name the book`() {
+        val many = (1..50).map { unstarted.copy(id = it) }
+        val rows = TtsRoadMediaItems.crossFictionRows(many, listOf(fiction), "https://server.example.com")
+
+        assertEquals(TtsRoadMediaItems.CarCrossFictionRowCap, rows.size)
+        assertEquals("chapter:1", rows.first().mediaId)
+        assertEquals("Ashes of Aether · 41 min", rows.first().mediaMetadata.subtitle.toString())
+    }
+
+    @Test
+    fun `unplayable chapters do not use up the cap`() {
+        val noAudio = (100..130).map { unstarted.copy(id = it, audio = null) }
+        val rows = TtsRoadMediaItems.crossFictionRows(
+            noAudio + unstarted, listOf(fiction), "https://server.example.com",
+        )
+
+        assertEquals(listOf("chapter:42"), rows.map { it.mediaId })
+    }
+
+    @Test
     fun `a row inside its own fiction keeps the duration`() {
         assertEquals("41 min", subtitle(started, crossFiction = false))
     }

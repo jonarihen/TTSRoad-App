@@ -51,6 +51,7 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.download.ChapterDownloadState
+import dk.perspektiva.ttsroad.data.ChapterListStore
 import dk.perspektiva.ttsroad.data.LibrarySnapshotStore
 import dk.perspektiva.ttsroad.data.DefaultHeadsetButtonsSeek
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
@@ -75,7 +76,7 @@ import dk.perspektiva.ttsroad.player.InProcessPlayer
 import dk.perspektiva.ttsroad.player.historyAccountKey
 import dk.perspektiva.ttsroad.player.historyAccountKeys
 import dk.perspektiva.ttsroad.player.NetworkReturnWatcher
-import dk.perspektiva.ttsroad.player.shouldRecoverOnNetworkReturn
+import dk.perspektiva.ttsroad.player.TransientPlaybackRetry
 import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.OwnerProgressFlush
 import dk.perspektiva.ttsroad.player.adSkipTarget
@@ -134,6 +135,9 @@ private const val SpeechMaxBufferMs = 300_000
 // How long an offline resume waits for the download index to load (#327).
 private const val DownloadIndexWaitMs = 2_000L
 
+/** How long a cold-start resume waits on the network before serving the saved library (#483). */
+private const val ResumeDeadlineMs = 12_000L
+
 @OptIn(UnstableApi::class)
 class TtsRoadMediaService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -149,6 +153,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var fictionSpeeds: FictionSpeedPreferences
     private lateinit var nowPlayingStore: NowPlayingStore
     private lateinit var librarySnapshots: LibrarySnapshotStore
+    private lateinit var chapterLists: ChapterListStore
     private var playbackSessionGeneration = 0L
     private var playbackSessionActive = false
 
@@ -165,8 +170,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     // Bumped on every account change, so a library fetch that outlives its session is discarded.
     private var librarySessionGeneration = 0L
 
-    // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
-    // outage later in the night gets a fresh set of attempts rather than giving up immediately.
+    // Automatic recovery after a rotated credential was rejected mid-stream; a dropped stream is
+    // [transientRetry]'s. Reset once playback is healthy again, so a later rejection gets a fresh
+    // set of attempts rather than giving up immediately.
     private var retryJob: Job? = null
 
     // The save launched by a pause. Teardown cancels the scope, so if this is still running then,
@@ -174,8 +180,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var pauseSave: Job? = null
     private var retryAttempt = 0
 
-    // Whether the last player error was one a returning network can heal; see NetworkRecovery.kt.
-    private var lastFailureTransient = false
+    // Re-prepares after a transient failure, fast and then slowly; see NetworkRecovery.kt (#482).
+    private lateinit var transientRetry: TransientPlaybackRetry
     private var networkWatcher: NetworkReturnWatcher? = null
 
     // The chapter, window size and setting generation the window was last planned around.
@@ -244,6 +250,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         progressSync = ServiceLocator.progressSync(this)
         nowPlayingStore = NowPlayingStore(this)
         librarySnapshots = LibrarySnapshotStore(this)
+        chapterLists = ChapterListStore(this)
         // When the app's own discovery for the signed-in server succeeds (after a sign-in, or once
         // the network is back), a backlog that waited on it can go out without waiting for playback.
         serviceScope.launch {
@@ -277,6 +284,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     null
                 }
                 if (sessionIdentity != lastSessionIdentity) {
+                    if (::transientRetry.isInitialized) transientRetry.reset()
                     lastSessionIdentity = sessionIdentity
                     librarySessionGeneration++
                     // A different account's widget is a different picture, whatever its key says.
@@ -304,6 +312,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             }
         }
         player = createPlayer()
+        transientRetry = TransientPlaybackRetry(player, serviceScope) { playbackSessionActive }
+        player.addListener(transientRetry)
         InProcessPlayer.attach(player)
         startAudioTuning()
         // Speed lives in the service, not the UI: the player is recreated on a swipe-away, a
@@ -360,7 +370,6 @@ class TtsRoadMediaService : MediaLibraryService() {
                     if (playbackState == Player.STATE_READY) {
                         retryAttempt = 0
                         retryJob?.cancel()
-                        lastFailureTransient = false
                     }
                 }
 
@@ -440,11 +449,10 @@ class TtsRoadMediaService : MediaLibraryService() {
             },
         )
         growingQueue.start()
-        // The backoff gives up after ~22s; this is what resumes after a longer outage (#326).
         networkWatcher = NetworkReturnWatcher(
             connectivity = getSystemService(ConnectivityManager::class.java),
             mainHandler = Handler(mainLooper),
-            onNetworkReturned = { serviceScope.launch { recoverAfterNetworkReturn() } },
+            onNetworkReturned = { transientRetry.onNetworkReturned() },
         ).also { it.start() }
         startProgressTicker()
         startPlaybackSkipTicker()
@@ -491,6 +499,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     override fun onDestroy() {
         networkWatcher?.stop()
+        transientRetry.reset()
         val pauseSaveInFlight = pauseSave?.isActive == true
         serviceScope.cancel()
         runBlocking {
@@ -637,14 +646,15 @@ class TtsRoadMediaService : MediaLibraryService() {
             .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
             .firstOrNull()
 
-        when (classifyPlaybackError(error.errorCode, httpFailure?.responseCode)) {
+        val failure = classifyPlaybackError(error.errorCode, httpFailure?.responseCode)
+        transientRetry.onFailure(error, failure is PlaybackFailure.Transient)
+        when (failure) {
             PlaybackFailure.Unauthorized -> {
                 // Same conclusion as a 401 on an API call: the stored token cannot be used again,
                 // so drop it and let the session observer fall back to the login screen. Retrying
                 // would just burn battery against a server that will keep saying no.
                 retryJob?.cancel()
                 retryAttempt = 0
-                lastFailureTransient = false
                 // Bearer-authenticated /audio/... requests carry the same structured 401 body as
                 // the JSON API, so go through the repository rather than clearing the token here:
                 // that is what carries the reason to the login screen instead of dropping the user
@@ -667,25 +677,19 @@ class TtsRoadMediaService : MediaLibraryService() {
                 }
             }
 
-            is PlaybackFailure.Transient -> {
-                lastFailureTransient = true
-                scheduleRetry()
-            }
-
-            is PlaybackFailure.Permanent -> {
+            // Retried by transientRetry, above; the backoff here is only for a rotated credential.
+            is PlaybackFailure.Transient, is PlaybackFailure.Permanent -> {
                 retryJob?.cancel()
                 retryAttempt = 0
-                lastFailureTransient = false
             }
         }
     }
 
     /**
-     * Re-prepare after a backoff so a tunnel or a Wi-Fi handover heals without the user touching
-     * anything. Deliberately does not call play(): prepare() resumes on its own when playWhenReady
-     * was set, so a stream that died while paused stays paused.
+     * Run [recover] after the fast backoff, for a rejected credential that a rotation may already
+     * have replaced. Transient stream failures go through [transientRetry] instead.
      */
-    private fun scheduleRetry(recover: suspend () -> Unit = { player.prepare() }) {
+    private fun scheduleRetry(recover: suspend () -> Unit) {
         val delayMs = retryDelayMs(retryAttempt + 1) ?: return
         retryAttempt++
         retryJob?.cancel()
@@ -693,18 +697,6 @@ class TtsRoadMediaService : MediaLibraryService() {
             delay(delayMs)
             recover()
         }
-    }
-
-    /**
-     * A network came back. If the player gave up on a transient failure while it was meant to be
-     * playing, start over: a fresh backoff and an immediate prepare, which resumes at the position
-     * the player stopped at.
-     */
-    private fun recoverAfterNetworkReturn() {
-        if (!shouldRecoverOnNetworkReturn(player, lastFailureTransient)) return
-        retryJob?.cancel()
-        retryAttempt = 0
-        player.prepare()
     }
 
     private fun startProgressTicker() {
@@ -1251,7 +1243,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     private suspend fun library(): LibraryResponse? {
         // Android Auto can start the service in a fresh process without MainActivity having run
         // capability discovery. Do it here once so the car benefits from delta sync too.
-        if (repository.currentCapabilities.value.advertised.isEmpty()) {
+        // Only needed for a delta, and a fresh process has no baseline to be sparse against, so
+        // skipping it keeps a round trip off the cold-start resume path (#483).
+        if (lastLibrary != null && lastLibraryCursor != null &&
+            repository.currentCapabilities.value.advertised.isEmpty()
+        ) {
             repository.refreshCurrentCapabilities()
         }
         val session = librarySessionGeneration
@@ -1290,18 +1286,27 @@ class TtsRoadMediaService : MediaLibraryService() {
                 val key = historyAccountKey(tokenStore.current())
                 withContext(Dispatchers.IO) { librarySnapshots.write(key, loaded) }
             }
-        } else if (lastLibrary == null) {
-            // A fresh process with no network: last time's library rather than nothing, so the car
-            // can still browse and resume (#327). No cursor, so the next load that works is a full one.
-            val keys = historyAccountKeys(tokenStore.current())
-            val stored = withContext(Dispatchers.IO) { librarySnapshots.read(keys.firstOrNull(), keys) }
-            if (stored != null && sessionStillCurrent(session)) {
-                searchCacheGeneration++
-                lastLibrary = stored.library
-                lastLibraryCursor = null
-            }
+        } else {
+            savedLibrary()
         }
         return loaded ?: lastLibrary
+    }
+
+    /**
+     * The library on disk when this process has none yet: last time's rather than nothing, so the
+     * car can still browse and resume (#327). No cursor, so the next load that works is a full one.
+     */
+    private suspend fun savedLibrary(): LibraryResponse? {
+        if (lastLibrary != null) return lastLibrary
+        val session = librarySessionGeneration
+        val keys = historyAccountKeys(tokenStore.current())
+        val stored = withContext(Dispatchers.IO) { librarySnapshots.read(keys.firstOrNull(), keys) }
+        if (stored != null && sessionStillCurrent(session)) {
+            searchCacheGeneration++
+            lastLibrary = stored.library
+            lastLibraryCursor = null
+        }
+        return lastLibrary
     }
 
     /**
@@ -1316,11 +1321,38 @@ class TtsRoadMediaService : MediaLibraryService() {
         return live.isLoggedIn && (live.serverUrl to live.username) == lastSessionIdentity
     }
 
-    private suspend fun fictionChapters(fictionId: Int): Pair<FictionSummary, List<ChapterSummary>>? {
-        val response = runCatching {
-            repository.chapters(fictionId = fictionId, playableOnly = true)
-        }.getOrNull() ?: return null
-        return response.fiction to response.chapters
+    /**
+     * [allowSaved] false is for resuming: the saved list would build a streaming queue offline, and
+     * resume must instead fall to [offlineResumeQueue], which keeps only downloaded audio (#483).
+     */
+    private suspend fun fictionChapters(
+        fictionId: Int,
+        allowSaved: Boolean = true,
+    ): Pair<FictionSummary, List<ChapterSummary>>? {
+        val generation = librarySessionGeneration
+        val keys = historyAccountKeys(tokenStore.current())
+        return chaptersOrSaved(
+            allowSaved = allowSaved,
+            fetch = {
+                runCatching { repository.chapters(fictionId = fictionId, playableOnly = true) }.getOrNull()
+                    ?.also { response ->
+                        // A sign-out mid-fetch has already cleared the store; writing now would recreate it.
+                        if (sessionStillCurrent(generation)) {
+                            withContext(Dispatchers.IO) {
+                                chapterLists.write(keys.firstOrNull(), fictionId, playableOnly = true, response = response)
+                            }
+                        }
+                    }?.let { it.fiction to it.chapters }
+            },
+            // No network: the list saved by an earlier visit, so the car's folder is not empty (#486).
+            // The app's full list is used when the playable-only one was never saved; unplayable rows are dropped.
+            saved = {
+                withContext(Dispatchers.IO) {
+                    chapterLists.read(keys.firstOrNull(), fictionId, playableOnly = true, formerKeys = keys)
+                        ?: chapterLists.read(keys.firstOrNull(), fictionId, playableOnly = false, formerKeys = keys)
+                }?.let { it.response.fiction to it.response.chapters.filter { chapter -> chapter.playable } }
+            },
+        )
     }
 
     /**
@@ -1333,8 +1365,9 @@ class TtsRoadMediaService : MediaLibraryService() {
         fictionId: Int,
         startChapterId: Int?,
         session: Long = librarySessionGeneration,
+        allowSaved: Boolean = true,
     ): MediaSession.MediaItemsWithStartPosition? {
-        val (fiction, chapters) = fictionChapters(fictionId) ?: return null
+        val (fiction, chapters) = fictionChapters(fictionId, allowSaved) ?: return null
         val serverUrl = serverUrl()
         // Null asks for the fiction's own resume point: a fiction played as a whole (#328).
         val resolvedStart = startChapterId
@@ -1422,18 +1455,29 @@ class TtsRoadMediaService : MediaLibraryService() {
     /** The queue to resume when the car (or a media button) asks to play with nothing loaded. */
     private suspend fun resumeQueue(): MediaSession.MediaItemsWithStartPosition? {
         val session = librarySessionGeneration
-        val library = afterPendingProgress(
-            flush = { progressSync.flush() },
-            read = { library() },
-        ) ?: return null
-        // First is the most recently heard: the server sorts continue_listening by last listening
-        // activity, newest first (build.md, "continue_listening[]"). The items carry no documented
-        // timestamp to re-sort on, so the server's order is the contract (#330).
-        val chapter = library.continueListening.firstOrNull() ?: return null
-        val fictionId = chapter.resolvedFictionId.takeIf { it > 0 } ?: return null
-        buildFictionQueue(fictionId, chapter.resolvedChapterId, session)?.let { return it }
-        if (!sessionStillCurrent(session)) return null
-        return offlineResumeQueue(chapter, library)
+        // On weak signal each network call waits up to its own connect/read timeout, one after the
+        // other; the car would show a spinner for a minute. Past the deadline, serve what is on disk (#483).
+        return withinResumeDeadline(
+            deadlineMs = ResumeDeadlineMs,
+            online = {
+                val library = afterPendingProgress(
+                    flush = { progressSync.flush() },
+                    read = { library() },
+                )
+                // First is the most recently heard: the server sorts continue_listening by last
+                // listening activity, newest first (build.md, "continue_listening[]"). The items
+                // carry no documented timestamp to re-sort on, so the server's order is the contract (#330).
+                val chapter = library?.continueListening?.firstOrNull()
+                val fictionId = chapter?.resolvedFictionId?.takeIf { it > 0 }
+                if (fictionId == null) null else buildFictionQueue(fictionId, chapter.resolvedChapterId, session, allowSaved = false)
+            },
+            offline = {
+                val library = savedLibrary() ?: return@withinResumeDeadline null
+                val chapter = library.continueListening.firstOrNull() ?: return@withinResumeDeadline null
+                if (chapter.resolvedFictionId <= 0 || !sessionStillCurrent(session)) null
+                else offlineResumeQueue(chapter, library)
+            },
+        )
     }
 
     /**
@@ -1460,6 +1504,9 @@ class TtsRoadMediaService : MediaLibraryService() {
                 serverUrl = serverUrl(),
                 isDownloaded = { known[it]?.state == ChapterDownloadState.Downloaded },
                 note = note,
+                pendingPositionSeconds = pendingProgress.pendingFor(tokenStore.current())
+                    .filter { it.chapterId == chapter.resolvedChapterId }
+                    .maxByOrNull { it.recordedAtMillis }?.positionSeconds,
             )
         ) {
             is OfflineResume.Play ->
@@ -1824,7 +1871,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             TtsRoadMediaItems.folder(
                 mediaId = TtsRoadMediaIds.Recent,
                 title = "Recent",
-                subtitle = "Latest ready chapters",
+                subtitle = "Newest chapters, with their book",
             ),
         )
 
@@ -1841,10 +1888,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
             if (!service.sessionStillCurrent(session)) return emptyList()
-            return library.continueListening.mapNotNull { chapter ->
-                val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl, crossFiction = true)
-            }
+            return TtsRoadMediaItems.crossFictionRows(library.continueListening, library.fictions, serverUrl)
         }
 
         private suspend fun fictionFolders(): List<MediaItem> {
@@ -1860,10 +1904,7 @@ class TtsRoadMediaService : MediaLibraryService() {
             val library = service.library() ?: return emptyList()
             val serverUrl = service.serverUrl()
             if (!service.sessionStillCurrent(session)) return emptyList()
-            return library.recentChapters.mapNotNull { chapter ->
-                val fiction = chapter.fiction ?: library.fictions.firstOrNull { it.id == chapter.resolvedFictionId }
-                TtsRoadMediaItems.chapter(chapter, fiction, serverUrl, crossFiction = true)
-            }
+            return TtsRoadMediaItems.crossFictionRows(library.recentChapters, library.fictions, serverUrl)
         }
 
         private suspend fun fictionChildren(parentId: String): List<MediaItem> {

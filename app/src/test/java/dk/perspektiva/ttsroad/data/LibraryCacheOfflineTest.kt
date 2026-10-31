@@ -25,6 +25,7 @@ class LibraryCacheOfflineTest {
     private lateinit var server: MockWebServer
     private val dir = Files.createTempDirectory("library-cache-offline").toFile()
     private val snapshots = LibrarySnapshotStore(File(dir, LibrarySnapshotStore.FileName))
+    private val chapterLists = ChapterListStore(File(dir, ChapterListStore.DirName))
 
     @Before
     fun setUp() {
@@ -45,6 +46,7 @@ class LibraryCacheOfflineTest {
             FakeSessionStore(SessionState(serverUrl = server.url("/").toString(), token = "token")),
         ),
         snapshots = snapshots,
+        chapterLists = chapterLists,
         accountKey = { account },
     )
 
@@ -83,6 +85,44 @@ class LibraryCacheOfflineTest {
         val offlineCache = cache(account = "account-b")
         server.shutdown()
         val offline = offlineCache.refreshAndSettle()
+
+        assertNull(offline.value)
+        assertNotNull(offline.error)
+    }
+
+    private fun LibraryCache.refreshChaptersAndSettle(): Cached<List<ChapterSummary>> {
+        refreshChapters(7)
+        return runBlocking { withTimeout(10_000) { chapters(7).first { !it.isRefreshing } } }
+    }
+
+    private fun chaptersJson() = MockResponse()
+        .setHeader("Content-Type", "application/json")
+        .setBody(
+            """{"fiction":{"id":7,"title":"Book"},"total":1,"server_time":"t1",
+               "chapters":[{"id":70,"fiction_id":7,"title":"One","playable":true}]}""",
+        )
+
+    @Test
+    fun `chapters that loaded are saved, and a cold start offline lists them with a notice`() {
+        server.enqueue(chaptersJson())
+        assertNull(cache().refreshChaptersAndSettle().error)
+
+        val offlineCache = cache()
+        server.shutdown()
+        val offline = offlineCache.refreshChaptersAndSettle()
+
+        assertEquals(listOf(70), offline.value?.map { it.resolvedChapterId })
+        assertTrue(offline.error.orEmpty().startsWith("Saved copy from "))
+    }
+
+    @Test
+    fun `another account starting offline gets the chapter error, not the saved list`() {
+        server.enqueue(chaptersJson())
+        cache().refreshChaptersAndSettle()
+
+        val offlineCache = cache(account = "account-b")
+        server.shutdown()
+        val offline = offlineCache.refreshChaptersAndSettle()
 
         assertNull(offline.value)
         assertNotNull(offline.error)
