@@ -16,6 +16,7 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
 - Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
   "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP
   status. (#481)

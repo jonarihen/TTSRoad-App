@@ -126,6 +126,20 @@ class PlayedThresholdTest {
     }
 
     @Test
+    fun `sleep timer defers threshold and queue end marks without bypassing account preference`() {
+        for (enabled in listOf(true, false)) {
+            for (position in listOf(1_152_000L, twentyMinutesMs - 1L, twentyMinutesMs)) {
+                for (ended in listOf(true, false)) {
+                    assertFalse(PlayedThreshold.reached(position, twentyMinutesMs, enabled, ended,
+                        deferForSleepTimer = true))
+                }
+            }
+        }
+        assertTrue(PlayedThreshold.reached(twentyMinutesMs, twentyMinutesMs, true, queueEnded = true))
+        assertFalse(PlayedThreshold.reached(twentyMinutesMs, twentyMinutesMs, false, queueEnded = true))
+    }
+
+    @Test
     fun `a position past the end still counts as played`() {
         // The player can report a position a shade beyond the duration at STATE_ENDED.
         assertTrue(PlayedThreshold.reached(hourMs + 50L, hourMs, autoMarkEnabled = true))
