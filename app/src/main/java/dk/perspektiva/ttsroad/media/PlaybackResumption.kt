@@ -4,7 +4,6 @@ import androidx.media3.common.MediaItem
 import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.widget.NowPlayingSnapshot
-import dk.perspektiva.ttsroad.player.PlayedThreshold
 
 /**
  * Read where to resume only once the offline progress backlog has had its chance (#314).
@@ -58,12 +57,6 @@ internal fun offlineResume(
         ?.takeIf { it.chapterId > 0 && it.chapterId == chapter.resolvedChapterId }
         ?.positionMs
         ?.takeIf { it > 0L }
-        ?.let { position ->
-            val duration = note.durationMs.takeIf { it > 0L }
-                ?: chapter.audioDuration?.takeIf { it > 0.0 }?.let { (it * 1000).toLong() }
-            if (chapter.resolvedIsPlayed || (duration != null && position >= duration - PlayedThreshold.TailMs)) 0L
-            else position
-        }
     val fromLibrary = chapter.startPositionSeconds.takeIf { it > 0.0 }?.let { (it * 1000).toLong() }
     return OfflineResume.Play(item, fromNote ?: fromLibrary ?: 0L)
 }

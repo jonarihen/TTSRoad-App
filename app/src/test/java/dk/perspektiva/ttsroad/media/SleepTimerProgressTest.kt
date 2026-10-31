@@ -126,6 +126,29 @@ class SleepTimerProgressTest {
     }
 
     @Test
+    fun `a timer stop saves nothing for the chapter, and moving on afterwards counts it played`() {
+        val player = TimerStopPlayer()
+        val timer = SleepTimerController().apply { armEndOfChapter(20_000L) }
+        val progress = SleepTimerProgress(player, timer)
+        player.addListener(progress)
+        val departed = mutableListOf<Pair<String, Boolean>>()
+        player.addListener(DepartingChapterProgressListener(player) { item, position, duration, completed ->
+            departed += item.mediaId to PlayedThreshold.reached(
+                position, duration, true, completed, progress.deferPlayedMark(item),
+            )
+        })
+        timer.tick(0L, true, 20_000L)
+        player.boundary(false)
+        assertEquals(SleepTimerAction.Expire, timer.tick(20_000L, false, 0L))
+        progress.expired()
+        player.pause()
+        assertTrue("the timer stop is not a departure", departed.isEmpty())
+        player.play()
+        player.seekToNextMediaItem()
+        assertEquals(listOf("chapter:10" to true), departed)
+    }
+
+    @Test
     fun `duration timer expiry is recorded before pause and holds after disarm`() {
         val player = TimerStopPlayer()
         val timer = SleepTimerController().apply { armDuration(500L) }

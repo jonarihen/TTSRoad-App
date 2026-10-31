@@ -46,21 +46,6 @@ class OfflineResumeTest {
     }
 
     @Test
-    fun `a near-end unplayed chapter from a timer restarts offline instead of advancing immediately`() {
-        for (noteDuration in listOf(300_000L, 0L)) {
-            val stopped = chapter.copy(audioDuration = 300.0, playback = PlaybackInfo(positionSeconds = 300.0))
-            val next = ChapterSummary(id = 43, fictionId = 3, title = "Chapter 213")
-            val note = NowPlayingSnapshot(chapterId = 42, positionMs = 300_000L, durationMs = noteDuration)
-            val target = resumeChapterIn(listOf(stopped, next))!!
-            assertEquals(42, target.resolvedChapterId)
-            assertEquals(0.0, target.startPositionSeconds, 0.0)
-            val play = offlineResume(target, fiction, server, { true }, note) as OfflineResume.Play
-            assertEquals("chapter:42", play.item.mediaId)
-            assertEquals(0L, play.startPositionMs)
-        }
-    }
-
-    @Test
     fun `a note about another chapter is ignored`() {
         val note = NowPlayingSnapshot(mediaId = "chapter:7", fictionId = 3, chapterId = 7, positionMs = 130_000L)
 
