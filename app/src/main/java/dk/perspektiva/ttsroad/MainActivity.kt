@@ -1496,7 +1496,7 @@ internal fun LibraryScreen(
                                 onAction = cache::refreshLibrary,
                             )
                             if (library.continueListening.isEmpty()) {
-                                EmptyCard("No active chapters")
+                                EmptyCard("No active chapters", FindSomethingLabel, onBrowseFictions)
                             } else {
                                 val hero = library.continueListening.first()
                                 val heroFiction = fictionForChapter(hero)
@@ -1536,7 +1536,7 @@ internal fun LibraryScreen(
                                 onAction = { sortSheetOpen = true }.takeIf { library.fictions.isNotEmpty() },
                             )
                             if (library.fictions.isEmpty()) {
-                                EmptyCard("No fictions found")
+                                EmptyCard("No fictions found", FindSomethingLabel, onBrowseFictions)
                             } else {
                                 HorizontalFictionRail(
                                     fictions = sortedFictions,
@@ -10153,13 +10153,28 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
     }
 }
 
+internal const val FindSomethingLabel = "Find something to listen to"
+
 @Composable
-internal fun EmptyCard(message: String) {
+internal fun EmptyCard(
+    message: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
     AarisCard {
-        MetaText(
-            text = message,
-            modifier = Modifier.padding(16.dp),
-        )
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            MetaText(text = message)
+            // A new account lands here with nothing to resume: say where to find something (#508).
+            if (actionLabel != null && onAction != null) {
+                Button(
+                    onClick = onAction,
+                    shape = RectangleShape,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text(actionLabel)
+                }
+            }
+        }
     }
 }
 
