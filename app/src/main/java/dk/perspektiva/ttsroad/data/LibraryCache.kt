@@ -56,6 +56,8 @@ class LibraryCache(
     private val repository: TtsRoadRepository,
     /** Where a loaded library is kept for an offline cold start (#327). Null keeps it in memory only. */
     private val snapshots: LibrarySnapshotStore? = null,
+    /** Where each fiction's chapter list is kept for browsing offline (#486). Null keeps them in memory only. */
+    private val chapterLists: ChapterListStore? = null,
     /** The signed-in account's key for [snapshots]; null when signed out. */
     private val accountKey: suspend () -> String? = { null },
     /** Keys a snapshot of this same account may still carry (see `historyAccountKeys`). */
@@ -118,6 +120,21 @@ class LibraryCache(
         val key = accountKey() ?: return null
         val former = formerAccountKeys()
         return runCatching { withContext(Dispatchers.IO) { store.read(key, former) } }.getOrNull()
+    }
+
+    private suspend fun writeChapters(fictionId: Int, response: ChaptersResponse) {
+        val store = chapterLists ?: return
+        val key = accountKey() ?: return
+        withContext(Dispatchers.IO) { store.write(key, fictionId, playableOnly = false, response = response) }
+    }
+
+    private suspend fun readChapters(fictionId: Int): StoredChapters? {
+        val store = chapterLists ?: return null
+        val key = accountKey() ?: return null
+        val former = formerAccountKeys()
+        return runCatching {
+            withContext(Dispatchers.IO) { store.read(key, fictionId, playableOnly = false, formerKeys = former) }
+        }.getOrNull()
     }
 
     /** Load only if nothing has been loaded yet — the "opening this screen" path. */
@@ -363,12 +380,26 @@ class LibraryCache(
                         mergeChapterDelta(latest, response)
                     }
                     response.serverTime?.let { chapterCursors[fictionId] = it }
-                    chapters
+                    // The merged list, not the delta, is what a later offline open should see.
+                    response.copy(chapters = chapters, total = chapters.size, delta = false)
                 }
             }.fold(
-                onSuccess = { Cached(value = it) },
+                onSuccess = { response ->
+                    // runCatching swallows cancellation from clear(); don't write a signed-out list (#444).
+                    ensureActive()
+                    runCatching { writeChapters(fictionId, response) }
+                    Cached(value = response.chapters)
+                },
                 onFailure = { failure ->
-                    state.value.failedWith(failure, "Could not load chapters")
+                    val current = state.value
+                    if (current.hasContent) return@fold current.failedWith(failure, "Could not load chapters")
+                    // Nothing in memory, as on a cold start offline: the saved list, with the reason
+                    // it is not fresh shown above it (#486).
+                    val stored = readChapters(fictionId)
+                        ?: return@fold current.failedWith(failure, "Could not load chapters")
+                    current.copy(value = stored.response.chapters)
+                        .failedWith(failure, "Could not load chapters")
+                        .let { it.copy(error = storedLibraryNotice(stored.savedAt, it.error)) }
                 },
             )
             ensureActive()

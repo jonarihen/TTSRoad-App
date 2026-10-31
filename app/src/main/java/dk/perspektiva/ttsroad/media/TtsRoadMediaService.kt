@@ -51,6 +51,7 @@ import dk.perspektiva.ttsroad.data.ChapterSummary
 import dk.perspektiva.ttsroad.data.FictionSummary
 import dk.perspektiva.ttsroad.data.LibraryResponse
 import dk.perspektiva.ttsroad.download.ChapterDownloadState
+import dk.perspektiva.ttsroad.data.ChapterListStore
 import dk.perspektiva.ttsroad.data.LibrarySnapshotStore
 import dk.perspektiva.ttsroad.data.DefaultHeadsetButtonsSeek
 import dk.perspektiva.ttsroad.data.DefaultSkipIntervalMs
@@ -149,6 +150,7 @@ class TtsRoadMediaService : MediaLibraryService() {
     private lateinit var fictionSpeeds: FictionSpeedPreferences
     private lateinit var nowPlayingStore: NowPlayingStore
     private lateinit var librarySnapshots: LibrarySnapshotStore
+    private lateinit var chapterLists: ChapterListStore
     private var playbackSessionGeneration = 0L
     private var playbackSessionActive = false
 
@@ -245,6 +247,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         progressSync = ServiceLocator.progressSync(this)
         nowPlayingStore = NowPlayingStore(this)
         librarySnapshots = LibrarySnapshotStore(this)
+        chapterLists = ChapterListStore(this)
         // When the app's own discovery for the signed-in server succeeds (after a sign-in, or once
         // the network is back), a backlog that waited on it can go out without waiting for playback.
         serviceScope.launch {
@@ -1303,10 +1306,27 @@ class TtsRoadMediaService : MediaLibraryService() {
     }
 
     private suspend fun fictionChapters(fictionId: Int): Pair<FictionSummary, List<ChapterSummary>>? {
+        val generation = librarySessionGeneration
+        val keys = historyAccountKeys(tokenStore.current())
         val response = runCatching {
             repository.chapters(fictionId = fictionId, playableOnly = true)
-        }.getOrNull() ?: return null
-        return response.fiction to response.chapters
+        }.getOrNull()
+        if (response != null) {
+            // A sign-out mid-fetch has already cleared the store; writing now would recreate it.
+            if (sessionStillCurrent(generation)) {
+                withContext(Dispatchers.IO) {
+                    chapterLists.write(keys.firstOrNull(), fictionId, playableOnly = true, response = response)
+                }
+            }
+            return response.fiction to response.chapters
+        }
+        // No network: the list saved by an earlier visit, so the car's folder is not empty (#486).
+        // The app's full list is used when the playable-only one was never saved; unplayable rows are dropped.
+        val stored = withContext(Dispatchers.IO) {
+            chapterLists.read(keys.firstOrNull(), fictionId, playableOnly = true, formerKeys = keys)
+                ?: chapterLists.read(keys.firstOrNull(), fictionId, playableOnly = false, formerKeys = keys)
+        } ?: return null
+        return stored.response.fiction to stored.response.chapters.filter { it.playable }
     }
 
     /**
