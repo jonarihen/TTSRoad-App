@@ -2,6 +2,13 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- Chapter rows are keyed by chapter id instead of list position, so changing sort or filter on a
+  long fiction moves rows rather than recomposing all of them. (#510)
+
 ## 0.21.0 — 2026-10-17
 
 ### Fixed
