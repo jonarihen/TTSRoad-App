@@ -5260,6 +5260,11 @@ internal fun SettingsScreen(
                 ) {
                     Text("DELETE ALL DOWNLOADS")
                 }
+                DownloadsOverview(
+                    downloads = downloads,
+                    cache = remember { ServiceLocator.libraryCache(context) },
+                    onError = { deleteDownloadsError = it },
+                )
                 deleteDownloadsError?.let { MetaText(text = it, color = AarisColor.Danger) }
             }
         }
@@ -6692,7 +6697,7 @@ private fun DeviceDetail(label: String, value: String) {
 
 /** Square, orange-accented confirmation for the two irreversible actions on the devices screen. */
 @Composable
-private fun ConfirmDialog(
+internal fun ConfirmDialog(
     title: String,
     body: String,
     confirmLabel: String,

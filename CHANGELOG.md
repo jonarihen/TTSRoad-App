@@ -6,6 +6,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Settings > Offline lists what is downloaded per book, with DELETE PLAYED and DELETE ALL for each
+  book and one DELETE PLAYED DOWNLOADS across the library. (#497)
 - Jump back: each row shows the sentence being read at that moment (when the server has timed text),
   a long press on the history icon names it, and with no sleep timer the library banner estimates
   when you last touched the phone ("Last touched around") from the unbroken stretch of listening
