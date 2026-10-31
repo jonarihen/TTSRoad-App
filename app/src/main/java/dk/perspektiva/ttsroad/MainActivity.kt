@@ -1768,11 +1768,12 @@ private fun FictionScreen(
             emptyList()
         } else {
             // Last visit's list first, so the section does not pop in; the fetch below replaces it.
-            repository.peekBookmarks(fictionId = fiction.id)?.let { fictionBookmarks = it }
+            val seeded = repository.peekBookmarks(fictionId = fiction.id).orEmpty()
+            fictionBookmarks = seeded
             // A failure leaves the section absent, which is what it always was. Nothing to report:
             // this is not the list the user opened the screen for.
             runCatching { repository.bookmarks(fictionId = fiction.id).orEmpty() }
-                .getOrDefault(fictionBookmarks)
+                .getOrDefault(seeded)
         }
     }
 

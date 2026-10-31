@@ -123,11 +123,30 @@ class FeedsRepositoryTest {
 
         assertEquals("https://s/feed/ftok/ashes.xml", repository.feedUrlFor(7))
         assertEquals("https://s/feed/gtok/glass.xml", repository.feedUrlFor(8))
-        assertNull(repository.feedUrlFor(99))
 
         server.takeRequest()
         assertEquals("/api/mobile/feeds?scope=all", server.takeRequest().path)
         assertEquals(2, server.requestCount) // capabilities + one feeds call
+    }
+
+    @Test
+    fun `a fiction missing from the remembered list triggers one refetch`() = runTest {
+        val repository = repository()
+        server.enqueue(json("""{"scope": "all", "library": {}, "fictions": [{"fiction_id": 7, "feed_url": "u7"}]}"""))
+        server.enqueue(
+            json(
+                """{"scope": "all", "library": {}, "fictions": [{"fiction_id": 7, "feed_url": "u7"},
+                   {"fiction_id": 8, "feed_url": "u8"}]}""",
+            ),
+        )
+        server.enqueue(json("""{"scope": "all", "library": {}, "fictions": []}"""))
+
+        assertEquals("u7", repository.feedUrlFor(7))
+        assertEquals("u8", repository.feedUrlFor(8)) // added on the server since
+        assertEquals("u8", repository.feedUrlFor(8)) // now remembered
+        assertNull(repository.feedUrlFor(99)) // truly absent: one refetch, then null
+
+        assertEquals(4, server.requestCount) // capabilities + three feeds calls
     }
 
     @Test
