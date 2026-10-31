@@ -315,6 +315,9 @@ class NewChaptersUiTest {
         chapter = ChapterNotificationChapter(id = 1000 + id, title = "Chapter $id"),
     )
 
+    // Tall enough for both groups: each row carries a Details fold (#488), so at 640 dp the
+    // lazy list no longer composes the second header.
+    @Config(sdk = [34], qualifiers = "w320dp-h1000dp")
     @Test
     fun `rows group under their fiction and play new starts at the first chapter`() {
         val played = mutableListOf<Int>()
