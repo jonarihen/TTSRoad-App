@@ -46,17 +46,27 @@ val ChapterNotificationEntry.canRetryConversion: Boolean
 fun ChapterNotificationEntry.notificationBody(): String =
     message?.takeIf { it.isNotBlank() } ?: chapter.title
 
-/** "Chapter 412 · converting 62%", or what happened instead. */
+/** "Chapter 412 · getting ready 62%", or what happened instead — in a listener's words (#488). */
 fun ChapterNotificationEntry.detailLabel(): String {
     val chapterLabel = chapter.chapterNumber?.let { "Chapter ${chapterNumberText(it)}" } ?: chapter.title
     val state = when (presentation) {
         ChapterNotificationState.Ready -> "ready to listen"
-        ChapterNotificationState.Stalled -> "conversion failed"
+        ChapterNotificationState.Stalled -> "couldn't prepare this chapter"
         ChapterNotificationState.Dismissed -> "dismissed"
-        ChapterNotificationState.Pulled -> chapter.ttsProgress?.let { "converting $it%" } ?: "converting"
+        ChapterNotificationState.Pulled -> chapter.ttsProgress?.let { "getting ready $it%" } ?: "getting ready…"
     }
     return "$chapterLabel  ·  $state"
 }
+
+/**
+ * The server's own words for this notice, for whoever runs it (#488): the notice and chapter
+ * states [detailLabel] translates, and the conversion percentage.
+ */
+fun ChapterNotificationEntry.rawStateDetail(): String = listOfNotNull(
+    "Notice: $state",
+    chapter.status?.let { "Chapter status: $it" },
+    chapter.ttsProgress?.let { "Converted: $it%" },
+).joinToString("\n")
 
 /**
  * Which notices have *become* ready since [alreadySeen], and the set to remember next time.
@@ -93,14 +103,14 @@ fun readyNotificationText(fresh: List<ChapterNotificationEntry>): Pair<String, S
     fresh.isEmpty() -> null
     fresh.size == 1 -> {
         val item = fresh.single()
-        item.fiction.title to item.notificationBody()
+        "New chapter ready: ${item.fiction.title}" to item.notificationBody()
     }
-    else -> {
-        val serials = fresh.map { it.fiction.title }.distinct()
-        val where = if (serials.size == 1) serials.single() else "${serials.size} serials"
-        "${fresh.size} chapters ready" to "New audio in $where"
-    }
+    else -> "${fresh.size} chapters ready to listen" to readySerialLines(fresh).joinToString(", ")
 }
+
+/** One "Serial (n)" line per serial in [fresh], in first-seen order, for the expanded notification. */
+fun readySerialLines(fresh: List<ChapterNotificationEntry>): List<String> =
+    fresh.groupBy { it.fiction.title }.map { (title, rows) -> if (rows.size == 1) title else "$title (${rows.size})" }
 
 /** Rows worth drawing. Dismissed ones are not requested, but a stale list can still hold one. */
 fun visibleNotifications(
