@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import android.content.Context
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
@@ -44,10 +45,10 @@ internal fun NotificationRationaleDialog(onAllow: () -> Unit, onNotNow: () -> Un
         title = { Text("Playback controls and new chapters") },
         text = { Text(NotificationRationaleText) },
         confirmButton = {
-            TextButton(onClick = onAllow, shape = RectangleShape) { Text("CONTINUE") }
+            TextButton(onClick = onAllow, shape = RectangleShape) { Text(labelCase("Continue")) }
         },
         dismissButton = {
-            TextButton(onClick = onNotNow, shape = RectangleShape) { Text("NOT NOW") }
+            TextButton(onClick = onNotNow, shape = RectangleShape) { Text(labelCase("Not now")) }
         },
     )
 }

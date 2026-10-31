@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -58,16 +59,16 @@ internal fun UpdateOverlay(
                 onDismissRequest = { explainingInstall = false },
                 shape = RectangleShape,
                 containerColor = AarisColor.BgRaise,
-                title = { Text("ALLOW UPDATES", style = MaterialTheme.typography.titleLarge) },
+                title = { Text(labelCase("Allow updates"), style = MaterialTheme.typography.titleLarge) },
                 text = { Text(InstallPermissionExplanation, style = MaterialTheme.typography.bodyMedium) },
                 confirmButton = {
                     Button(onClick = { onDownload(state.release) }, shape = RectangleShape) {
-                        Text("CONTINUE")
+                        Text(labelCase("Continue"))
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { explainingInstall = false }, shape = RectangleShape) {
-                        Text("BACK")
+                        Text(labelCase("Back"))
                     }
                 },
             )
@@ -84,7 +85,7 @@ internal fun UpdateOverlay(
         is UpdateState.Downloading -> AlertDialog(
             onDismissRequest = {},
             containerColor = AarisColor.BgRaise,
-            title = { Text("DOWNLOADING UPDATE", style = MaterialTheme.typography.titleLarge) },
+            title = { Text(labelCase("Downloading update"), style = MaterialTheme.typography.titleLarge) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     LinearProgressIndicator(
@@ -98,7 +99,7 @@ internal fun UpdateOverlay(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("CANCEL") }
+                TextButton(onClick = onDismiss) { Text(labelCase("Cancel")) }
             },
         )
 
@@ -108,7 +109,7 @@ internal fun UpdateOverlay(
             onDismissRequest = onDismiss,
             shape = RectangleShape,
             containerColor = AarisColor.BgRaise,
-            title = { Text("UPDATE NOT INSTALLED", style = MaterialTheme.typography.titleLarge) },
+            title = { Text(labelCase("Update not installed"), style = MaterialTheme.typography.titleLarge) },
             text = { Text(state.message, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 Button(onClick = onDismiss, shape = RectangleShape) { Text("OK") }
@@ -137,7 +138,7 @@ private fun UpdateAvailableDialog(
     AlertDialog(
         onDismissRequest = onLater,
         containerColor = AarisColor.BgRaise,
-        title = { Text("UPDATE AVAILABLE", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(labelCase("Update available"), style = MaterialTheme.typography.titleLarge) },
         text = {
             // Bounded and scrollable rather than truncated. Release notes are the only thing
             // in this dialog that says what the install actually changes, and `take(400)` cut
@@ -160,7 +161,7 @@ private fun UpdateAvailableDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     TextButton(onClick = { showDetails = !showDetails }, shape = RectangleShape) {
-                        Text(if (showDetails) "HIDE DETAILS" else "WHAT CHANGED IN DETAIL")
+                        Text(if (showDetails) labelCase("Hide details") else labelCase("What changed in detail"))
                     }
                 }
                 if (showDetails && notes.details.isNotBlank()) {
@@ -178,13 +179,13 @@ private fun UpdateAvailableDialog(
         },
         confirmButton = {
             Button(onClick = onDownload, shape = RectangleShape) {
-                Text("DOWNLOAD & INSTALL")
+                Text(labelCase("Download & install"))
             }
         },
         dismissButton = {
             // Two children of the dialog's flowing button row, so they wrap on a narrow phone.
-            TextButton(onClick = onSkip, shape = RectangleShape) { Text("SKIP THIS VERSION") }
-            TextButton(onClick = onLater, shape = RectangleShape) { Text("LATER") }
+            TextButton(onClick = onSkip, shape = RectangleShape) { Text(labelCase("Skip this version")) }
+            TextButton(onClick = onLater, shape = RectangleShape) { Text(labelCase("Later")) }
         },
     )
 }

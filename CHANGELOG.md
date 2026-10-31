@@ -11,6 +11,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- Readable text is on by default when the system font scale is 130 % or more (turning it off still
+  sticks), its own switch label is always readable, and every hard-coded capitals label now follows
+  the setting. (#491)
 - Android Auto: Continue Listening and Recent show at most 20 rows (newest first) instead of
   leaving the cut to the head unit, and the Recent folder says its rows name the book. (#499)
 

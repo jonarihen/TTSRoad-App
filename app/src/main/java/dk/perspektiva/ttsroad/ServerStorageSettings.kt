@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -192,7 +193,7 @@ internal fun ServerStorageSection(
                 modifier = Modifier.heightIn(min = MinTouchTargetSize),
                 shape = RectangleShape,
             ) {
-                Text("REFRESH")
+                Text(labelCase("Refresh"))
             }
         }
     }

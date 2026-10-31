@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
@@ -117,7 +118,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                 enabled = !busy,
                 shape = RectangleShape,
             ) {
-                Text("CHANGE PASSWORD")
+                Text(labelCase("Change password"))
             }
 
             HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
@@ -145,7 +146,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                         enabled = !busy,
                         shape = RectangleShape,
                     ) {
-                        Text("NEW CODES")
+                        Text(labelCase("New codes"))
                     }
                     OutlinedButton(
                         onClick = {
@@ -156,7 +157,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                         shape = RectangleShape,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AarisColor.Danger),
                     ) {
-                        Text("TURN OFF")
+                        Text(labelCase("Turn off"))
                     }
                 }
             } else if (status != null) {
@@ -181,7 +182,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                     enabled = !busy,
                     shape = RectangleShape,
                 ) {
-                    Text("SET UP 2FA")
+                    Text(labelCase("Set up 2FA"))
                 }
             }
 
@@ -235,10 +236,10 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                             localBusy = false
                         }
                     },
-                ) { Text("CHANGE") }
+                ) { Text(labelCase("Change")) }
             },
             dismissButton = {
-                TextButton(onClick = { showPassword = false }, enabled = !busy) { Text("CANCEL") }
+                TextButton(onClick = { showPassword = false }, enabled = !busy) { Text(labelCase("Cancel")) }
             },
         )
     }
@@ -270,7 +271,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                                 }
                             },
                             shape = RectangleShape,
-                        ) { Text("OPEN AUTHENTICATOR") }
+                        ) { Text(labelCase("Open authenticator")) }
                     }
                     MetaText(text = "Manual key")
                     Text(provisional.secret)
@@ -296,10 +297,10 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                         error = null
                         recoveryCodesOwner.enable(authenticationCode)
                     },
-                ) { Text("ENABLE") }
+                ) { Text(labelCase("Enable")) }
             },
             dismissButton = {
-                TextButton(onClick = { setup = null }, enabled = !busy) { Text("CANCEL") }
+                TextButton(onClick = { setup = null }, enabled = !busy) { Text(labelCase("Cancel")) }
             },
         )
     }
@@ -325,13 +326,13 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                         error = null
                         recoveryCodesOwner.reissue()
                     },
-                ) { Text("REPLACE") }
+                ) { Text(labelCase("Replace")) }
             },
             dismissButton = {
                 TextButton(
                     onClick = { showReissueConfirmation = false },
                     enabled = !busy,
-                ) { Text("CANCEL") }
+                ) { Text(labelCase("Cancel")) }
             },
         )
     }
@@ -427,10 +428,10 @@ internal fun DisableTwoFactorDialog(
             TextButton(
                 enabled = !busy && password.isNotBlank() && code.isNotBlank(),
                 onClick = { onDisable(password, code.trim()) },
-            ) { Text("TURN OFF") }
+            ) { Text(labelCase("Turn off")) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !busy) { Text("CANCEL") }
+            TextButton(onClick = onDismiss, enabled = !busy) { Text(labelCase("Cancel")) }
         },
     )
 }
@@ -455,11 +456,11 @@ internal fun RecoveryCodesDialog(owner: RecoveryCodesOwner) {
                     OutlinedButton(
                         onClick = { shareRecoveryCodes(context, codes) },
                         shape = RectangleShape,
-                    ) { Text("SHARE A COPY") }
+                    ) { Text(labelCase("Share a copy")) }
                 }
             },
             confirmButton = {
-                TextButton(onClick = owner::acknowledge) { Text("I SAVED THEM") }
+                TextButton(onClick = owner::acknowledge) { Text(labelCase("I saved them")) }
             },
         )
     }

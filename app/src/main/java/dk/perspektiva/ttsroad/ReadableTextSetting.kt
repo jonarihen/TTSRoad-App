@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import dk.perspektiva.ttsroad.ui.LocalReadableText
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -27,6 +29,8 @@ import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
  */
 @Composable
 internal fun ReadableTextSetting(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
+    // The switch that turns readable text on is itself always drawn readably (#491).
+    CompositionLocalProvider(LocalReadableText provides true) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -54,5 +58,6 @@ internal fun ReadableTextSetting(enabled: Boolean, onEnabledChange: (Boolean) ->
             checked = enabled,
             onCheckedChange = null,
         )
+    }
     }
 }

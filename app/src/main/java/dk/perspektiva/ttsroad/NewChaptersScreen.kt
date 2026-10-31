@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -133,7 +134,7 @@ internal fun NewChaptersScreen(
             visibleError?.let {
                 Text(it, color = MaterialTheme.colorScheme.error)
                 TextButton(onClick = { actionError = null; refresh() }, enabled = !state.isLoading) {
-                    Text("RETRY")
+                    Text(labelCase("Retry"))
                 }
             }
 
@@ -281,7 +282,7 @@ private fun NewChapterRow(
                             enabled = !busy,
                             shape = RectangleShape,
                             modifier = Modifier.heightIn(min = MinTouchTargetSize),
-                        ) { Text(if (busy) "WORKING" else "CONVERT AGAIN") }
+                        ) { Text(if (busy) labelCase("Working") else labelCase("Convert again")) }
                     }
                     if (entry.playable) {
                         OutlinedButton(
@@ -289,7 +290,7 @@ private fun NewChapterRow(
                             enabled = !busy,
                             shape = RectangleShape,
                             modifier = Modifier.heightIn(min = MinTouchTargetSize),
-                        ) { Text(if (busy) "WORKING" else "PLAY") }
+                        ) { Text(if (busy) labelCase("Working") else labelCase("Play")) }
                     }
                     if (entry.dismissible) {
                         OutlinedButton(
@@ -297,7 +298,7 @@ private fun NewChapterRow(
                             enabled = !busy,
                             shape = RectangleShape,
                             modifier = Modifier.heightIn(min = MinTouchTargetSize),
-                        ) { Text(if (busy) "WORKING" else "DISMISS") }
+                        ) { Text(if (busy) labelCase("Working") else labelCase("Dismiss")) }
                     }
                 }
             }

@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad
 
+import dk.perspektiva.ttsroad.ui.labelCase
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -172,7 +173,7 @@ internal fun AccountStatsSection(
                     color = AarisColor.Danger,
                 )
                 OutlinedButton(onClick = onRetry, shape = RectangleShape) {
-                    Text("RETRY")
+                    Text(labelCase("Retry"))
                 }
             }
         }
