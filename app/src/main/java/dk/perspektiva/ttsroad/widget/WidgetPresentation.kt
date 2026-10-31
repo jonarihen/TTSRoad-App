@@ -126,7 +126,13 @@ fun remainingLabel(remainingMs: Long): String {
 }
 
 /** The two skip buttons' text, e.g. "−15" and "+15". */
-data class SkipButtonLabels(val back: String, val forward: String)
+data class SkipButtonLabels(
+    val back: String,
+    val forward: String,
+    /** What a screen reader says: "\u221230" is read as "minus 30" or not at all (#493). */
+    val backDescription: String = "",
+    val forwardDescription: String = "",
+)
 
 /**
  * Label the skips with the configured interval rather than a fixed 30 (#335).
@@ -137,7 +143,12 @@ data class SkipButtonLabels(val back: String, val forward: String)
  */
 fun skipButtonLabels(skipIntervalMs: Long): SkipButtonLabels {
     val seconds = (skipIntervalMs / 1000).coerceAtLeast(1L)
-    return SkipButtonLabels(back = "\u2212$seconds", forward = "+$seconds")
+    return SkipButtonLabels(
+        back = "\u2212$seconds",
+        forward = "+$seconds",
+        backDescription = "Skip back $seconds seconds",
+        forwardDescription = "Skip forward $seconds seconds",
+    )
 }
 
 /**

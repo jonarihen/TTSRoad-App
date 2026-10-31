@@ -6,6 +6,15 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Diagnostics: inline errors (feeds, backups, exports, bookmarks, queue, sessions and more) and the
+  address check now fold the raw text under Details; Settings > About has COPY DIAGNOSTICS (app,
+  Android, server version, capabilities, last error; no token, server address redacted); each server
+  log line has COPY LINE and selectable text. (#506)
+- Updates: failures read in plain words (rate-limited, not found, no connection) instead of "GitHub
+  returned 403"; the update dialog always opens with one plain line and keeps the changelog behind
+  WHAT CHANGED IN DETAIL; Settings > About shows the SHA-256 of the certificate this install is
+  signed with. (#507)
+- Stats has a range picker (4, 12, 26 or 52 weeks) for the activity grid. (#514)
 - Settings: "Arm the sleep timer automatically after" 21:00-00:00. Starting playback from then until
   05:00 arms the default timer, once a night. (#503)
 - Release builds can trust user-installed CAs for named hosts only, set at build time with
@@ -37,6 +46,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- The jump-back log keeps three days of listening instead of the last 2,000 positions (about eight
+  hours), and the Stats count is worded to match. (#514)
 - Opening a fiction no longer refetches the whole feed list (fetched once per session) and paints
   its bookmarks, the Bookmarks screen and the Stats screen from the last visit while they refresh
   behind it. (#509)
@@ -52,6 +63,9 @@ Notable changes to the TTSRoad Android client.
 - Accessibility: the password can be shown, a failed sign-in marks the fields as errors, refresh errors
   are announced, shelf tiles are buttons that read "3 of 40 chapters ready", the buffering bar is
   labelled, grid card titles get two lines and tag chips have 48 dp targets. (#494)
+- TalkBack: screen titles, section headers and `//` kickers are headings, and the time labels, speed
+  and sleep-timer buttons and the widget skip buttons are spoken in words ("28 minutes left",
+  "Speed 1.5 times", "Skip back 30 seconds"). (#492, #493)
 - Home-screen widget buttons are at least 48 dp tall, share the row evenly and use 14 sp text, so
   they are easier to hit one-handed in the dark. (#501)
 - Error messages no longer assume you run the server: certificate, HTTPS, "update the backend" and

@@ -105,7 +105,7 @@ class UpdateManager(
             _state.value = UpdateState.Idle
             throw e
         } catch (e: Exception) {
-            _state.value = if (manual) UpdateState.Failed(e.message ?: "Update check failed") else UpdateState.Idle
+            _state.value = if (manual) UpdateState.Failed(friendlyUpdateError(e, "Update check failed")) else UpdateState.Idle
             return
         }
         _state.value = when {
@@ -147,7 +147,7 @@ class UpdateManager(
                         _state.value = if (e is CancellationException || !attempt.job.isActive) {
                             UpdateState.Idle
                         } else {
-                            UpdateState.Failed(e.message ?: "Download failed")
+                            UpdateState.Failed(friendlyUpdateError(e, "Download failed"))
                         }
                     }
                 }
@@ -210,7 +210,7 @@ class UpdateManager(
             .build()
         client.newCall(request).execute().use { response ->
             if (response.code == 404) return@withContext null // no releases yet
-            if (!response.isSuccessful) throw IOException("GitHub returned ${response.code}")
+            if (!response.isSuccessful) throw GithubHttpException(response.code)
             val body = response.body?.string() ?: return@withContext null
             val release = moshi.adapter(GithubRelease::class.java).fromJson(body) ?: return@withContext null
             val apk = release.assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
@@ -237,7 +237,7 @@ class UpdateManager(
         }
         currentCoroutineContext().ensureActive()
         call.execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Download failed (${response.code})")
+            if (!response.isSuccessful) throw GithubHttpException(response.code)
             val body = response.body ?: throw IOException("Empty download")
             val total = body.contentLength()
             var downloaded = 0L
@@ -308,4 +308,20 @@ private fun defaultInstallApk(context: Context, file: File) {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     context.startActivity(intent)
+}
+
+/** A non-2xx answer from GitHub; the code stays for [friendlyUpdateError], the wording is not for people. */
+internal class GithubHttpException(val code: Int) : IOException("GitHub returned $code")
+
+/** What to tell a person who tapped CHECK FOR UPDATES and got nothing (#507): no status codes, no stack. */
+internal fun friendlyUpdateError(e: Throwable, fallback: String): String = when {
+    e is GithubHttpException -> when (e.code) {
+        403, 429 -> "GitHub is limiting update checks right now. Try again in a few minutes."
+        404 -> "The update could not be found on GitHub. It may have been withdrawn; try again later."
+        in 500..599 -> "GitHub is having trouble right now. Try again later."
+        else -> "GitHub could not provide the update (error ${e.code}). Try again later."
+    }
+    e is java.net.UnknownHostException || e is java.net.ConnectException ||
+        e is java.net.SocketTimeoutException -> "Could not reach GitHub. Check your internet connection and try again."
+    else -> e.message ?: fallback
 }

@@ -35,6 +35,8 @@ import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.layout.width
+import androidx.glance.semantics.contentDescription
+import androidx.glance.semantics.semantics
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -206,11 +208,21 @@ private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?, skips: SkipB
             verticalAlignment = Alignment.Vertical.CenterVertically,
         ) {
             // Equal shares of a full-width row (at least 250 dp here), so each is well over 48 dp wide.
-            TransportButton(skips.back, actionRunCallback<SkipBackAction>(), modifier = GlanceModifier.defaultWeight())
+            TransportButton(
+                skips.back,
+                actionRunCallback<SkipBackAction>(),
+                modifier = GlanceModifier.defaultWeight(),
+                description = skips.backDescription,
+            )
             Spacer(GlanceModifier.width(6.dp))
             PlayPauseButton(view, GlanceModifier.defaultWeight())
             Spacer(GlanceModifier.width(6.dp))
-            TransportButton(skips.forward, actionRunCallback<SkipForwardAction>(), modifier = GlanceModifier.defaultWeight())
+            TransportButton(
+                skips.forward,
+                actionRunCallback<SkipForwardAction>(),
+                modifier = GlanceModifier.defaultWeight(),
+                description = skips.forwardDescription,
+            )
         }
     }
 }
@@ -229,7 +241,13 @@ private fun PlayPauseButton(view: WidgetView.Playback, modifier: GlanceModifier 
 }
 
 @Composable
-private fun TransportButton(text: String, action: Action, accent: Boolean = false, modifier: GlanceModifier = GlanceModifier) {
+private fun TransportButton(
+    text: String,
+    action: Action,
+    accent: Boolean = false,
+    modifier: GlanceModifier = GlanceModifier,
+    description: String = text,
+) {
     Button(
         text = text,
         onClick = action,
@@ -240,7 +258,8 @@ private fun TransportButton(text: String, action: Action, accent: Boolean = fals
         ),
         modifier = modifier
             .height(WidgetMinTouchTarget)
-            .background(if (accent) AarisColor.Accent else AarisColor.Line),
+            .background(if (accent) AarisColor.Accent else AarisColor.Line)
+            .semantics { contentDescription = description },
     )
 }
 

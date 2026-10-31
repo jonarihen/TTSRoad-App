@@ -13,8 +13,8 @@ import java.time.ZoneId
  * seconds of playback, so "what did I listen to today, and for how long" is a sum over data sitting
  * in `filesDir`.
  *
- * **What this cannot be, and must not pretend to be.** The store keeps 2000 snapshots — about eight
- * and a half hours of listening — and drops the oldest as new ones arrive. There is no all-time
+ * **What this cannot be, and must not pretend to be.** The store keeps three days of snapshots (at most
+ * [HistorySnapshotCapacity]) and drops the oldest as new ones arrive. There is no all-time
  * total here, no "hours this year", and no streak: the days that would prove a streak were
  * overwritten days ago. Everything below is scoped to what is still on disk, and the surface that
  * renders it says so.
@@ -91,7 +91,9 @@ const val ContinuousGapMs: Long = 90_000L
  * What [PlaybackHistoryStore] keeps. Duplicated as a parameter default rather than read from the
  * store because this file is arithmetic over a list and has no business holding a `Context`.
  */
-const val HistorySnapshotCapacity: Int = 2000
+// A ceiling, not the age cap: 8,000 ticks is ~33h of non-stop playback or three days at ~11h a
+// day, and keeps the periodic rewrite of the file near 2 MB instead of ~4 MB at 72h non-stop.
+const val HistorySnapshotCapacity: Int = 8_000
 
 /**
  * Total up [history] into what can honestly be said about it.

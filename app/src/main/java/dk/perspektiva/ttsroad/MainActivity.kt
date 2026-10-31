@@ -142,6 +142,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -372,6 +373,7 @@ import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.AarisPalette
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.ErrorDetails
+import dk.perspektiva.ttsroad.ui.ErrorLine
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
@@ -382,6 +384,10 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import dk.perspektiva.ttsroad.ui.ThinProgress
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
+import dk.perspektiva.ttsroad.core.LastError
+import dk.perspektiva.ttsroad.core.diagnosticsReport
+import dk.perspektiva.ttsroad.ui.copyToClipboard
+import dk.perspektiva.ttsroad.update.installedSignerDigests
 import dk.perspektiva.ttsroad.update.ReleaseInfo
 import dk.perspektiva.ttsroad.update.UpdatePreferences
 import dk.perspektiva.ttsroad.update.UpdateState
@@ -797,6 +803,7 @@ internal fun LoginScreen(repository: TtsRoadRepository, session: SessionState) {
         Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = "TTSROAD",
+            modifier = Modifier.semantics { heading() },
             style = MaterialTheme.typography.displaySmall,
         )
         Spacer(modifier = Modifier.height(6.dp))
@@ -953,6 +960,7 @@ internal fun AppTopBar(title: String, canGoBack: Boolean, onBack: () -> Unit) {
             title = {
                 Text(
                     text = labelCase(title),
+                    modifier = Modifier.semantics { heading() },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleLarge,
@@ -2940,11 +2948,15 @@ private fun PlayerActionButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     color: Color = Color.Unspecified,
+    /** What a screen reader says instead of [label], whose digits and symbols read badly aloud. */
+    description: String? = null,
 ) {
     TextButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.heightIn(min = MinTouchTargetSize),
+        modifier = Modifier.heightIn(min = MinTouchTargetSize).then(
+            if (description != null) Modifier.semantics { contentDescription = description } else Modifier,
+        ),
     ) {
         Text(text = label, color = color, maxLines = 1, softWrap = false)
     }
@@ -3319,7 +3331,12 @@ internal fun PlayerScreenBody(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            MetaText(text = formatDuration(dragMs?.toLong() ?: playerState.positionMs))
+            MetaText(
+                text = formatDuration(dragMs?.toLong() ?: playerState.positionMs),
+                modifier = Modifier.semantics {
+                    contentDescription = "${spokenDuration(dragMs?.toLong() ?: playerState.positionMs)} played"
+                },
+            )
             // Time left beats total duration here: the scrubber already shows how far in this is,
             // and "how much longer" is the thing being asked. At anything but 1x the wall-clock
             // answer differs from the audio one, so say both rather than the misleading one.
@@ -3342,6 +3359,13 @@ internal fun PlayerScreenBody(
                             )
                             append(" at ${formatSpeed(playerState.speed)}")
                         }
+                    },
+                    modifier = Modifier.semantics {
+                        contentDescription = spokenTimeLeft(
+                            remainingMs(position, playerState.durationMs),
+                            playerState.speed,
+                            remainingMsAtSpeed(position, playerState.durationMs, playerState.speed),
+                        )
                     },
                 )
             } else {
@@ -3413,6 +3437,7 @@ internal fun PlayerScreenBody(
             // cycle-only button.
             PlayerActionButton(
                 label = "SPEED ${formatSpeed(playerState.speed)}",
+                description = "Speed ${spokenSpeed(playerState.speed)}",
                 onClick = onOpenSpeed,
             )
             PlayerActionButton(
@@ -3420,6 +3445,11 @@ internal fun PlayerScreenBody(
                     "SLEEP ${formatDuration(sleepTimerState.remainingMs)}"
                 } else {
                     "SLEEP"
+                },
+                description = if (sleepTimerState.isArmed) {
+                    "Sleep timer, ${spokenDuration(sleepTimerState.remainingMs)} left"
+                } else {
+                    "Sleep timer"
                 },
                 onClick = onOpenSleepTimer,
                 enabled = playerState.hasMedia || sleepTimerState.isArmed,
@@ -4371,7 +4401,7 @@ private fun LastHeardBanner(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onResume, enabled = !busy, shape = RectangleShape) {
                     Text(if (error != null) "RETRY" else "RESUME THERE")
@@ -5301,7 +5331,7 @@ internal fun SettingsScreen(
                     cache = remember { ServiceLocator.libraryCache(context) },
                     onError = { deleteDownloadsError = it },
                 )
-                deleteDownloadsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                deleteDownloadsError?.let { ErrorLine(it) }
             }
         }
 
@@ -5335,7 +5365,7 @@ internal fun SettingsScreen(
                             "password — anyone holding one can read your library.",
                         color = AarisColor.Dim,
                     )
-                    feedsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    feedsError?.let { ErrorLine(it) }
                     val library = feeds?.library
                     ShareUrlRow(
                         label = "Every fiction, newest first",
@@ -5382,7 +5412,7 @@ internal fun SettingsScreen(
                             "serial cannot.",
                         color = AarisColor.Dim,
                     )
-                    backupError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    backupError?.let { ErrorLine(it) }
                     backupNote?.let { MetaText(text = it, color = AarisColor.Ok) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
@@ -5480,7 +5510,7 @@ internal fun SettingsScreen(
                             "the web console.",
                         color = AarisColor.Dim,
                     )
-                    exportsError?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    exportsError?.let { ErrorLine(it) }
                     // ffmpeg is reported per request, not as a capability: the route existing and
                     // the machine behind it being able to encode are two different questions, and
                     // an empty list would answer the wrong one.
@@ -5541,7 +5571,23 @@ internal fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 SettingsItem(label = "Version", value = BuildConfig.VERSION_NAME)
+                val signerDigests = remember { installedSignerDigests(context) }
+                signerDigests.forEach { SettingsItem(label = "Signed with (SHA-256)", value = it) }
                 CrashReportingSetting()
+                OutlinedButton(
+                    onClick = {
+                        val report = diagnosticsReport(
+                            appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                            androidVersion = "${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})",
+                            device = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+                            capabilities = capabilities,
+                            lastError = LastError.latest,
+                            serverAddresses = session.knownAddresses,
+                        )
+                        copyToClipboard(context, "TTSRoad diagnostics", report)
+                    },
+                    shape = RectangleShape,
+                ) { Text("COPY DIAGNOSTICS") }
                 AutoUpdateCheckSetting()
                 updateStatusText(updateState)?.let { (text, isError) ->
                     MetaText(text = text, color = if (isError) AarisColor.Danger else AarisColor.Muted)
@@ -5825,7 +5871,7 @@ private fun BookmarksScreen(
             if (isLoading) {
                 ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
 
             if (loaded.isEmpty()) {
                 SectionHeader(kicker = "BM", title = "No bookmarks")
@@ -6065,7 +6111,7 @@ internal fun PronunciationReportsBody(
         if (isLoading) {
             ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
         }
-        error?.let { MetaText(text = it, color = AarisColor.Danger) }
+        error?.let { ErrorLine(it) }
 
         AarisChoiceRow(
             options = listOf(false, true),
@@ -6288,7 +6334,7 @@ private fun QueueScreen(
             if (isLoading || isBusy) {
                 ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
             }
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
 
             val items = loaded?.items.orEmpty()
             if (items.isEmpty()) {
@@ -6654,7 +6700,7 @@ private fun DevicesScreen(
                     if (isLoading) {
                         ThinProgress(fraction = 1f, modifier = Modifier.fillMaxWidth(), height = 2.dp)
                     }
-                    error?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    error?.let { ErrorLine(it) }
 
                     SectionHeader(kicker = "01", title = "This device")
                     val current = loaded.orEmpty().firstOrNull { it.isCurrent(session) }
@@ -9966,7 +10012,7 @@ internal fun FictionEditScreen(
                     }
                     when {
                         voiceLoadError != null -> {
-                            MetaText(text = voiceLoadError.orEmpty(), color = AarisColor.Danger)
+                            ErrorLine(voiceLoadError.orEmpty())
                             TextButton(
                                 onClick = { voiceLoadRequest += 1 },
                                 enabled = !isBusy && !isLoadingVoices,
@@ -11113,7 +11159,15 @@ private fun skipForwardIcon(skipIntervalMs: Long): ImageVector = when {
 private fun formatSleepTimerDefault(minutes: Int): String =
     if (minutes <= 0) "Ask" else "${minutes}m"
 
-private fun formatSpeed(speed: Float): String {
+/** "1.5 times" — a speed as a screen reader should say it, not as "1.5 multiplication sign". */
+internal fun spokenSpeed(speed: Float): String = "${formatSpeed(speed).removeSuffix("×")} times"
+
+/** "28 minutes left", plus the wall-clock answer when [speed] is not 1x. */
+internal fun spokenTimeLeft(remainingMs: Long, speed: Float, atSpeedMs: Long): String =
+    "${spokenDuration(remainingMs)} left" +
+        if (speed != 1f) ", ${spokenDuration(atSpeedMs)} at ${spokenSpeed(speed)} speed" else ""
+
+internal fun formatSpeed(speed: Float): String {
     val text = String.format(Locale.US, "%.2f", speed).trimEnd('0').trimEnd('.')
     return "${text}×"
 }

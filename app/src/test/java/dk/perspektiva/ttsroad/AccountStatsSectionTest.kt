@@ -13,6 +13,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import dk.perspektiva.ttsroad.data.ActivityDay
 import dk.perspektiva.ttsroad.data.BusiestListeningDay
@@ -107,6 +108,7 @@ class AccountStatsSectionTest {
         isLoading: Boolean = false,
         error: String? = null,
         onRetry: () -> Unit = {},
+        onWeeksChange: ((Int) -> Unit)? = null,
     ) {
         compose.setContent {
             TtsRoadTheme {
@@ -125,6 +127,7 @@ class AccountStatsSectionTest {
                         isLoading = isLoading,
                         error = error,
                         onRetry = onRetry,
+                        onWeeksChange = onWeeksChange,
                     )
                 }
             }
@@ -177,6 +180,24 @@ class AccountStatsSectionTest {
         compose.onNodeWithText("50H 0M").assertExists()
         compose.onNodeWithText("100 HOURS LISTENED").assertExists()
         compose.onNodeWithText("3 TO GO").assertExists()
+    }
+
+    @Test
+    fun `the range picker asks for the week count that was tapped, and is absent without a handler`() {
+        val picked = mutableListOf<Int>()
+        render(onWeeksChange = { picked += it })
+
+        compose.onNodeWithText("26W").performScrollTo().performClick()
+        compose.onNodeWithText("52W").performScrollTo().performClick()
+
+        assertEquals(listOf(26, 52), picked)
+    }
+
+    @Test
+    fun `no picker is drawn when nothing can receive the choice`() {
+        render()
+
+        compose.onNodeWithText("26W").assertDoesNotExist()
     }
 
     @Test
