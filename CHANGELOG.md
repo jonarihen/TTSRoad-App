@@ -16,6 +16,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- The new-chapter notification says a single chapter is ready to listen, and when several land it
+  names the serials and offers "Play first". (#495)
 - A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
 - Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
   "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP
