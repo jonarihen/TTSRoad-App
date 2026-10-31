@@ -135,6 +135,28 @@ class ProgressSyncTest {
     }
 
     @Test
+    fun `accepted played chapters are announced, stale and unplayed ones are not`() = runTest {
+        val repository = repository(batchProgress = true)
+        val store = pendingStore()
+        store.record(1, 7, 30.0, true, owner = owner)
+        store.record(1, 8, 30.0, false, owner = owner)
+        store.record(1, 9, 30.0, true, owner = owner)
+        server.enqueue(
+            MockResponse()
+                .setBody(
+                    """{"accepted": [{"chapter_id": 7}, {"chapter_id": 8}],
+                       "rejected": [{"chapter_id": 9, "reason": "stale"}], "server_state": []}""",
+                )
+                .setHeader("Content-Type", "application/json"),
+        )
+        val told = mutableListOf<Pair<Int, List<Int>>>()
+
+        ProgressSync(repository, store) { fiction, ids -> told += fiction to ids.toList() }.flush()
+
+        assertEquals(listOf(1 to listOf(7)), told)
+    }
+
+    @Test
     fun `a stale rejection drops the entry and reports what the server holds`() = runTest {
         // The bug this whole change exists for, seen from the winning side: the browser reached a
         // newer position, the phone's older one loses, and the phone must not keep retrying it.

@@ -16,6 +16,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- Chapters the player marks played show as played in an open fiction's chapter list straight
+  away, without a pull-to-refresh. (#526)
 - Resuming from Android Auto or a headset on weak signal serves the saved library or downloaded
   chapter after 12 seconds instead of waiting out every network timeout, and skips capability
   discovery on a fresh process. (#483)

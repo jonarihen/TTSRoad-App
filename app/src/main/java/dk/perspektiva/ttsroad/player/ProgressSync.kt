@@ -76,6 +76,8 @@ val CapabilityRetryDelaysMs: List<Long> = listOf(5_000L, 15_000L, 45_000L, 180_0
 class ProgressSync(
     private val repository: TtsRoadRepository,
     private val store: PendingProgressStore,
+    /** Told which chapters a flush just got the server to hold as played, so open lists can follow (#526). */
+    private val onPlayed: (fictionId: Int, chapterIds: Collection<Int>) -> Unit = { _, _ -> },
 ) {
     // One flush at a time. The 15s ticker, the pause listener and a reconnect can all ask at once,
     // and two overlapping flushes would send the same entries twice and race on resolving them.
@@ -176,6 +178,7 @@ class ProgressSync(
                     .forEach { rejected -> byChapter[rejected.chapterId]?.let(::add) }
             }
             withContext(Dispatchers.IO) { store.resolve(settled) }
+            announcePlayed(response.accepted.mapNotNull { byChapter[it.chapterId] })
 
             // A `stale` rejection is the case this whole mechanism exists for: the phone's write
             // lost to a newer one. Hand back what the server actually holds so the caller can show
@@ -195,6 +198,11 @@ class ProgressSync(
             overriddenByServer = overridden,
             drained = store.pendingFor(session).isEmpty(),
         )
+    }
+
+    private fun announcePlayed(saved: List<PendingProgress>) {
+        saved.filter { it.isPlayed }.groupBy({ it.fictionId }, { it.chapterId })
+            .forEach { (fictionId, ids) -> onPlayed(fictionId, ids) }
     }
 
     /**
@@ -221,7 +229,10 @@ class ProgressSync(
             // deleted, say) is dropped instead — at the head of the queue it would block the rest.
             if (attempt.isFailure && !refused) break
             withContext(Dispatchers.IO) { store.resolve(listOf(entry)) }
-            if (!refused) accepted++
+            if (!refused) {
+                accepted++
+                announcePlayed(listOf(entry))
+            }
         }
         return ProgressFlushResult(
             sent = accepted,
