@@ -200,6 +200,8 @@ private fun PlaybackBody(view: WidgetView.Playback, cover: Bitmap?, skips: SkipB
             PlayPauseButton(view)
             Spacer(GlanceModifier.width(6.dp))
             TransportButton(skips.forward, actionRunCallback<SkipForwardAction>())
+            Spacer(GlanceModifier.width(6.dp))
+            TransportButton("Sleep", actionRunCallback<SleepTimerToggleAction>())
         }
     }
 }

@@ -85,6 +85,7 @@ import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.PlayedThreshold
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.ShakeDetector
+import dk.perspektiva.ttsroad.player.vibrateExtended
 import dk.perspektiva.ttsroad.player.SleepTimerAction
 import dk.perspektiva.ttsroad.player.SleepTimerController
 import dk.perspektiva.ttsroad.player.SleepTimerMode
@@ -467,6 +468,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 TtsRoadSessionCommands.mediaButtonPreferences(
                     skipIntervalMs = skipIntervalMs,
                     sleepTimerLabel = SleepTimerController.buttonLabel(sleepTimer.state.value),
+                    sleepTimerArmed = sleepTimer.state.value.isArmed,
                 ),
             )
             .build()
@@ -481,17 +483,18 @@ class TtsRoadMediaService : MediaLibraryService() {
             // what a press does, and the preference can change while the session is up (#335).
             combine(
                 repository.currentCapabilities.map { it.bookmarks to it.pronunciationReports },
-                sleepTimer.state.map { SleepTimerController.buttonLabel(it) },
+                sleepTimer.state.map { SleepTimerController.buttonLabel(it) to it.isArmed },
                 preferences.prefs.map { it.skipIntervalMs },
-            ) { capabilities, sleepLabel, skipInterval -> Triple(capabilities, sleepLabel, skipInterval) }
+            ) { capabilities, sleep, skipInterval -> Triple(capabilities, sleep, skipInterval) }
                 .distinctUntilChanged()
-                .collect { (capabilities, sleepLabel, skipInterval) ->
+                .collect { (capabilities, sleep, skipInterval) ->
                     session.setMediaButtonPreferences(
                         TtsRoadSessionCommands.mediaButtonPreferences(
                             skipIntervalMs = skipInterval,
                             bookmarks = capabilities.first,
                             pronunciationReports = capabilities.second,
-                            sleepTimerLabel = sleepLabel,
+                            sleepTimerLabel = sleep.first,
+                            sleepTimerArmed = sleep.second,
                         ),
                     )
                 }
@@ -809,7 +812,11 @@ class TtsRoadMediaService : MediaLibraryService() {
     @OptIn(UnstableApi::class)
     private fun startSleepTimer() {
         // The next tick picks the extension up and lifts the volume back out of the fade.
-        shakeDetector = ShakeDetector(this) { sleepTimer.extend(SleepTimerController.ExtendMs) }
+        shakeDetector = ShakeDetector(this) {
+            sleepTimer.extend(SleepTimerController.ExtendMs)
+            // The only other cue is the volume returning, which is easy to miss half asleep (#500).
+            vibrateExtended(this)
+        }
 
         // Tick only while a timer is actually armed. The fade needs a half-second tick to be
         // smooth, but this app's whole job is playing all night, and waking twice a second for a

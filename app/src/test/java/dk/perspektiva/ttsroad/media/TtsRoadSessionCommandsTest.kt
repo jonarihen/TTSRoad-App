@@ -164,6 +164,15 @@ class TtsRoadSessionCommandsTest {
     }
 
     @Test
+    fun `the sleep timer icon differs between armed and off`() {
+        fun icon(armed: Boolean) = TtsRoadSessionCommands.mediaButtonPreferences(
+            sleepTimerLabel = "Sleep timer", sleepTimerArmed = armed,
+        ).last().iconResId
+        assertEquals(dk.perspektiva.ttsroad.R.drawable.ic_sleep_timer, icon(true))
+        assertEquals(dk.perspektiva.ttsroad.R.drawable.ic_sleep_timer_off, icon(false))
+    }
+
+    @Test
     fun `the sleep timer button does not cost the skips their slots`() {
         val buttons = TtsRoadSessionCommands.mediaButtonPreferences(sleepTimerLabel = "Sleep timer: off")
 
