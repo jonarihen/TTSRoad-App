@@ -2,6 +2,13 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Added
+
+- Long-press a chapter, then "Mark a range of chapters…" to mark chapters from one number to another
+  (say 400 to 650) played or unplayed in one request, with the count shown first. (#512)
+
 ## 0.21.0 — 2026-10-17
 
 ### Fixed

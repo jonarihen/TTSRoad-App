@@ -280,6 +280,7 @@ import dk.perspektiva.ttsroad.data.canReadServerLogs
 import dk.perspektiva.ttsroad.data.canPickVoice
 import dk.perspektiva.ttsroad.data.chapterIdsBefore
 import dk.perspektiva.ttsroad.data.chapterIdsFrom
+import dk.perspektiva.ttsroad.data.chapterIdsInRange
 import dk.perspektiva.ttsroad.data.chapterNumberText
 import dk.perspektiva.ttsroad.data.chapterView
 import dk.perspektiva.ttsroad.data.fictionNarrationPatch
@@ -1638,6 +1639,7 @@ private fun FictionScreen(
     // about the book in front of you, and carrying the text to the next one would only hide it.
     var chapterQuery by remember(fiction.id) { mutableStateOf("") }
     var bulkTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
+    var rangeTarget by remember(fiction.id) { mutableStateOf<ChapterSummary?>(null) }
     var confirmDelete by remember(fiction.id) { mutableStateOf(false) }
     var isDeleting by remember(fiction.id) { mutableStateOf(false) }
     var isFollowBusy by remember(fiction.id) { mutableStateOf(false) }
@@ -2129,6 +2131,10 @@ private fun FictionScreen(
                         bulkTarget = null
                         mark(ids, played = false)
                     },
+                    onMarkRange = {
+                        rangeTarget = target
+                        bulkTarget = null
+                    },
                     onQueue = if (capabilities.queue) {
                         { playNext ->
                             bulkTarget = null
@@ -2182,6 +2188,18 @@ private fun FictionScreen(
                         }
                     } else {
                         null
+                    },
+                )
+            }
+
+            rangeTarget?.let { target ->
+                ChapterRangeDialog(
+                    chapters = chapters,
+                    initial = chapterNumberText(target.displayNumber).orEmpty(),
+                    onDismiss = { rangeTarget = null },
+                    onMark = { ids, played ->
+                        rangeTarget = null
+                        mark(ids, played)
                     },
                 )
             }
@@ -2527,6 +2545,8 @@ private fun ChapterBulkSheet(
     /** This chapter and every one after it in reading order — the undo for sleeping through them. */
     fromHereIds: List<Int> = emptyList(),
     onMarkUnplayed: ((List<Int>) -> Unit)? = null,
+    /** Opens the from/to dialog for marking an arbitrary stretch of chapters (#512). */
+    onMarkRange: (() -> Unit)? = null,
     /** Null on a server with no cross-library queue. `true` means "play it next". */
     onQueue: ((playNext: Boolean) -> Unit)? = null,
     /**
@@ -2594,6 +2614,14 @@ private fun ChapterBulkSheet(
                 onClick = { markUnplayed(allIds) },
             )
         }
+        onMarkRange?.let { openRange ->
+            AarisActionRow(
+                title = "Mark a range of chapters…",
+                subtitle = "From one chapter number to another, as played or unplayed",
+                enabled = allIds.isNotEmpty(),
+                onClick = openRange,
+            )
+        }
         onQueue?.let { queue ->
             // Only a chapter with audio can be queued — the server rejects the rest anyway, and
             // offering it would be offering something that silently does nothing.
@@ -2652,6 +2680,74 @@ private fun ChapterBulkSheet(
         }
         Spacer(modifier = Modifier.height(16.dp))
     }
+}
+
+/**
+ * From/to chapter numbers for marking a stretch played or unplayed in one request (#512), e.g.
+ * 400 to 650. The count is shown before anything is sent, so a typo is visible, not applied.
+ */
+@Composable
+private fun ChapterRangeDialog(
+    chapters: List<ChapterSummary>,
+    initial: String,
+    onDismiss: () -> Unit,
+    onMark: (ids: List<Int>, played: Boolean) -> Unit,
+) {
+    var from by remember { mutableStateOf(initial) }
+    var to by remember { mutableStateOf(initial) }
+    val fromNumber = from.trim().toDoubleOrNull()
+    val toNumber = to.trim().toDoubleOrNull()
+    val ids = remember(chapters, fromNumber, toNumber) {
+        if (fromNumber == null || toNumber == null) {
+            emptyList()
+        } else {
+            chapters.chapterIdsInRange(fromNumber, toNumber)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AarisColor.BgRaise,
+        title = { Text("MARK A RANGE", style = MaterialTheme.typography.titleLarge) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = from,
+                        onValueChange = { from = it },
+                        label = { Text("From chapter") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = to,
+                        onValueChange = { to = it },
+                        label = { Text("To chapter") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                MetaText(
+                    text = if (ids.isEmpty()) "No chapters in that range" else "${ids.size} chapters",
+                    color = AarisColor.Muted,
+                )
+            }
+        },
+        confirmButton = {
+            Row {
+                TextButton(enabled = ids.isNotEmpty(), onClick = { onMark(ids, false) }) {
+                    Text("UNPLAYED")
+                }
+                Button(
+                    enabled = ids.isNotEmpty(),
+                    onClick = { onMark(ids, true) },
+                    shape = RectangleShape,
+                ) { Text("PLAYED") }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL") } },
+    )
 }
 
 /**
