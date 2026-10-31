@@ -137,6 +137,21 @@ class NewChapterPollingTest {
     }
 
     @Test
+    fun `a group notification names the serials and offers Play first`() = runBlocking {
+        val store = NewChapterSeenStore(context)
+        val owner = SessionState(serverUrl = "https://ttsroad.example.com/", token = "t", username = "anna")
+        announceNewlyReady(listOf(entry(1, false), entry(2, false)), owner, store, NewChapterNotifier(context)) { true }
+        announceNewlyReady(listOf(entry(1, true), entry(2, true)), owner, store, NewChapterNotifier(context)) { true }
+
+        val notification = manager.getNotification(NewChapterNotifier.Tag, NewChapterNotifier.NotificationId)
+        assertEquals("2 chapters ready to listen", notification.extras.getString("android.title"))
+        assertEquals(listOf("Serial (2)"), notification.extras.getCharSequenceArray("android.textLines")?.map { it.toString() })
+        assertEquals("Play first", notification.actions.single().title.toString())
+        val action = shadowOf(notification.actions.single().actionIntent).savedIntent
+        assertEquals(NotificationRoute.Play(7, 101), consumeNotificationRoute(action, allowPlay = true))
+    }
+
+    @Test
     fun `a rotated token keeps the seen record, and a pre-455 token-keyed record is read once`() = runBlocking {
         val store = NewChapterSeenStore(context)
         val notifier = NewChapterNotifier(context)
