@@ -362,12 +362,15 @@ fun normalizeBaseUrl(input: String): String {
 }
 
 /**
- * [normalizeBaseUrl], but only once the host looks finished — the gate on the login screen's
- * capability probe, so half-typed hostnames (`https://ho`, `https://home.`) never become DNS lookups.
+ * [normalizeBaseUrl], but only once the host could be a real one — the gate on the login screen's
+ * capability probe, so obviously incomplete input (`https://`, `https://home.`, `https://192.168.1`,
+ * a port still missing its digits) never becomes a lookup.
  *
- * "Finished" means a dotted name whose last label is at least two letters, an IPv4 or bracketed IPv6
- * literal, or `localhost`. A single-label LAN name such as `nas` is not probed, but signing in with
- * it still works; only the early "found TTSRoad x.y" hint is skipped.
+ * Accepted: a dotted name whose last label is at least two letters, an IPv4 or bracketed IPv6
+ * literal, and a single-label LAN name such as `nas` or `localhost` (#513). Single labels used to
+ * be refused because `https://n` on its way to `https://nas` looks the same as a finished name; the
+ * login screen's debounce now keeps those keystrokes from becoming DNS lookups instead. A label of
+ * digits alone is still refused, since that is an IPv4 address being typed.
  */
 fun probeableBaseUrl(input: String): String? {
     val normalized = runCatching { normalizeBaseUrl(input) }.getOrNull() ?: return null
@@ -375,10 +378,10 @@ fun probeableBaseUrl(input: String): String? {
     val authority = normalized.substringAfter("://").substringBefore('/').substringBefore('?')
     if (authority.endsWith(":")) return null
     val host = url.host
-    val complete = host == "localhost" ||
-        host.contains(':') || // IPv6; okhttp has already validated it
+    val complete = host.contains(':') || // IPv6; okhttp has already validated it
         Ipv4.matches(host) ||
-        CompleteDomain.matches(host)
+        CompleteDomain.matches(host) ||
+        SingleLabelHost.matches(host)
     return normalized.takeIf { complete }
 }
 
@@ -386,4 +389,5 @@ private val LeadingScheme = Regex("^(https?)://", RegexOption.IGNORE_CASE)
 private val OtherScheme = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
 private val Ipv4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
 private val CompleteDomain = Regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]([a-z0-9-]*[a-z0-9])$")
+private val SingleLabelHost = Regex("^(?=[a-z0-9-]*[a-z])[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 

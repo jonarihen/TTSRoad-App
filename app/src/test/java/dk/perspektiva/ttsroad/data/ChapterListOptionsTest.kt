@@ -233,4 +233,22 @@ class ChapterListOptionsTest {
         assertEquals("12.5", chapterNumberText(12.5))
         assertEquals(null, chapterNumberText(null))
     }
+
+    @Test
+    fun `row keys follow the chapter not its position`() {
+        val asc = chapters.chapterView(ChapterFilter.All, ascending = true)
+        val desc = chapters.chapterView(ChapterFilter.All, ascending = false)
+
+        val byChapter = asc.map { it.resolvedChapterId }.zip(asc.chapterRowKeys()).toMap()
+        desc.map { it.resolvedChapterId }.zip(desc.chapterRowKeys()).forEach { (id, key) ->
+            assertEquals(byChapter[id], key)
+        }
+    }
+
+    @Test
+    fun `a repeated chapter still gets a unique key`() {
+        val keys = (chapters + chapter(id = 2, number = 2.0)).chapterRowKeys()
+
+        assertEquals(keys.size, keys.toSet().size)
+    }
 }

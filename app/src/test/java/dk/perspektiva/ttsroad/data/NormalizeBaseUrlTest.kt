@@ -61,15 +61,40 @@ class NormalizeBaseUrlTest {
     }
 
     @Test
-    fun `probes only a host that looks finished`() {
+    fun `probes only a host that could be real`() {
         assertEquals("https://home.example.dk/", probeableBaseUrl("home.example.dk"))
         assertEquals("http://192.168.1.5:8000/", probeableBaseUrl("http://192.168.1.5:8000"))
         assertEquals("http://localhost:8000/", probeableBaseUrl("http://localhost:8000"))
         assertEquals("http://[::1]:8000/", probeableBaseUrl("http://[::1]:8000"))
         assertEquals("https://home.example.dk/ttsroad/", probeableBaseUrl("https://home.example.dk/ttsroad"))
 
-        for (partial in listOf("", "https://", "https://h", "https://home", "https://home.", "https://home.e", "https://192.168.1", "https://home.example.dk:", "ftp://home.example.dk")) {
+        for (partial in listOf(
+            "",
+            "   ",
+            "https://",
+            "http://",
+            "https:///",
+            "https://home.",
+            "https://home.e",
+            "https://192.168.1",
+            "https://192",
+            "https://home.example.dk:",
+            "http://nas:",
+            "https://nas-",
+            "https://-nas",
+            "ftp://home.example.dk",
+        )) {
             assertNull(partial, probeableBaseUrl(partial))
         }
+    }
+
+    @Test
+    fun `probes single label LAN hosts`() {
+        assertEquals("http://nas:8000/", probeableBaseUrl("http://nas:8000"))
+        assertEquals("https://nas/", probeableBaseUrl("https://nas"))
+        assertEquals("https://nas/", probeableBaseUrl("nas"))
+        assertEquals("http://NAS/", probeableBaseUrl("HTTP://NAS"))
+        assertEquals("http://media-box2:8000/ttsroad/", probeableBaseUrl("http://media-box2:8000/ttsroad"))
+        assertEquals("http://1nas:8000/", probeableBaseUrl("http://1nas:8000"))
     }
 }

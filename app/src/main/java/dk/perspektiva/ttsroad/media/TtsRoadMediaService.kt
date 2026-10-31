@@ -76,7 +76,7 @@ import dk.perspektiva.ttsroad.player.InProcessPlayer
 import dk.perspektiva.ttsroad.player.historyAccountKey
 import dk.perspektiva.ttsroad.player.historyAccountKeys
 import dk.perspektiva.ttsroad.player.NetworkReturnWatcher
-import dk.perspektiva.ttsroad.player.shouldRecoverOnNetworkReturn
+import dk.perspektiva.ttsroad.player.TransientPlaybackRetry
 import dk.perspektiva.ttsroad.player.PendingProgressStore
 import dk.perspektiva.ttsroad.player.OwnerProgressFlush
 import dk.perspektiva.ttsroad.player.adSkipTarget
@@ -167,8 +167,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     // Bumped on every account change, so a library fetch that outlives its session is discarded.
     private var librarySessionGeneration = 0L
 
-    // Automatic recovery from a dropped stream. Reset once playback is healthy again, so a second
-    // outage later in the night gets a fresh set of attempts rather than giving up immediately.
+    // Automatic recovery after a rotated credential was rejected mid-stream; a dropped stream is
+    // [transientRetry]'s. Reset once playback is healthy again, so a later rejection gets a fresh
+    // set of attempts rather than giving up immediately.
     private var retryJob: Job? = null
 
     // The save launched by a pause. Teardown cancels the scope, so if this is still running then,
@@ -176,8 +177,8 @@ class TtsRoadMediaService : MediaLibraryService() {
     private var pauseSave: Job? = null
     private var retryAttempt = 0
 
-    // Whether the last player error was one a returning network can heal; see NetworkRecovery.kt.
-    private var lastFailureTransient = false
+    // Re-prepares after a transient failure, fast and then slowly; see NetworkRecovery.kt (#482).
+    private lateinit var transientRetry: TransientPlaybackRetry
     private var networkWatcher: NetworkReturnWatcher? = null
 
     // The chapter, window size and setting generation the window was last planned around.
@@ -280,6 +281,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                     null
                 }
                 if (sessionIdentity != lastSessionIdentity) {
+                    if (::transientRetry.isInitialized) transientRetry.reset()
                     lastSessionIdentity = sessionIdentity
                     librarySessionGeneration++
                     // A different account's widget is a different picture, whatever its key says.
@@ -307,6 +309,8 @@ class TtsRoadMediaService : MediaLibraryService() {
             }
         }
         player = createPlayer()
+        transientRetry = TransientPlaybackRetry(player, serviceScope) { playbackSessionActive }
+        player.addListener(transientRetry)
         InProcessPlayer.attach(player)
         startAudioTuning()
         // Speed lives in the service, not the UI: the player is recreated on a swipe-away, a
@@ -363,7 +367,6 @@ class TtsRoadMediaService : MediaLibraryService() {
                     if (playbackState == Player.STATE_READY) {
                         retryAttempt = 0
                         retryJob?.cancel()
-                        lastFailureTransient = false
                     }
                 }
 
@@ -443,11 +446,10 @@ class TtsRoadMediaService : MediaLibraryService() {
             },
         )
         growingQueue.start()
-        // The backoff gives up after ~22s; this is what resumes after a longer outage (#326).
         networkWatcher = NetworkReturnWatcher(
             connectivity = getSystemService(ConnectivityManager::class.java),
             mainHandler = Handler(mainLooper),
-            onNetworkReturned = { serviceScope.launch { recoverAfterNetworkReturn() } },
+            onNetworkReturned = { transientRetry.onNetworkReturned() },
         ).also { it.start() }
         startProgressTicker()
         startPlaybackSkipTicker()
@@ -494,6 +496,7 @@ class TtsRoadMediaService : MediaLibraryService() {
 
     override fun onDestroy() {
         networkWatcher?.stop()
+        transientRetry.reset()
         val pauseSaveInFlight = pauseSave?.isActive == true
         serviceScope.cancel()
         runBlocking {
@@ -640,14 +643,15 @@ class TtsRoadMediaService : MediaLibraryService() {
             .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
             .firstOrNull()
 
-        when (classifyPlaybackError(error.errorCode, httpFailure?.responseCode)) {
+        val failure = classifyPlaybackError(error.errorCode, httpFailure?.responseCode)
+        transientRetry.onFailure(error, failure is PlaybackFailure.Transient)
+        when (failure) {
             PlaybackFailure.Unauthorized -> {
                 // Same conclusion as a 401 on an API call: the stored token cannot be used again,
                 // so drop it and let the session observer fall back to the login screen. Retrying
                 // would just burn battery against a server that will keep saying no.
                 retryJob?.cancel()
                 retryAttempt = 0
-                lastFailureTransient = false
                 // Bearer-authenticated /audio/... requests carry the same structured 401 body as
                 // the JSON API, so go through the repository rather than clearing the token here:
                 // that is what carries the reason to the login screen instead of dropping the user
@@ -670,25 +674,19 @@ class TtsRoadMediaService : MediaLibraryService() {
                 }
             }
 
-            is PlaybackFailure.Transient -> {
-                lastFailureTransient = true
-                scheduleRetry()
-            }
-
-            is PlaybackFailure.Permanent -> {
+            // Retried by transientRetry, above; the backoff here is only for a rotated credential.
+            is PlaybackFailure.Transient, is PlaybackFailure.Permanent -> {
                 retryJob?.cancel()
                 retryAttempt = 0
-                lastFailureTransient = false
             }
         }
     }
 
     /**
-     * Re-prepare after a backoff so a tunnel or a Wi-Fi handover heals without the user touching
-     * anything. Deliberately does not call play(): prepare() resumes on its own when playWhenReady
-     * was set, so a stream that died while paused stays paused.
+     * Run [recover] after the fast backoff, for a rejected credential that a rotation may already
+     * have replaced. Transient stream failures go through [transientRetry] instead.
      */
-    private fun scheduleRetry(recover: suspend () -> Unit = { player.prepare() }) {
+    private fun scheduleRetry(recover: suspend () -> Unit) {
         val delayMs = retryDelayMs(retryAttempt + 1) ?: return
         retryAttempt++
         retryJob?.cancel()
@@ -696,18 +694,6 @@ class TtsRoadMediaService : MediaLibraryService() {
             delay(delayMs)
             recover()
         }
-    }
-
-    /**
-     * A network came back. If the player gave up on a transient failure while it was meant to be
-     * playing, start over: a fresh backoff and an immediate prepare, which resumes at the position
-     * the player stopped at.
-     */
-    private fun recoverAfterNetworkReturn() {
-        if (!shouldRecoverOnNetworkReturn(player, lastFailureTransient)) return
-        retryJob?.cancel()
-        retryAttempt = 0
-        player.prepare()
     }
 
     private fun startProgressTicker() {
