@@ -151,6 +151,20 @@ fun List<ChapterSummary>.chapterIdsInRange(from: Double, to: Double): List<Int> 
         .mapNotNull { it.resolvedChapterId.takeIf { id -> id > 0 } }
 }
 
+/**
+ * Stable lazy-list keys, one per row: the chapter's identity, never its position, so a sort or
+ * filter change moves rows instead of recomposing all of them (#510). A server list that repeats a
+ * chapter would crash Compose on the duplicate key, so a repeat gets an occurrence suffix.
+ */
+fun List<ChapterSummary>.chapterRowKeys(): List<String> {
+    val seen = HashMap<String, Int>()
+    return map { chapter ->
+        val base = "chapter-${chapter.resolvedChapterId}-${chapter.resolvedFictionId}"
+        val n = seen.merge(base, 1, Int::plus)!!
+        if (n == 1) base else "$base-dup$n"
+    }
+}
+
 /** Every markable chapter id in the list. */
 fun List<ChapterSummary>.allChapterIds(): List<Int> =
     mapNotNull { it.resolvedChapterId.takeIf { id -> id > 0 } }
