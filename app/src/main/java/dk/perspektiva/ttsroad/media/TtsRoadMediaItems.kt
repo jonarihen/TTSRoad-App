@@ -153,6 +153,22 @@ object TtsRoadMediaItems {
     }
 
     /**
+     * Most rows Continue and Recent hand a car (#499). Without it the head unit's own list limit
+     * decides what the driver sees; here the newest are kept and the tail is dropped.
+     */
+    const val CarCrossFictionRowCap = 20
+
+    /** Cross-book rows for [chapters] (already newest first), playable ones only, capped for the car. */
+    fun crossFictionRows(
+        chapters: List<ChapterSummary>,
+        fictions: List<FictionSummary>,
+        serverUrl: String?,
+    ): List<MediaItem> = chapters.asSequence().mapNotNull { chapter ->
+        val fiction = chapter.fiction ?: fictions.firstOrNull { it.id == chapter.resolvedFictionId }
+        chapter(chapter, fiction, serverUrl, crossFiction = true)
+    }.take(CarCrossFictionRowCap).toList()
+
+    /**
      * @param crossFiction whether this row sits in a list that spans books — Continue, Recent, a
      *   search. There the subtitle names the fiction, because "Chapter 212 · 41 min" with no book
      *   is unanswerable from a driver's seat, and many car UIs never show the album title (#331).
