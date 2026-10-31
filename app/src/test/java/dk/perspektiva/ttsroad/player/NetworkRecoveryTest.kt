@@ -279,6 +279,22 @@ class NetworkRecoveryTest {
     }
 
     @Test
+    fun `playing again after a pause in the slow phase re-prepares the remembered failure`() = runTest {
+        val player = TimingOutPlayer()
+        val retry = TransientPlaybackRetry(player, backgroundScope) { true }
+        player.addListener(retry)
+        exhaustFastBackoff(player, retry)
+        player.pause()
+        testScheduler.advanceTimeBy(10 * 60_000L)
+        testScheduler.runCurrent()
+        assertEquals(MaxAutomaticRetries, player.prepares)
+
+        player.play()
+        testScheduler.runCurrent()
+        assertEquals(MaxAutomaticRetries + 1, player.prepares)
+    }
+
+    @Test
     fun `the fast backoff still re-prepares a stream that died while paused, and then stops`() = runTest {
         val player = TimingOutPlayer().apply { wanted = false }
         val retry = TransientPlaybackRetry(player, backgroundScope) { true }
@@ -291,10 +307,12 @@ class NetworkRecoveryTest {
 
         // Pressing play is a fresh start rather than a jump into the slow phase.
         player.play()
+        testScheduler.runCurrent()
+        assertEquals("play re-prepares the remembered failure at once", MaxAutomaticRetries + 1, player.prepares)
         fail(player, retry)
         testScheduler.advanceTimeBy(2_000L)
         testScheduler.runCurrent()
-        assertEquals(MaxAutomaticRetries + 1, player.prepares)
+        assertEquals(MaxAutomaticRetries + 2, player.prepares)
     }
 
     @Test

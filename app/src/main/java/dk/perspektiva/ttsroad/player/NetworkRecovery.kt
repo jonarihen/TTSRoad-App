@@ -165,8 +165,12 @@ internal class TransientPlaybackRetry(
         // slow loop depends on playback being wanted. Pressing play again is a fresh start.
         if (playWhenReady) {
             attempt = 0
+            // A pause in the slow phase dropped the timer but kept the failure; nobody else will prepare.
+            val error = failure
+            if (error != null && retry?.isActive != true && stillFailing(error)) player.prepare()
         } else if (attempt > MaxAutomaticRetries) {
-            reset()
+            retry?.cancel()
+            retry = null
         }
     }
 
