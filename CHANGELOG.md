@@ -6,6 +6,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Settings: "Arm the sleep timer automatically after" 21:00-00:00. Starting playback from then until
+  05:00 arms the default timer, once a night. (#503)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)
