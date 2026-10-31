@@ -130,6 +130,19 @@ class ProgressSync(
         return result
     }
 
+    /**
+     * The last flush before a sign-out (#480): send what this account has waiting and answer how
+     * many positions are still unsent, which the sign-out would discard.
+     *
+     * Only this account's own entries count and are sent, as in [flush]; the backlog is cleared at
+     * sign-out rather than kept, so a position can never reach whichever account signs in next.
+     */
+    suspend fun flushBeforeSignOut(): Int {
+        val owner = repository.currentSession()
+        flush()
+        return store.pendingFor(owner).size
+    }
+
     private suspend fun flushBatched(queued: List<PendingProgress>, session: SessionState, limit: Int): ProgressFlushResult {
         var accepted = 0
         var sent = 0

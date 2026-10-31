@@ -11,6 +11,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -412,27 +413,42 @@ class TtsRoadRepository(
         _sessionEnd.value = end
     }
 
-    suspend fun logout() = withContext(Dispatchers.IO) {
+    /**
+     * Revoke the token on the server, then forget it here.
+     *
+     * The local sign-out always happens. Answers whether the server confirmed it (#480): an offline
+     * sign-out leaves the token valid on the server until it ages out, and the user should hear
+     * that rather than believe the device is cut off. A 401 counts as revoked — the server already
+     * refuses the token. When the revoke fails, [sessionEnd] carries the explanation to the login
+     * screen, which is the screen the user lands on.
+     */
+    suspend fun logout(): Boolean = withContext(Dispatchers.IO) {
         val session = tokenStore.current()
-        runCatching {
-            if (session.isLoggedIn) {
-                api(session.serverUrl, session).logout()
+        val revoked = !session.isLoggedIn || try {
+            api(session.serverUrl, session).logout().revoked
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e is HttpException && e.code() == 401
+        }
+        withContext(NonCancellable) {
+            sessionMutation.withLock {
+                tokenStore.clearToken()
+                invalidateListeningStats()
+                // Discovery is per server, and the next sign-in may be a different one. Leaving the old
+                // flags in place would show read-along or device management on a server without them.
+                forgetCapabilities(session.serverUrl)
+                _currentCapabilities.value = ServerCapabilities.Baseline
+                _currentCapabilitiesResolved.value = false
+                // Chapter text is account-visible content, and chapter ids are only unique per server, so a
+                // cached read-along must never outlive the session that fetched it.
+                invalidateReader()
+                synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
+                onSessionCleared()
+                _sessionEnd.value = if (revoked) null else NotRevokedSessionEnd
             }
         }
-        sessionMutation.withLock {
-            tokenStore.clearToken()
-            invalidateListeningStats()
-            // Discovery is per server, and the next sign-in may be a different one. Leaving the old
-            // flags in place would show read-along or device management on a server without them.
-            forgetCapabilities(session.serverUrl)
-            _currentCapabilities.value = ServerCapabilities.Baseline
-            _currentCapabilitiesResolved.value = false
-            // Chapter text is account-visible content, and chapter ids are only unique per server, so a
-            // cached read-along must never outlive the session that fetched it.
-            invalidateReader()
-            synchronized(playbackSkipsCache) { playbackSkipsCache.clear() }
-            onSessionCleared()
-        }
+        revoked
     }
 
     /**
