@@ -6208,7 +6208,7 @@ private fun QueueScreen(
             if (unsupported) {
                 SectionHeader(kicker = "Q", title = "Not available")
                 EmptyCard(
-                    "This server has no cross-library queue. Update the backend to line chapters " +
+                    "This server has no cross-library queue. Ask whoever set up your server to update it to line chapters " +
                         "up across books.",
                 )
                 return@Column
@@ -6509,7 +6509,7 @@ private fun DevicesScreen(
                 if (unsupported) {
                     SectionHeader(kicker = "DEV", title = "Not available")
                     EmptyCard(
-                        "This server is older than the device-session API. Update the backend to " +
+                        "This server is older than the device-session API. Ask whoever set up your server to update it to " +
                             "manage sign-ins from here.",
                     )
                 } else {
@@ -9667,7 +9667,7 @@ internal fun FictionEditScreen(
                         adopt(
                             result,
                             "Cover updated.",
-                            "This server is older than cover uploads. Update the backend to change " +
+                            "This server is older than cover uploads. Ask whoever set up your server to update it to change " +
                                 "cover art from here.",
                         )
                     }
@@ -9736,7 +9736,7 @@ internal fun FictionEditScreen(
             ) {
                 if (!editsEverything) {
                     MetaText(
-                        text = "This server can only edit the title and author. Update the backend " +
+                        text = "This server can only edit the title and author. Ask whoever set up your server to update it " +
                             "for the synopsis, tags and cover art.",
                         color = AarisColor.Warning,
                     )

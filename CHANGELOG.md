@@ -24,6 +24,9 @@ Notable changes to the TTSRoad Android client.
 
 - Home-screen widget buttons are at least 48 dp tall, share the row evenly and use 14 sp text, so
   they are easier to hit one-handed in the dark. (#501)
+- Error messages no longer assume you run the server: certificate, HTTPS, "update the backend" and
+  signing-key messages now say to ask whoever set up your server (or who gave you the app), with the
+  technical advice moved under Details. (#489)
 - Chapters that cannot be played yet read "Getting ready…" or "Couldn't prepare this chapter" instead of
   PENDING / CLEANING / FETCHING; the pipeline words and the server's message sit behind Details. (#488)
 - The new-chapter notification says a single chapter is ready to listen, and when several land it

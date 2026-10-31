@@ -73,7 +73,7 @@ class NewChaptersUiTest {
                 )
             }
         }
-        compose.onNodeWithText("THIS SERVER DOES NOT SUPPORT NEW CHAPTER NOTIFICATIONS. UPDATE THE BACKEND TO TRACK NEW CHAPTERS.").assertIsDisplayed()
+        compose.onNodeWithText("THIS SERVER CAN'T TELL THE APP ABOUT NEW CHAPTERS YET. ASK WHOEVER SET UP YOUR SERVER TO UPDATE IT.").assertIsDisplayed()
         compose.onNodeWithText("RETRY").assertDoesNotExist()
     }
 
@@ -315,9 +315,10 @@ class NewChaptersUiTest {
         chapter = ChapterNotificationChapter(id = 1000 + id, title = "Chapter $id"),
     )
 
+    // Tall enough for both groups: each row carries a Details fold (#488), so at 640 dp the
+    // lazy list no longer composes the second header.
+    @Config(sdk = [34], qualifiers = "w320dp-h1000dp")
     @Test
-    // Tall viewport: the list is lazy, so the second group must fit on screen to be composed.
-    @Config(sdk = [34], qualifiers = "w320dp-h1200dp")
     fun `rows group under their fiction and play new starts at the first chapter`() {
         val played = mutableListOf<Int>()
         val state = NewChaptersState().apply {
