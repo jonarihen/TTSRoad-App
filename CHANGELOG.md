@@ -2,6 +2,12 @@
 
 Notable changes to the TTSRoad Android client.
 
+## Unreleased
+
+### Fixed
+
+- A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
+
 ## 0.21.0 — 2026-10-17
 
 ### Fixed

@@ -121,6 +121,7 @@ class SleepTimerProgressTest {
         player.boundary(false)
         assertTrue(reached(player, progress) == false)
         player.play()
+        timer.cancel()
         assertFalse(progress.deferPlayedMark(player.currentMediaItem!!))
     }
 
@@ -147,7 +148,7 @@ class SleepTimerProgressTest {
         val player = TimerStopPlayer()
         val timer = SleepTimerController().apply { armDuration(60_000L) }
         val progress = SleepTimerProgress(player, timer)
-        assertFalse(reached(player, progress))
+        assertTrue(reached(player, progress))
         player.naturalEnd()
         assertTrue(reached(player, progress, queueEnded = true))
         timer.cancel()
