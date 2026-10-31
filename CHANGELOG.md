@@ -16,6 +16,8 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- Chapters that cannot be played yet read "Getting ready…" or "Couldn't prepare this chapter" instead of
+  PENDING / CLEANING / FETCHING; the pipeline words and the server's message sit behind Details. (#488)
 - A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
 - Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
   "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP

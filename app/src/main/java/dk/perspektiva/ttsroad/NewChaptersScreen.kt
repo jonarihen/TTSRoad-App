@@ -31,10 +31,12 @@ import dk.perspektiva.ttsroad.data.TtsRoadRepository
 import dk.perspektiva.ttsroad.data.canRetryConversion
 import dk.perspektiva.ttsroad.data.chapterNotificationsEmptyNote
 import dk.perspektiva.ttsroad.data.detailLabel
+import dk.perspektiva.ttsroad.data.rawStateDetail
 import dk.perspektiva.ttsroad.data.notificationBody
 import dk.perspektiva.ttsroad.data.presentation
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
+import dk.perspektiva.ttsroad.ui.ErrorDetails
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
@@ -271,6 +273,7 @@ private fun NewChapterRow(
                     else -> AarisColor.Muted
                 },
             )
+            ErrorDetails(details = entry.rawStateDetail())
             // Only a chapter with audio offers Play, and only the server's own `dismissible` offers
             // Dismiss. Neither is inferred from the state name.
             if (entry.playable || entry.dismissible || onRetry != null) {

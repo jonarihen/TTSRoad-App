@@ -182,10 +182,10 @@ class ChapterNotificationsTest {
 
     @Test
     fun `a converting row says how far it has got`() {
-        assertEquals("Chapter 1  ·  converting 62%", notice(1, "pulled", progress = 62).detailLabel())
-        assertEquals("Chapter 1  ·  converting", notice(1, "pulled").detailLabel())
+        assertEquals("Chapter 1  ·  getting ready 62%", notice(1, "pulled", progress = 62).detailLabel())
+        assertEquals("Chapter 1  ·  getting ready…", notice(1, "pulled").detailLabel())
         assertEquals("Chapter 1  ·  ready to listen", notice(1, "ready").detailLabel())
-        assertEquals("Chapter 1  ·  conversion failed", notice(1, "stalled").detailLabel())
+        assertEquals("Chapter 1  ·  couldn't prepare this chapter", notice(1, "stalled").detailLabel())
     }
 
     @Test
