@@ -30,6 +30,60 @@ val ttsRoadSentryDsn: String = run {
         ?: ""
 }
 
+/**
+ * Hosts whose server certificate may chain to a CA the user installed on the phone (#504), from
+ * `ttsroad.trust.user.ca.hosts` in the gitignored `local.properties` (or `-PttsroadTrustUserCaHosts`,
+ * or `TTSROAD_TRUST_USER_CA_HOSTS`), comma separated. Empty is the default: system CAs only.
+ *
+ * Baked in at build time and per host, never a runtime toggle (README, decision #366): trusting
+ * every user CA would let any profile or "VPN" app on the phone read the session token.
+ */
+val ttsRoadUserCaHosts: List<String> = run {
+    val raw = rootProject.file("local.properties")
+        .takeIf { it.exists() }
+        ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
+        ?.getProperty("ttsroad.trust.user.ca.hosts")
+        ?: providers.gradleProperty("ttsroadTrustUserCaHosts").orNull
+        ?: providers.environmentVariable("TTSROAD_TRUST_USER_CA_HOSTS").orNull
+        ?: ""
+    raw.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.onEach {
+        // Also keeps anything that is not a plain host name out of the generated XML.
+        require(Regex("[a-z0-9]([a-z0-9.-]*[a-z0-9])?").matches(it)) {
+            "ttsroad.trust.user.ca.hosts: '$it' is not a host name"
+        }
+    }
+}
+
+abstract class GenerateNetworkSecurityConfig : DefaultTask() {
+    @get:Input
+    abstract val hosts: ListProperty<String>
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val domains = hosts.get().joinToString("\n") { host ->
+            """
+            |    <domain-config>
+            |        <domain includeSubdomains="false">$host</domain>
+            |        <trust-anchors>
+            |            <certificates src="system" />
+            |            <certificates src="user" />
+            |        </trust-anchors>
+            |    </domain-config>
+            """.trimMargin()
+        }
+        val xml = outputDir.file("xml/network_security_config.xml").get().asFile
+        xml.parentFile.mkdirs()
+        // Everything not listed keeps the platform default: system CAs, no cleartext.
+        xml.writeText(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<network-security-config>\n" +
+                (if (domains.isEmpty()) "" else domains + "\n") + "</network-security-config>\n",
+        )
+    }
+}
+
 android {
     namespace = "dk.perspektiva.ttsroad"
     compileSdk = 37
@@ -101,6 +155,15 @@ android {
     testOptions {
         // Robolectric reads the merged manifest and resources for the tests that need a Context.
         unitTests.isIncludeAndroidResources = true
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val task = tasks.register<GenerateNetworkSecurityConfig>(
+            "generate${variant.name.replaceFirstChar { it.uppercase() }}NetworkSecurityConfig",
+        ) { hosts.set(ttsRoadUserCaHosts) }
+        variant.sources.res?.addGeneratedSourceDirectory(task, GenerateNetworkSecurityConfig::outputDir)
     }
 }
 

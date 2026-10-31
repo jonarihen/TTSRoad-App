@@ -65,6 +65,9 @@ internal const val CleartextBlockedMessage =
         "for its https:// address."
 internal const val UntrustedCertificateMessage =
     "This phone doesn't trust the server's security certificate. Ask whoever set up your server to fix it."
+internal const val HostnameMismatchMessage =
+    "The server's security certificate was issued for a different address than the one you entered. " +
+        "Check the address, or ask whoever set up your server."
 internal const val SecureConnectionMessage =
     "A secure connection to the server couldn't be set up - check the address, or ask whoever set up your server."
 internal const val SessionExpiredMessage = "Your session has expired - sign in again."
@@ -86,6 +89,10 @@ private val AdminHints = mapOf(
     UntrustedCertificateMessage to
         "For the admin: a self-signed or private-CA certificate is not accepted. Use a certificate " +
             "from a public CA, such as Let's Encrypt or `tailscale cert`.",
+    HostnameMismatchMessage to
+        "For the admin: the certificate is valid but does not list this host name. Connect with a " +
+            "name the certificate covers (its subject alternative names), or issue one that covers " +
+            "this address.",
     SecureConnectionMessage to "For the admin: check the address and the server's HTTPS setup.",
     NotFoundMessage to
         "For the admin: the server may be running an older TTSRoad version, or the address may point " +
@@ -105,12 +112,19 @@ private fun plainLanguageFor(failure: Throwable): String? {
             cause is UnknownServiceException && cause.message.orEmpty().contains("CLEARTEXT", ignoreCase = true) ->
                 return CleartextBlockedMessage
 
+            // OkHttp: "Hostname x not verified" (and the platform's "No subject alternative
+            // names"). The chain is fine; the name is not, so "doesn't trust" would send the admin
+            // to install a CA they do not need.
+            cause is SSLPeerUnverifiedException ||
+                cause.message.orEmpty().let {
+                    it.contains("not verified", ignoreCase = true) ||
+                        it.contains("subject alternative name", ignoreCase = true)
+                } -> return HostnameMismatchMessage
+
             cause is CertPathValidatorException ||
                 cause is CertificateException ||
                 cause.message.orEmpty().contains("Trust anchor", ignoreCase = true) ->
                 return UntrustedCertificateMessage
-
-            cause is SSLPeerUnverifiedException -> return UntrustedCertificateMessage
         }
     }
     chain.forEach { cause ->

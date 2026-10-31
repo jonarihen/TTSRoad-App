@@ -6,6 +6,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Release builds can trust user-installed CAs for named hosts only, set at build time with
+  `ttsroad.trust.user.ca.hosts` in `local.properties` (no runtime toggle; see README). A certificate
+  issued for a different name now says so instead of "doesn't trust the certificate". (#504)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)
