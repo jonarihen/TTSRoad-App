@@ -1760,22 +1760,19 @@ private fun FictionScreen(
             // Asked for the whole server rather than the shelf: a fiction screen can be opened
             // from browse-all for a book this account does not follow, and the followed-only
             // default would answer nothing for exactly that case.
-            runCatching {
-                repository.feeds(scope = LibraryScopeAll)
-                    ?.fictions
-                    ?.firstOrNull { it.fictionId == fiction.id }
-                    ?.feedUrl
-            }.getOrNull()
+            runCatching { repository.feedUrlFor(fiction.id) }.getOrNull()
         }
     }
     LaunchedEffect(fiction.id, capabilities.bookmarks) {
         fictionBookmarks = if (!capabilities.bookmarks) {
             emptyList()
         } else {
+            // Last visit's list first, so the section does not pop in; the fetch below replaces it.
+            repository.peekBookmarks(fictionId = fiction.id)?.let { fictionBookmarks = it }
             // A failure leaves the section absent, which is what it always was. Nothing to report:
             // this is not the list the user opened the screen for.
             runCatching { repository.bookmarks(fictionId = fiction.id).orEmpty() }
-                .getOrDefault(emptyList())
+                .getOrDefault(fictionBookmarks)
         }
     }
 
@@ -5734,7 +5731,11 @@ private fun BookmarksScreen(
         }
     }
 
-    LaunchedEffect(Unit) { load() }
+    LaunchedEffect(Unit) {
+        // Painted from the last visit while the refresh runs.
+        bookmarks = repository.peekBookmarks()
+        load()
+    }
 
     val loaded = bookmarks
     when {

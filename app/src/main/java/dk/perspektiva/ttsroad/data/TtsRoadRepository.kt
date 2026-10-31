@@ -286,7 +286,21 @@ class TtsRoadRepository(
         val token: String,
     )
 
+    /**
+     * Last-seen feeds and bookmarks, so a screen can paint them at once and refresh behind them.
+     * In memory, and keyed by the session (server, user, token) that fetched them: a response that
+     * lands after a sign-out can never be read back by the next account.
+     */
+    private val peekCache = HashMap<String, Any>()
+
+    private fun SessionState.cacheKey(what: String) = "$serverUrl|$username|$token|$what"
+
+    private fun dropPeeked(prefix: String) = synchronized(peekCache) {
+        peekCache.keys.removeAll { it.substringAfterLast('|').startsWith(prefix) }
+    }
+
     private fun invalidateListeningStats() = synchronized(listeningStatsCache) {
+        synchronized(peekCache) { peekCache.clear() }
         listeningStatsCache.clear()
         listeningStatsOwner = null
         listeningStatsGeneration++
@@ -1685,10 +1699,27 @@ class TtsRoadRepository(
         return withAuthorizedApi { it.feeds(scope) }
     }
 
+    /**
+     * One fiction's podcast URL. The server only offers the whole list, so that list is fetched
+     * once per session and every fiction screen after the first reads it from memory; rotating a
+     * link drops it. Null when the server has no feeds or the fiction is not in the list.
+     */
+    suspend fun feedUrlFor(fictionId: Int): String? {
+        if (!_currentCapabilities.value.feedUrls) return null
+        val all = withContext(Dispatchers.IO) {
+            authorizedWithSession { api, session ->
+                val key = session.cacheKey("feeds:all")
+                synchronized(peekCache) { peekCache[key] as? FeedsResponse }
+                    ?: api.feeds(LibraryScopeAll).also { synchronized(peekCache) { peekCache[key] = it } }
+            }
+        }
+        return all.fictions.firstOrNull { it.fictionId == fictionId }?.feedUrl
+    }
+
     /** Revoke and reissue this account's combined feed and OPML links. Self-service. */
     suspend fun rotateLibraryFeed(): LibraryFeedRotateResponse? {
         if (!_currentCapabilities.value.feedUrls) return null
-        return withAuthorizedApi { it.rotateLibraryFeed() }
+        return withAuthorizedApi { it.rotateLibraryFeed() }.also { dropPeeked("feeds:") }
     }
 
     /**
@@ -1699,7 +1730,7 @@ class TtsRoadRepository(
      */
     suspend fun rotateFictionFeedToken(fictionId: Int): MaintenanceResponse? {
         if (!_currentCapabilities.value.fictionMaintenance) return null
-        return withAuthorizedApi { it.rotateFictionFeedToken(fictionId) }
+        return withAuthorizedApi { it.rotateFictionFeedToken(fictionId) }.also { dropPeeked("feeds:") }
     }
 
     /**
@@ -1985,9 +2016,29 @@ class TtsRoadRepository(
      */
     suspend fun bookmarks(fictionId: Int? = null, chapterId: Int? = null): List<Bookmark>? {
         if (!_currentCapabilities.value.bookmarks) return null
-        return withAuthorizedApi {
-            it.bookmarks(fictionId = fictionId, chapterId = chapterId)
-        }.bookmarks
+        return withContext(Dispatchers.IO) {
+            authorizedWithSession { api, session ->
+                api.bookmarks(fictionId = fictionId, chapterId = chapterId).bookmarks.also {
+                    synchronized(peekCache) { peekCache[session.cacheKey("bookmarks:$fictionId:$chapterId")] = it }
+                }
+            }
+        }
+    }
+
+    /** The last list [bookmarks] returned for these filters this session, or null if none yet. */
+    @Suppress("UNCHECKED_CAST")
+    suspend fun peekBookmarks(fictionId: Int? = null, chapterId: Int? = null): List<Bookmark>? {
+        val key = tokenStore.current().cacheKey("bookmarks:$fictionId:$chapterId")
+        return synchronized(peekCache) { peekCache[key] as? List<Bookmark> }
+    }
+
+    /** The last stats [listeningStats] returned for [weeks] this session, or null if none yet. */
+    suspend fun peekListeningStats(weeks: Int = DefaultActivityWeeks): ListeningStatsResponse? {
+        val session = tokenStore.current()
+        val owner = StatsSessionKey(session.serverUrl, session.username, session.token ?: return null)
+        return synchronized(listeningStatsCache) {
+            if (listeningStatsOwner == owner) listeningStatsCache[weeks.coerceIn(MinActivityWeeks, MaxActivityWeeks)]?.response else null
+        }
     }
 
     /**
@@ -2021,14 +2072,14 @@ class TtsRoadRepository(
                     kind = kind,
                 ),
             )
-        }.bookmark
+        }.bookmark.also { dropPeeked("bookmarks:") }
     }
 
     suspend fun updateBookmark(bookmarkId: Int, label: String?, note: String?): Bookmark? {
         if (!_currentCapabilities.value.bookmarks) return null
         return withAuthorizedApi {
             it.updateBookmark(bookmarkId, UpdateBookmarkRequest(label = label, note = note))
-        }.bookmark
+        }.bookmark.also { dropPeeked("bookmarks:") }
     }
 
     /** True when the bookmark is gone. A 404 counts: it is already not there. */
@@ -2036,6 +2087,7 @@ class TtsRoadRepository(
         if (!_currentCapabilities.value.bookmarks) return false
         return try {
             withAuthorizedApi { it.deleteBookmark(bookmarkId) }
+            dropPeeked("bookmarks:")
             true
         } catch (e: HttpException) {
             // Deleting something already deleted — from the browser, or a double tap — is the

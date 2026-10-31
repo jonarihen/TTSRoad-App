@@ -108,6 +108,42 @@ class FeedsRepositoryTest {
         assertEquals("https://s/feed/ftok/ashes.xml", feeds?.fictions?.single()?.feedUrl)
     }
 
+    @Test
+    fun `a fiction's feed url is looked up once and then served from memory`() = runTest {
+        val repository = repository()
+        server.enqueue(
+            json(
+                """
+                {"scope": "all", "library": {},
+                 "fictions": [{"fiction_id": 7, "feed_url": "https://s/feed/ftok/ashes.xml"},
+                              {"fiction_id": 8, "feed_url": "https://s/feed/gtok/glass.xml"}]}
+                """,
+            ),
+        )
+
+        assertEquals("https://s/feed/ftok/ashes.xml", repository.feedUrlFor(7))
+        assertEquals("https://s/feed/gtok/glass.xml", repository.feedUrlFor(8))
+        assertNull(repository.feedUrlFor(99))
+
+        server.takeRequest()
+        assertEquals("/api/mobile/feeds?scope=all", server.takeRequest().path)
+        assertEquals(2, server.requestCount) // capabilities + one feeds call
+    }
+
+    @Test
+    fun `rotating a fiction's link drops the remembered list`() = runTest {
+        val repository = repository()
+        val feeds = """{"scope": "all", "library": {}, "fictions": [{"fiction_id": 7, "feed_url": "u1"}]}"""
+        server.enqueue(json(feeds))
+        server.enqueue(json("""{"status": "ok", "fiction_id": 7, "feed_url": "u2"}"""))
+        server.enqueue(json(feeds.replace("u1", "u2")))
+
+        assertEquals("u1", repository.feedUrlFor(7))
+        repository.rotateFictionFeedToken(7)
+
+        assertEquals("u2", repository.feedUrlFor(7))
+    }
+
     /**
      * The fiction screen asks for the whole server, not the shelf. A fiction screen can be opened
      * from browse-all for a book this account does not follow, and the followed-only default would
