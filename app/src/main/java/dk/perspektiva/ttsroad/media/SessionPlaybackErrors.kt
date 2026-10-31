@@ -20,6 +20,7 @@ import dk.perspektiva.ttsroad.player.readablePlaybackException
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class SessionPlaybackErrors(player: Player) : ForwardingPlayer(player) {
 
+    // Touched only on the application thread (player getters and listener callbacks), so unsynchronised.
     private var rawError: PlaybackException? = null
     private var readableError: PlaybackException? = null
     private var failedMediaId: String? = null
@@ -53,8 +54,14 @@ internal class SessionPlaybackErrors(player: Player) : ForwardingPlayer(player) 
     // callback is one, so a delegating class would silently drop all but the two overridden here.
     private fun presenting(delegate: Player.Listener): Player.Listener = Proxy.newProxyInstance(
         Player.Listener::class.java.classLoader, arrayOf(Player.Listener::class.java),
-    ) { _, method, args ->
+    ) { proxy, method, args ->
         val arguments = args ?: emptyArray()
+        // Object methods: ForwardingPlayer finds this listener again by equality when removing it.
+        when (method.name) {
+            "equals" -> return@newProxyInstance arguments[0] === proxy
+            "hashCode" -> return@newProxyInstance System.identityHashCode(proxy)
+            "toString" -> return@newProxyInstance "SessionPlaybackErrors.Presenter($delegate)"
+        }
         when (method.name) {
             "onPlayerError" -> arguments[0] = present(arguments[0] as PlaybackException, currentMediaItem?.mediaId)
                 ?: readablePlaybackException(arguments[0] as PlaybackException)

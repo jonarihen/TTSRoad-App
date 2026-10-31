@@ -119,6 +119,26 @@ class SessionPlaybackErrorsTest {
         }
     }
 
+    @Test fun `removeListener stops delivery`() {
+        val player = ErrorPlayer()
+        val presented = SessionPlaybackErrors(player)
+        val seen = mutableListOf<String?>()
+        val listener = object : Player.Listener {
+            override fun onPlayerErrorChanged(error: PlaybackException?) { seen += error?.message }
+        }
+        presented.addListener(listener)
+        presented.playbackState
+        player.fail(httpError(503))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, seen.size)
+        presented.removeListener(listener)
+        player.mediaId = "chapter:43"
+        player.error = null
+        player.publish()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, seen.size)
+    }
+
     @Test fun `another item clears the error even if the underlying player has not cleared it yet`() {
         val player = ErrorPlayer()
         val presented = SessionPlaybackErrors(player)

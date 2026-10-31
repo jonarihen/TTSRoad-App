@@ -1692,7 +1692,8 @@ class TtsRoadMediaService : MediaLibraryService() {
                     service.resumeQueue()?.forAudioAccount(origin.account)
                         ?: throw PlaybackRequestFailure(SessionError(SessionError.ERROR_INVALID_STATE, "Nothing to resume"))
                 } catch (failure: PlaybackRequestFailure) {
-                    if (origin == service.currentAudioAuth()) mediaSession.sendError(failure.sessionError)
+                    // The session may be released by the time a slow library load fails.
+                    if (origin == service.currentAudioAuth()) runCatching { mediaSession.sendError(failure.sessionError) }
                     throw failure
                 }
             }
