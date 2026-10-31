@@ -75,6 +75,7 @@ data class PlayerUiState(
      * or a Wi-Fi handover.
      */
     val error: String? = null,
+    val errorDetails: String? = null,
 )
 
 /**

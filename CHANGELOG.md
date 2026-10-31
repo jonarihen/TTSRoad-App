@@ -16,6 +16,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Fixed
 
+- Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
+  "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP
+  status. (#481)
 - Chapters the player marks played show as played in an open fiction's chapter list straight
   away, without a pull-to-refresh. (#526)
 - Resuming from Android Auto or a headset on weak signal serves the saved library or downloaded

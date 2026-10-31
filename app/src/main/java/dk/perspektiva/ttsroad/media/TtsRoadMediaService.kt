@@ -458,7 +458,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         startPlaybackSkipTicker()
         startSleepTimer()
         browserCallback = BrowserCallback(this)
-        session = MediaLibrarySession.Builder(this, growingQueue.sessionPlayer, browserCallback)
+        session = MediaLibrarySession.Builder(this, SessionPlaybackErrors(growingQueue.sessionPlayer), browserCallback)
             .setSessionActivity(playerActivityIntent())
             .setMediaButtonPreferences(
                 TtsRoadSessionCommands.mediaButtonPreferences(
@@ -1511,7 +1511,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         ) {
             is OfflineResume.Play ->
                 MediaSession.MediaItemsWithStartPosition(listOf(resume.item), 0, resume.startPositionMs)
-            is OfflineResume.Unavailable -> throw UnsupportedOperationException(resume.message)
+            is OfflineResume.Unavailable -> throw resume.asRequestFailure()
         }
     }
 
@@ -1734,9 +1734,15 @@ class TtsRoadMediaService : MediaLibraryService() {
             isForPlayback: Boolean,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
             service.serviceScope.future {
-                val account = service.currentAudioAuth().account
-                service.resumeQueue()?.forAudioAccount(account)
-                    ?: throw UnsupportedOperationException("Nothing to resume")
+                val origin = service.currentAudioAuth()
+                try {
+                    service.resumeQueue()?.forAudioAccount(origin.account)
+                        ?: throw PlaybackRequestFailure(SessionError(SessionError.ERROR_INVALID_STATE, "Nothing to resume"))
+                } catch (failure: PlaybackRequestFailure) {
+                    // The session may be released by the time a slow library load fails.
+                    if (origin == service.currentAudioAuth()) runCatching { mediaSession.sendError(failure.sessionError) }
+                    throw failure
+                }
             }
 
         // Media3 splits searching in two: onSearch does the work and reports how many results
