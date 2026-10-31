@@ -6,6 +6,11 @@ Notable changes to the TTSRoad Android client.
 
 ### Added
 
+- Automatic address failover: when the address in use cannot be reached at all (no DNS, refused, no
+  route, connect timeout), the app tries your other saved addresses, each through the same
+  same-server and same-account checks as SWITCH, and keeps the first that passes. Settings > Profile
+  says when it switched and from where. At most one attempt a minute; the failed call still fails and
+  the next one uses the new address. (#505)
 - Sleep timer: the notification and Android Auto button shows a filled moon while a timer runs and an
   outlined one when off, a shake that extends the timer gives a short vibration, and the home-screen
   widget has a Sleep button that steps the timer like the notification's. (#500)
