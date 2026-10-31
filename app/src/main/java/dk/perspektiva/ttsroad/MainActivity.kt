@@ -264,6 +264,8 @@ import dk.perspektiva.ttsroad.data.unsyncedSignOutMessage
 import dk.perspektiva.ttsroad.data.SkipIntervalOptionsMs
 import dk.perspektiva.ttsroad.data.SleepTimerDefaultOptions
 import dk.perspektiva.ttsroad.data.speedOptions
+import dk.perspektiva.ttsroad.data.canStepSpeed
+import dk.perspektiva.ttsroad.data.stepSpeed
 import dk.perspektiva.ttsroad.data.TextSpan
 import dk.perspektiva.ttsroad.data.VoiceChoice
 import dk.perspektiva.ttsroad.data.VolumeBoost
@@ -1497,7 +1499,7 @@ internal fun LibraryScreen(
                                 onAction = cache::refreshLibrary,
                             )
                             if (library.continueListening.isEmpty()) {
-                                EmptyCard("No active chapters")
+                                EmptyCard("No active chapters", FindSomethingLabel, onBrowseFictions)
                             } else {
                                 val hero = library.continueListening.first()
                                 val heroFiction = fictionForChapter(hero)
@@ -1537,7 +1539,7 @@ internal fun LibraryScreen(
                                 onAction = { sortSheetOpen = true }.takeIf { library.fictions.isNotEmpty() },
                             )
                             if (library.fictions.isEmpty()) {
-                                EmptyCard("No fictions found")
+                                EmptyCard("No fictions found", FindSomethingLabel, onBrowseFictions)
                             } else {
                                 HorizontalFictionRail(
                                     fictions = sortedFictions,
@@ -3626,19 +3628,28 @@ private fun PlayerScreen(
                 )
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             }
+            // One store-routing rule for presets and fine steps alike: pinned, the tap edits this
+            // book's override; otherwise the global speed.
+            val applySpeed: (Float) -> Unit = { speed ->
+                if (isPinnedToBook && speedFictionId != null) {
+                    playbackController.setSpeedForFiction(speedFictionId, speed)
+                } else {
+                    playbackController.setSpeed(speed)
+                }
+            }
+            FineSpeedStepper(
+                speed = playerState.speed,
+                speedLabel = formatSpeed(playerState.speed),
+                onSpeedChange = applySpeed,
+            )
+            HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
             Column(modifier = Modifier.selectableGroup()) {
                 speedOptions(playerState.speed).forEach { preset ->
                     SpeedOptionRow(
                         label = formatSpeed(preset),
                         selected = kotlin.math.abs(preset - playerState.speed) < 0.01f,
                         onClick = {
-                            // Which store the tap lands in is the switch's whole job: pinned,
-                            // it edits this book's override; otherwise the global speed.
-                            if (isPinnedToBook && speedFictionId != null) {
-                                playbackController.setSpeedForFiction(speedFictionId, preset)
-                            } else {
-                                playbackController.setSpeed(preset)
-                            }
+                            applySpeed(preset)
                             showSpeed = false
                         },
                     )
@@ -4087,6 +4098,58 @@ internal fun PerBookSpeedSwitch(
         }
         Spacer(modifier = Modifier.width(12.dp))
         Switch(checked = isPinned, onCheckedChange = null)
+    }
+}
+
+/**
+ * The speed sheet's fine adjustment (#487): -/+ in [dk.perspektiva.ttsroad.data.FineSpeedStep]
+ * steps, for the speeds between presets. Unlike a preset it leaves the sheet open, since reaching
+ * 2.2x from 2.0x is four taps. Each button is a 48 dp target with a spoken name, and the readout is
+ * a polite live region so TalkBack says the new speed after each tap.
+ */
+@Composable
+internal fun FineSpeedStepper(
+    speed: Float,
+    speedLabel: String,
+    onSpeedChange: (Float) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedButton(
+            onClick = { onSpeedChange(stepSpeed(speed, -1)) },
+            enabled = canStepSpeed(speed, -1),
+            shape = RectangleShape,
+            modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .testTag("speed_step_down")
+                .semantics { contentDescription = "Slower" },
+        ) {
+            Text(text = "−", style = MaterialTheme.typography.titleMedium)
+        }
+        Text(
+            text = speedLabel,
+            style = MaterialTheme.typography.titleMedium,
+            color = AarisColor.Accent,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .weight(1f)
+                .semantics { liveRegion = LiveRegionMode.Polite },
+        )
+        OutlinedButton(
+            onClick = { onSpeedChange(stepSpeed(speed, 1)) },
+            enabled = canStepSpeed(speed, 1),
+            shape = RectangleShape,
+            modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .testTag("speed_step_up")
+                .semantics { contentDescription = "Faster" },
+        ) {
+            Text(text = "+", style = MaterialTheme.typography.titleMedium)
+        }
     }
 }
 
@@ -10154,13 +10217,28 @@ private fun CoverThumb(imageUrl: String?, fallback: String, size: Int = 64) {
     }
 }
 
+internal const val FindSomethingLabel = "Find something to listen to"
+
 @Composable
-internal fun EmptyCard(message: String) {
+internal fun EmptyCard(
+    message: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
     AarisCard {
-        MetaText(
-            text = message,
-            modifier = Modifier.padding(16.dp),
-        )
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            MetaText(text = message)
+            // A new account lands here with nothing to resume: say where to find something (#508).
+            if (actionLabel != null && onAction != null) {
+                Button(
+                    onClick = onAction,
+                    shape = RectangleShape,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                ) {
+                    Text(actionLabel)
+                }
+            }
+        }
     }
 }
 

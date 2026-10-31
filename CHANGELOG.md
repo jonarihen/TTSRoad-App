@@ -8,16 +8,22 @@ Notable changes to the TTSRoad Android client.
 
 - Long-press a chapter, then "Mark a range of chapters…" to mark chapters from one number to another
   (say 400 to 650) played or unplayed in one request, with the count shown first. (#512)
+- The speed sheet has - / + buttons that move playback speed in 0.05x steps (2.2x is four taps from
+  2.0x), writing to this book's override when the per-book switch is on. (#487)
 
 ### Changed
 
 - New chapters groups rows under their fiction with a "Play new" button per fiction, scrolls as a
   lazy list, and the Listening tab badge reads "3 new" instead of a bare number. (#496)
+- The empty Home cards ("No active chapters", "No fictions found") offer "Find something to listen
+  to", which opens Browse. (#508)
 - Android Auto: Continue Listening and Recent show at most 20 rows (newest first) instead of
   leaving the cut to the head unit, and the Recent folder says its rows name the book. (#499)
 
 ### Fixed
 
+- The new-chapter notification says a single chapter is ready to listen, and when several land it
+  names the serials and offers "Play first". (#495)
 - A sleep-timer stop at the end of a chapter no longer marks the chapter played by itself. (#485)
 - Playback errors are shown in plain words on Android Auto and the notification ("Not downloaded",
   "Server unreachable"), and the phone's error banner has a Details fold with the error code and HTTP
