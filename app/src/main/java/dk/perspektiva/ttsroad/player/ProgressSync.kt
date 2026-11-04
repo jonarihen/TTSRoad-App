@@ -1,5 +1,6 @@
 package dk.perspektiva.ttsroad.player
 
+import dk.perspektiva.ttsroad.data.OtherDevice
 import dk.perspektiva.ttsroad.data.PlaybackSyncItem
 import dk.perspektiva.ttsroad.data.PlaybackSyncState
 import dk.perspektiva.ttsroad.data.SessionState
@@ -44,6 +45,11 @@ data class ProgressFlushResult(
     val drained: Boolean = false,
     /** Nothing was tried because the owner's server capabilities are not known yet. */
     val capabilitiesUnresolved: Boolean = false,
+    /**
+     * Per fiction the server answered for: who else is listening there, or null for nobody (#526).
+     * A fiction missing from the map was not answered for, which is not the same as "nobody".
+     */
+    val otherDevices: Map<Int, OtherDevice?> = emptyMap(),
 )
 
 /** How long [ProgressSync.flushUntilCapabilitiesResolve] waits between attempts: about four minutes in all. */
@@ -58,10 +64,9 @@ val CapabilityRetryDelaysMs: List<Long> = listOf(5_000L, 15_000L, 45_000L, 180_0
  * applies only a strictly newer one, which is why every queued entry carries the wall-clock moment
  * it was *recorded* rather than the moment it is sent.
  *
- * On a server without `batch_progress` this falls back to the single-item endpoint, unchanged and
- * still unordered. That is deliberate: the backend keeps `/playback/progress` working precisely for
- * clients that cannot stamp their writes, and an older server needs it. The queue still helps
- * there — a position recorded offline is retried rather than dropped — it just cannot be ordered.
+ * On a server without `batch_progress` this falls back to the single-item endpoint, still stamped:
+ * server 1.5.11+ orders it the same way, an older one ignores the stamp and stays unordered. The
+ * queue still helps there — a position recorded offline is retried rather than dropped.
  *
  * ## On trusting the device clock
  *
@@ -149,6 +154,7 @@ class ProgressSync(
         var accepted = 0
         var sent = 0
         val overridden = mutableListOf<PlaybackSyncState>()
+        val otherDevices = mutableMapOf<Int, OtherDevice?>()
 
         for (batch in queued.chunked(limit)) {
             if (repository.currentSession() != session) break // Switched account mid-flush.
@@ -168,6 +174,7 @@ class ProgressSync(
 
             sent += batch.size
             accepted += response.accepted.size
+            response.otherDevice.forEach { (id, other) -> id.toIntOrNull()?.let { otherDevices[it] = other } }
 
             // Anything the server accepted is done with. So is anything it rejected for a reason
             // that will not change on a retry — leaving those queued would block the queue forever.
@@ -197,6 +204,7 @@ class ProgressSync(
             accepted = accepted,
             overriddenByServer = overridden,
             drained = store.pendingFor(session).isEmpty(),
+            otherDevices = otherDevices,
         )
     }
 
@@ -208,11 +216,14 @@ class ProgressSync(
     /**
      * The `/playback/progress` path, for a server without `batch_progress`.
      *
-     * One call per chapter and no ordering, exactly as before this queue existed. The gain here is
-     * only that a position recorded while offline is retried instead of discarded.
+     * One call per chapter. Each carries its `client_updated_at`, which a 1.5.11+ server orders
+     * like `/playback/sync` (a loser answers `stale` and is dropped, #526); an older one ignores it
+     * and stays last-write-wins. A position recorded while offline is retried instead of discarded.
      */
     private suspend fun flushOneAtATime(queued: List<PendingProgress>, session: SessionState): ProgressFlushResult {
         var accepted = 0
+        val overridden = mutableListOf<PlaybackSyncState>()
+        val otherDevices = mutableMapOf<Int, OtherDevice?>()
         for (entry in queued) {
             if (repository.currentSession() != session) break // Switched account mid-flush.
             val attempt = runCatching {
@@ -222,6 +233,7 @@ class ProgressSync(
                     positionSeconds = entry.positionSeconds,
                     isPlayed = entry.isPlayed,
                     asSession = session,
+                    clientUpdatedAt = entry.clientUpdatedAt,
                 )
             }
             val refused = attempt.exceptionOrNull()?.isPermanentRefusal() == true
@@ -229,7 +241,11 @@ class ProgressSync(
             // deleted, say) is dropped instead — at the head of the queue it would block the rest.
             if (attempt.isFailure && !refused) break
             withContext(Dispatchers.IO) { store.resolve(listOf(entry)) }
-            if (!refused) {
+            val response = attempt.getOrNull()
+            if (response != null) otherDevices[entry.fictionId] = response.otherDevice
+            if (response?.status == "stale") {
+                response.serverState?.let(overridden::add)
+            } else if (!refused) {
                 accepted++
                 announcePlayed(listOf(entry))
             }
@@ -237,7 +253,9 @@ class ProgressSync(
         return ProgressFlushResult(
             sent = accepted,
             accepted = accepted,
+            overriddenByServer = overridden,
             drained = store.pendingFor(session).isEmpty(),
+            otherDevices = otherDevices,
         )
     }
 }
@@ -248,6 +266,29 @@ fun PendingProgress.asSyncItem(): PlaybackSyncItem = PlaybackSyncItem(
     isPlayed = isPlayed,
     clientUpdatedAt = clientUpdatedAt,
 )
+
+/**
+ * Whether another device's listening should pause this one (#526).
+ *
+ * The server reports `other_device` for two minutes after that device last moved, so its mere
+ * presence would pause someone who just put the laptop down and picked the phone up. What counts
+ * is the other device *moving while this one plays*: the first report after [reset] (local play
+ * started) is the baseline, and a different report for the same fiction later means it is still going.
+ */
+class OtherDeviceWatch {
+    private val seen = mutableMapOf<Int, OtherDevice>()
+
+    fun reset() = seen.clear()
+
+    fun shouldPause(fictionId: Int, other: OtherDevice?): Boolean {
+        if (other == null) {
+            seen.remove(fictionId)
+            return false
+        }
+        val before = seen.put(fictionId, other)
+        return before != null && before != other
+    }
+}
 
 /**
  * Asks for a flush whenever a signed-in account becomes current: at start, after a sign-in, and

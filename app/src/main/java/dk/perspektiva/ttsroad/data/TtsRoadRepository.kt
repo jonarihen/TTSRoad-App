@@ -1193,6 +1193,7 @@ class TtsRoadRepository(
         positionSeconds: Double,
         isPlayed: Boolean,
         asSession: SessionState? = null,
+        clientUpdatedAt: String? = null,
     ): PlaybackProgressResponse? = withContext(Dispatchers.IO) {
         // Progress saves fire in the background; a missing token is not worth an exception.
         if (!(asSession ?: tokenStore.current()).isLoggedIn) return@withContext null
@@ -1203,6 +1204,7 @@ class TtsRoadRepository(
                     chapterId = chapterId,
                     positionSeconds = positionSeconds.coerceAtLeast(0.0),
                     isPlayed = isPlayed,
+                    clientUpdatedAt = clientUpdatedAt,
                 ),
             )
         }

@@ -656,11 +656,33 @@ data class PlaybackProgressRequest(
     @param:Json(name = "chapter_id") val chapterId: Int,
     @param:Json(name = "position_seconds") val positionSeconds: Double,
     @param:Json(name = "is_played") val isPlayed: Boolean,
+    /**
+     * When the position was heard. Server 1.5.11+ applies the save only if this is strictly newer
+     * than what it holds (otherwise `status: "stale"`); older servers ignore it (#526).
+     */
+    @param:Json(name = "client_updated_at") val clientUpdatedAt: String? = null,
 )
 
 data class PlaybackProgressResponse(
+    /** `saved`, `ignored`, or `stale` (a newer position won; see [serverState]). */
     val status: String = "",
     @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    val reason: String? = null,
+    @param:Json(name = "server_state") val serverState: PlaybackSyncState? = null,
+    /** Null on a server before 1.5.11 as well as when nobody else is listening. */
+    @param:Json(name = "other_device") val otherDevice: OtherDevice? = null,
+)
+
+/**
+ * Another session that moved a position in the same fiction within [windowSeconds] (server
+ * 1.5.11+, #526). Advisory: the app pauses on it, the server never locks anything.
+ */
+data class OtherDevice(
+    val device: String = "",
+    @param:Json(name = "chapter_id") val chapterId: Int = 0,
+    @param:Json(name = "position_seconds") val positionSeconds: Double = 0.0,
+    @param:Json(name = "last_listened_at") val lastListenedAt: String? = null,
+    @param:Json(name = "window_seconds") val windowSeconds: Int = 0,
 )
 
 data class PlaybackMarkRequest(
@@ -1364,6 +1386,8 @@ data class PlaybackSyncResponse(
     val accepted: List<PlaybackSyncAccepted> = emptyList(),
     val rejected: List<PlaybackSyncRejected> = emptyList(),
     @param:Json(name = "server_state") val serverState: List<PlaybackSyncState> = emptyList(),
+    /** Fiction id (as a string) → [OtherDevice] or null, for each fiction the batch touched; 1.5.11+. */
+    @param:Json(name = "other_device") val otherDevice: Map<String, OtherDevice?> = emptyMap(),
 )
 
 /**
