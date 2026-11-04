@@ -189,6 +189,15 @@ internal fun ServerLogsScreen(
                     kicker = "LOG",
                     title = if (rows.size == 1) "1 line" else "${rows.size} lines",
                 )
+                // Every loaded line, addresses removed, to the share sheet — which also offers Copy (#506).
+                OutlinedButton(
+                    onClick = {
+                        val text = rows.joinToString("\n") { serverLogLineText(it, session.knownAddresses) }
+                        shareText(context, text, "TTSRoad server log")
+                    },
+                    modifier = Modifier.heightIn(min = MinTouchTargetSize),
+                    shape = RectangleShape,
+                ) { Text(labelCase("Share these lines")) }
                 AarisCard {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         rows.forEachIndexed { index, row ->
