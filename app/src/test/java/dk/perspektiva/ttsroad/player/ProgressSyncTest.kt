@@ -271,6 +271,90 @@ class ProgressSyncTest {
     }
 
     @Test
+    fun `the single-item save is stamped and a stale answer drops it without counting it saved`() = runTest {
+        // #526: a 1.5.11 server orders /playback/progress by client_updated_at too. The phone's
+        // older position loses, must leave the queue, and must not be announced as played.
+        val repository = repository(batchProgress = false)
+        val store = pendingStore { 1_700_000_000_000L }
+        store.record(1, 7, 30.0, true, owner = owner)
+        server.enqueue(
+            MockResponse()
+                .setBody(
+                    """
+                    {"status": "stale", "reason": "newer_server_position", "chapter_id": 7,
+                     "server_state": {"chapter_id": 7, "position_seconds": 900.0, "is_played": false},
+                     "other_device": {"device": "Web", "chapter_id": 7, "position_seconds": 900.0,
+                                      "last_listened_at": "2026-11-04T10:00:00Z", "window_seconds": 120}}
+                    """,
+                )
+                .setHeader("Content-Type", "application/json"),
+        )
+        val played = mutableListOf<Int>()
+
+        val result = ProgressSync(repository, store) { _, ids -> played += ids }.flush()
+
+        server.takeRequest() // capabilities
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body, """"client_updated_at":"2023-11-14T22:13:20Z"""" in body)
+        assertTrue(store.isEmpty())
+        assertEquals(0, result.accepted)
+        assertTrue(played.isEmpty())
+        assertEquals(900.0, result.overriddenByServer.single().positionSeconds, 0.001)
+        assertEquals("Web", result.otherDevices[1]?.device)
+    }
+
+    @Test
+    fun `other_device is read per fiction from the batch answer and is absent on an older server`() = runTest {
+        val repository = repository(batchProgress = true)
+        val store = pendingStore()
+        store.record(1, 7, 30.0, false, owner = owner)
+        store.record(2, 8, 30.0, false, owner = owner)
+        server.enqueue(
+            MockResponse()
+                .setBody(
+                    """
+                    {"accepted": [{"chapter_id": 7}, {"chapter_id": 8}], "rejected": [], "server_state": [],
+                     "other_device": {"1": {"device": "Laptop", "chapter_id": 7, "position_seconds": 50.0,
+                                            "last_listened_at": "2026-11-04T10:00:00Z", "window_seconds": 120},
+                                      "2": null}}
+                    """,
+                )
+                .setHeader("Content-Type", "application/json"),
+        )
+        val result = ProgressSync(repository, store).flush()
+        assertEquals("Laptop", result.otherDevices[1]?.device)
+        assertTrue(2 in result.otherDevices)
+        assertNull(result.otherDevices[2])
+
+        // A pre-1.5.11 answer has no key at all: nothing answered for, nothing to act on.
+        store.record(1, 7, 60.0, false, owner = owner)
+        server.enqueue(
+            MockResponse()
+                .setBody("""{"accepted": [{"chapter_id": 7}], "rejected": [], "server_state": []}""")
+                .setHeader("Content-Type", "application/json"),
+        )
+        assertTrue(ProgressSync(repository, store).flush().otherDevices.isEmpty())
+    }
+
+    @Test
+    fun `another device pauses this one only once it moves while this one plays`() {
+        val watch = OtherDeviceWatch()
+        val first = dk.perspektiva.ttsroad.data.OtherDevice("Web", 7, 100.0, "2026-11-04T10:00:00Z", 120)
+        val moved = first.copy(positionSeconds = 115.0, lastListenedAt = "2026-11-04T10:00:15Z")
+
+        // The first report is a baseline: the laptop may just have been put down.
+        assertFalse(watch.shouldPause(1, first))
+        assertFalse(watch.shouldPause(1, first))
+        assertTrue(watch.shouldPause(1, moved))
+        assertFalse("another fiction has its own baseline", watch.shouldPause(2, moved))
+        assertFalse(watch.shouldPause(1, null))
+        assertFalse("null clears the baseline", watch.shouldPause(1, first))
+
+        watch.reset() // Local play started again.
+        assertFalse(watch.shouldPause(1, moved))
+    }
+
+    @Test
     fun `the fallback path also keeps what it could not send`() = runTest {
         val repository = repository(batchProgress = false)
         val store = pendingStore()

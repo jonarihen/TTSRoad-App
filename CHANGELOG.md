@@ -84,6 +84,10 @@ Notable changes to the TTSRoad Android client.
   status. (#481)
 - Chapters the player marks played show as played in an open fiction's chapter list straight
   away, without a pull-to-refresh. (#526)
+- The phone no longer overwrites newer progress from another device: single-chapter saves carry the
+  time the position was heard, so a server 1.5.11+ keeps the newer one (a losing save is dropped,
+  not retried), and when another device keeps playing the same fiction the phone pauses and says
+  where it is playing, without saving the superseded position. Older servers behave as before. (#526)
 - Resuming from Android Auto or a headset on weak signal serves the saved library or downloaded
   chapter after 12 seconds instead of waiting out every network timeout, and skips capability
   discovery on a fresh process. (#483)

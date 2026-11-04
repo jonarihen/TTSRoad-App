@@ -85,6 +85,7 @@ import dk.perspektiva.ttsroad.player.adSkipTarget
 import dk.perspektiva.ttsroad.player.PlaybackFailure
 import dk.perspektiva.ttsroad.player.PlaybackHistoryStore
 import dk.perspektiva.ttsroad.player.PlayedThreshold
+import dk.perspektiva.ttsroad.player.OtherDeviceWatch
 import dk.perspektiva.ttsroad.player.ProgressSync
 import dk.perspektiva.ttsroad.player.ShakeDetector
 import dk.perspektiva.ttsroad.player.vibrateExtended
@@ -182,6 +183,9 @@ class TtsRoadMediaService : MediaLibraryService() {
     // The save launched by a pause. Teardown cancels the scope, so if this is still running then,
     // onDestroy records the position itself (#449).
     private var pauseSave: Job? = null
+    private val otherDeviceWatch = OtherDeviceWatch()
+    /** Set when this device paused because another took over: the save that pause triggers is skipped (#526). */
+    private var yieldedToOtherDevice = false
     private var retryAttempt = 0
 
     // Re-prepares after a transient failure, fast and then slowly; see NetworkRecovery.kt (#482).
@@ -391,6 +395,8 @@ class TtsRoadMediaService : MediaLibraryService() {
                     if (!isPlaying) {
                         pauseSave = serviceScope.launch { saveCurrentProgress(queueEnded = false, flushHistory = true) }
                     } else {
+                        otherDeviceWatch.reset()
+                        yieldedToOtherDevice = false
                         autoArmSleepTimer()
                         // Do not wait for the first 15-second progress tick to turn Play into Pause.
                         serviceScope.launch { publishNowPlaying(forcePlaying = true) }
@@ -1117,6 +1123,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         queueEnded: Boolean,
         flushHistory: Boolean = queueEnded,
     ) {
+        val observedAt = System.currentTimeMillis()
         val deferPlayedMark = sleepTimerProgress.deferPlayedMark(mediaItem)
         suspend fun ownsProgress(): Boolean = ownsProgress(mediaItem, tokenStore.current())
         if (!ownsProgress()) return
@@ -1136,9 +1143,22 @@ class TtsRoadMediaService : MediaLibraryService() {
         publishNowPlaying(forcePlaying = null)
 
         if (fictionId == null || chapterId == null) return
-        if (!recordPendingProgress(mediaItem, position, duration, queueEnded, deferPlayedMark)) return
+        // The pause that yielded to another device: this position is the one it superseded (#526).
+        if (yieldedToOtherDevice) {
+            yieldedToOtherDevice = false
+            return
+        }
+        if (!recordPendingProgress(mediaItem, position, duration, queueEnded, deferPlayedMark, observedAt)) return
         if (!ownsProgress()) return
-        progressSync.flush()
+        val flushed = progressSync.flush()
+        if (fictionId in flushed.otherDevices) {
+            val other = flushed.otherDevices[fictionId]
+            if (otherDeviceWatch.shouldPause(fictionId, other) && player.isPlaying) {
+                yieldedToOtherDevice = true
+                player.pause()
+                publishPlaybackFeedback("Paused: now playing on ${other?.device?.ifBlank { null } ?: "another device"}.")
+            }
+        }
 
         writeBreadcrumb(chapterId = chapterId, positionMs = position)
         moveKeepAheadWindow(fictionId = fictionId, chapterId = chapterId)
@@ -1160,6 +1180,7 @@ class TtsRoadMediaService : MediaLibraryService() {
         duration: Long?,
         queueEnded: Boolean,
         deferPlayedMark: Boolean = sleepTimerProgress.deferPlayedMark(mediaItem),
+        observedAt: Long = System.currentTimeMillis(),
     ): Boolean {
         val extras = mediaItem.mediaMetadata.extras
         val fictionId = extras?.getInt("fiction_id")?.takeIf { it > 0 } ?: return false
@@ -1200,6 +1221,7 @@ class TtsRoadMediaService : MediaLibraryService() {
                 positionSeconds = position / 1000.0,
                 isPlayed = isPlayed,
                 owner = owner,
+                observedAtMillis = observedAt,
             )
             true
         }

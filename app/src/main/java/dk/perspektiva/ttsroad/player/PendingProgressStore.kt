@@ -133,9 +133,11 @@ class PendingProgressStore(
         positionSeconds: Double,
         isPlayed: Boolean,
         owner: SessionState,
+        /** When the position was read off the player; the stamp the server orders by (#526). */
+        observedAtMillis: Long = clock(),
     ): PendingProgress {
         return synchronized(lock) {
-            val now = clock().coerceAtLeast(lastRecordedMillis + 1)
+            val now = observedAtMillis.coerceAtLeast(lastRecordedMillis + 1)
             lastRecordedMillis = now
             val entry = PendingProgress(
                 fictionId = fictionId,
