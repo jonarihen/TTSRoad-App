@@ -142,10 +142,10 @@ internal fun ServerStorageSection(
                 ServerStorageTotals(response = loaded, overview = overview)
 
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
-                MetaText(text = "Per fiction, largest first")
+                MetaText(text = "Per book, largest first")
                 if (overview.rows.isEmpty()) {
                     MetaText(
-                        text = "No fiction on this server has any audio on disk yet.",
+                        text = "No book on this server has any audio on disk yet.",
                         color = AarisColor.Muted,
                     )
                 } else {
@@ -180,7 +180,7 @@ internal fun ServerStorageSection(
                 if (overview.emptyFictions > 0) {
                     MetaText(
                         text = "${overview.emptyFictions} more " +
-                            (if (overview.emptyFictions == 1) "fiction has" else "fictions have") +
+                            (if (overview.emptyFictions == 1) "book has" else "books have") +
                             " no audio on disk yet.",
                         color = AarisColor.Muted,
                     )
@@ -268,7 +268,7 @@ private fun FictionStorageListItem(row: FictionStorageRow, largestBytes: Long) {
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             MetaText(
-                text = row.title.ifBlank { row.slug.ifBlank { "Fiction ${row.id}" } },
+                text = row.title.ifBlank { row.slug.ifBlank { "Book ${row.id}" } },
                 color = AarisColor.Ink,
                 maxLines = 2,
                 modifier = Modifier.weight(1f),

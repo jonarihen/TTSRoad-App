@@ -72,7 +72,7 @@ internal fun DownloadsOverview(
     MetaText(text = "Downloaded books")
     for (group in groups) {
         val name = titles[group.fictionId]
-            ?: if (group.fictionId == 0) "Other downloads" else "Fiction ${group.fictionId}"
+            ?: if (group.fictionId == 0) "Other downloads" else "Book ${group.fictionId}"
         val playedIds = played[group.fictionId].orEmpty()
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             SettingsItem(

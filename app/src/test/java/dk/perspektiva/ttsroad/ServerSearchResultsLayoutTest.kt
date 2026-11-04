@@ -83,7 +83,7 @@ class ServerSearchResultsLayoutTest {
         // Uppercased because that is what MetaText renders — the AARIS label style, not a typo — and
         // without the `//` kicker mark, which is drawn but not given to screen readers (#355).
         for ((id, title) in listOf(
-            "fictions" to "FICTIONS (3)",
+            "fictions" to "BOOKS (3)",
             "chapters" to "CHAPTER TITLES (8)",
             "text" to "IN THE TEXT (8)",
         )) {
