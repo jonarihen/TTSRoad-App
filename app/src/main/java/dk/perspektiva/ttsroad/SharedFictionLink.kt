@@ -75,10 +75,10 @@ internal fun sharedLinkAction(
 }
 
 internal const val SharedNotALinkMessage =
-    "That share didn't include a web link. Share the fiction's page from your browser instead."
-internal const val SharedSignInFirstMessage = "Sign in first - the shared fiction will open after that."
+    "That share didn't include a web link. Share the book's page from your browser instead."
+internal const val SharedSignInFirstMessage = "Sign in first - the shared book will open after that."
 internal const val SharedCannotAddMessage =
-    "Only an admin account on a server that can add fictions can add one from a link."
+    "Only an admin account on a server that can add books can add one from a link."
 
 /**
  * The shared link waiting to be put into the add-fiction sheet.

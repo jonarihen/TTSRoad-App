@@ -1185,7 +1185,7 @@ internal fun MainScaffold(
         is AppScreen.Fiction -> screen.fiction.title
         is AppScreen.FictionEdit -> "Edit details"
         AppScreen.Library -> session.serverName
-        AppScreen.Fictions -> "All fictions"
+        AppScreen.Fictions -> "All books"
         AppScreen.Listening -> "Listening"
         AppScreen.Player -> "Now playing"
         is AppScreen.Reader -> screen.title
@@ -1574,12 +1574,12 @@ internal fun LibraryScreen(
                             // screen at all, which is the complaint (#243).
                             SectionHeader(
                                 kicker = "02",
-                                title = "Fictions",
+                                title = "Books",
                                 actionLabel = settings.sort.label.takeIf { library.fictions.isNotEmpty() },
                                 onAction = { sortSheetOpen = true }.takeIf { library.fictions.isNotEmpty() },
                             )
                             if (library.fictions.isEmpty()) {
-                                EmptyCard("No fictions found", FindSomethingLabel, onBrowseFictions)
+                                EmptyCard("No books found", FindSomethingLabel, onBrowseFictions)
                             } else {
                                 HorizontalFictionRail(
                                     fictions = sortedFictions,
@@ -2493,7 +2493,7 @@ private fun FictionScreen(
                     // Deliberately specific rather than a generic "are you sure". Deleting a fiction
                     // is not scoped to this account: it destroys the audio and every listener's
                     // saved position, and there is no undo.
-                    body = "This deletes the fiction, all ${fiction.totalChapters} chapters and " +
+                    body = "This deletes the book, all ${fiction.totalChapters} chapters and " +
                         "their audio from the server, for everyone — including saved positions and " +
                         "bookmarks on other accounts. It cannot be undone.",
                     confirmLabel = labelCase("Delete"),
@@ -2512,11 +2512,11 @@ private fun FictionScreen(
                                         cache.refreshBrowseAll()
                                         onDeleted()
                                     } else {
-                                        error = "This server cannot delete fictions."
+                                        error = "This server cannot delete books."
                                     }
                                 }
                                 .onFailure {
-                                    error = it.userMessage("Could not delete this fiction")
+                                    error = it.userMessage("Could not delete this book")
                                 }
                             isDeleting = false
                         }
@@ -2721,7 +2721,7 @@ private fun ChapterBulkSheet(
                 subtitle = if (chapter.hasError) {
                     "Queue it for another attempt"
                 } else {
-                    "Re-narrates it with the fiction's current voice and text rules"
+                    "Re-narrates it with the book's current voice and text rules"
                 },
                 enabled = !isBusy,
                 onClick = retry,
@@ -4630,7 +4630,7 @@ internal fun ListeningScreenBody(
                 if (canOpenBookmarks) {
                     AarisActionRow(
                         title = "Bookmarks",
-                        subtitle = "Saved moments from every fiction",
+                        subtitle = "Saved moments from every book",
                         enabled = true,
                         onClick = onOpenBookmarks,
                     )
@@ -4655,7 +4655,7 @@ internal fun ListeningScreenBody(
                         // and one of them wearing a badge the others cannot is a shape the screen
                         // does not otherwise have.
                         title = newChaptersRowTitle(unread = unreadNewChapters, ready = readyNewChapters),
-                        subtitle = "Chapters pulled on serials you follow, until they can be played",
+                        subtitle = "Chapters pulled on books you follow, until they can be played",
                         enabled = true,
                         onClick = onOpenNewChapters,
                     )
@@ -5372,12 +5372,12 @@ internal fun SettingsScreen(
                     feedsError?.let { ErrorLine(it) }
                     val library = feeds?.library
                     ShareUrlRow(
-                        label = "Every fiction, newest first",
+                        label = "Every book, newest first",
                         url = library?.feedUrl,
                         onShare = { shareText(context, it, "Podcast feed") },
                     )
                     ShareUrlRow(
-                        label = "OPML — subscribe to every per-fiction feed at once",
+                        label = "OPML — subscribe to every per-book feed at once",
                         url = library?.opmlUrl,
                         onShare = { shareText(context, it, "OPML") },
                     )
@@ -5413,7 +5413,7 @@ internal fun SettingsScreen(
                     MetaText(
                         text = "Every position and bookmark on your account, in one file. Audio " +
                             "can always be made again; where you are in a four-hundred-chapter " +
-                            "serial cannot.",
+                            "book cannot.",
                         color = AarisColor.Dim,
                     )
                     backupError?.let { ErrorLine(it) }
@@ -7723,7 +7723,7 @@ internal fun FictionsScreen(
         fictions == null && state.isInitialLoad -> LoadingPane(padding)
         fictions == null -> ErrorPane(
             padding = padding,
-            message = state.error ?: "Could not load fictions",
+            message = state.error ?: "Could not load books",
             details = state.errorDetails,
             onRetry = refresh,
         )
@@ -7902,8 +7902,8 @@ internal fun FictionsScreen(
                         SectionHeader(
                             kicker = "ALL",
                             title = when {
-                                filtered.size == fictions.size && fictions.size == 1 -> "1 fiction"
-                                filtered.size == fictions.size -> "${fictions.size} fictions"
+                                filtered.size == fictions.size && fictions.size == 1 -> "1 book"
+                                filtered.size == fictions.size -> "${fictions.size} books"
                                 else -> "${filtered.size} of ${fictions.size}"
                             },
                             // The order lives in the header's own action rather than in another
@@ -8412,7 +8412,7 @@ internal fun AddFictionSection(
         when (result) {
             is FictionAddResult.Added -> {
                 isError = false
-                message = result.fiction?.title?.let { "Tracking \"$it\"." } ?: "Fiction added."
+                message = result.fiction?.title?.let { "Tracking \"$it\"." } ?: "Book added."
                 // Cleared only on success, so a rejected URL stays in the field to be corrected
                 // rather than having to be pasted again.
                 if (clearsUrl) url = ""
@@ -8428,7 +8428,7 @@ internal fun AddFictionSection(
 
             FictionAddResult.Unsupported -> {
                 isError = true
-                message = "This server cannot add fictions."
+                message = "This server cannot add books."
             }
         }
     }
@@ -8490,7 +8490,7 @@ internal fun AddFictionSection(
                     shape = RectangleShape,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text(if (isAdding) labelCase("Adding") else labelCase("Add fiction"))
+                    Text(if (isAdding) labelCase("Adding") else labelCase("Add book"))
                 }
             }
             if (canUploadEpub) {
@@ -8534,7 +8534,7 @@ internal fun AddFictionSection(
                     isAdding = true
                     message = null
                     val result = runCatching { onAdd(url, options) }.getOrElse { failure ->
-                        FictionAddResult.Refused(failure.userMessage("Could not add this fiction."))
+                        FictionAddResult.Refused(failure.userMessage("Could not add this book."))
                     }
                     adopt(result, clearsUrl = true)
                     isAdding = false
@@ -8605,11 +8605,11 @@ private fun AddFictionSheet(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            MetaText(text = "// Add a fiction", color = AarisColor.Accent)
+            MetaText(text = "// Add a book", color = AarisColor.Accent)
             OutlinedTextField(
                 value = url,
                 onValueChange = onUrl,
-                label = { Text(labelCase("Fiction URL or ID")) },
+                label = { Text(labelCase("Book URL or ID")) },
                 placeholder = { Text("https://www.royalroad.com/fiction/12345/…") },
                 singleLine = true,
                 enabled = !isAdding,
@@ -8754,7 +8754,7 @@ private fun AddFictionSheet(
                 shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (isAdding) labelCase("Adding") else labelCase("Add fiction"))
+                Text(if (isAdding) labelCase("Adding") else labelCase("Add book"))
             }
         }
     }
@@ -8826,7 +8826,7 @@ internal fun LazyGridScope.serverSearchSection(
     // Group order is rank order: fictions, then chapter titles, then narration text.
     searchHitGroup(
         id = "fictions",
-        title = "Fictions",
+        title = "Books",
         group = found.fictions,
         onOpen = { hit -> hit.fictionId?.let(onOpenFiction) },
     )
@@ -9568,7 +9568,7 @@ internal fun FictionMaintenanceSheet(
         // ten identical ones, and it now says what it takes with it.
         onDelete?.let { delete ->
             AarisActionRow(
-                title = if (isDeleting) "Deleting…" else "Delete fiction",
+                title = if (isDeleting) "Deleting…" else "Delete book",
                 subtitle = "Removes the book, its chapters and their audio from the server, " +
                     "for everyone",
                 enabled = !isBusy && !isDeleting,
@@ -9810,7 +9810,7 @@ internal fun FictionEditScreen(
             message = null
             val result = runCatching { repository.updateFiction(fiction.id, changes) }
                 .getOrElse { FictionEditResult.Refused(it.userMessage("Could not save those details.")) }
-            val saved = adopt(result, "Saved.", "This server cannot edit fictions.")
+            val saved = adopt(result, "Saved.", "This server cannot edit books.")
             isSaving = false
             // Only on success: a refusal has to stay on screen with the text that caused it, so it
             // can be corrected rather than retyped.
@@ -9834,7 +9834,7 @@ internal fun FictionEditScreen(
             adopt(
                 result,
                 "Handed back. The next poll may replace them.",
-                "This server cannot edit fictions.",
+                "This server cannot edit books.",
             )
             isSaving = false
         }
@@ -9947,7 +9947,7 @@ internal fun FictionEditScreen(
                     isOverridden = fiction.isMetadataOverridden(MetadataFieldTitle),
                 )
                 if (!draft.hasUsableTitle) {
-                    MetaText(text = "A fiction has to be called something.", color = AarisColor.Danger)
+                    MetaText(text = "A book has to be called something.", color = AarisColor.Danger)
                 }
                 MetadataField(
                     label = "Author",
@@ -10087,7 +10087,7 @@ internal fun FictionEditScreen(
                         }
                         MetaText(
                             text = "The source no longer overwrites these. Everything else is still " +
-                                "refreshed when the fiction is polled.",
+                                "refreshed when the book is polled.",
                             color = AarisColor.Dim,
                         )
                         OutlinedButton(

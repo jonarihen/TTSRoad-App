@@ -281,7 +281,7 @@ class FictionHeaderLayoutTest {
             "SHARE PODCAST FEED",
             "REGENERATE FEED LINK",
             "EDIT DETAILS",
-            "DELETE FICTION",
+            "DELETE BOOK",
             "MAINTENANCE",
         )) {
             compose.onNodeWithText(gone).assertDoesNotExist()
@@ -351,7 +351,7 @@ class FictionHeaderLayoutTest {
             "Re-narrate every chapter",
             "Regenerate feed link",
             "Edit details",
-            "Delete fiction",
+            "Delete book",
         )) {
             compose.onNodeWithText(adminOnly).assertDoesNotExist()
         }

@@ -84,7 +84,7 @@ internal fun NewChaptersScreen(
             runCatching { onOpenFiction(entry) }
                 .onFailure {
                     if (it is CancellationException) throw it
-                    actionError = it.message ?: "Could not open that fiction"
+                    actionError = it.message ?: "Could not open that book"
                 }
         }
     }

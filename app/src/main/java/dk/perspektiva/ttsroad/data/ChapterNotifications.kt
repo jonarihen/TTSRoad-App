@@ -126,7 +126,7 @@ fun visibleNotifications(
  */
 fun chapterNotificationsEmptyNote(followsAnything: Boolean): String =
     if (followsAnything) {
-        "Every serial you follow is up to date."
+        "Every book you follow is up to date."
     } else {
-        "Follow a serial and its next chapter will appear here while it converts."
+        "Follow a book and its next chapter will appear here while it converts."
     }

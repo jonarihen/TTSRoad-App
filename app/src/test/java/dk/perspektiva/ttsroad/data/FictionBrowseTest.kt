@@ -366,7 +366,7 @@ class FictionBrowseTest {
             "You are not following anything yet",
             browseEmptyMessage("", emptySet(), BrowseScope.Following),
         )
-        assertEquals("No fictions found", browseEmptyMessage("", emptySet(), BrowseScope.All))
+        assertEquals("No books found", browseEmptyMessage("", emptySet(), BrowseScope.All))
     }
 
     @Test
