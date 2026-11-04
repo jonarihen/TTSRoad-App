@@ -5271,6 +5271,41 @@ internal fun SettingsScreen(
                     color = AarisColor.Dim,
                 )
 
+                // Rides on the new-chapter poll, which only runs where the server has follows and notices.
+                if (capabilities.notifications && capabilities.follows) {
+                    HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = MinTouchTargetSize)
+                            .toggleable(
+                                value = downloadPrefs.autoDownloadNewChapters,
+                                role = Role.Switch,
+                                onValueChange = { scope.launch { downloadPreferences.setAutoDownloadNewChapters(it) } },
+                            )
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            MetaText(text = "Download new chapters")
+                            Spacer(modifier = Modifier.height(2.dp))
+                            MetaText(
+                                text = "When a serial you follow has a new chapter ready, it is " +
+                                    "downloaded (on Wi-Fi only if that is on). With the app closed it " +
+                                    "may wait until you next open it. These are kept until you " +
+                                    "delete them.",
+                                color = AarisColor.Dim,
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = downloadPrefs.autoDownloadNewChapters,
+                            onCheckedChange = null,
+                        )
+                    }
+                }
+
                 HorizontalDivider(thickness = 1.dp, color = AarisColor.Line)
 
                 MetaText(text = "Keep streamed audio")
