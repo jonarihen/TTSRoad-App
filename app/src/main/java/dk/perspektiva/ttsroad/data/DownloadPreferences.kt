@@ -28,6 +28,12 @@ data class DownloadPrefs(
     val wifiOnly: Boolean = DefaultWifiOnly,
     val keepAheadChapters: Int = DefaultKeepAheadChapters,
     val streamingCacheBytes: Long = DefaultStreamingCacheBytes,
+    /**
+     * Download a followed serial's chapter the moment the new-chapter poll sees it become ready
+     * (#497). Off by default for the reason keep-ahead is: it spends storage nobody asked for by
+     * name. What it fetches is kept like a hand-picked download — only the user deletes it.
+     */
+    val autoDownloadNewChapters: Boolean = false,
 )
 
 /**
@@ -98,6 +104,7 @@ class DownloadPreferences(private val context: Context) {
         val WifiOnly = booleanPreferencesKey("download_wifi_only")
         val KeepAhead = intPreferencesKey("download_keep_ahead_chapters")
         val StreamingCacheBytes = longPreferencesKey("download_streaming_cache_bytes")
+        val AutoDownloadNew = booleanPreferencesKey("download_auto_new_chapters")
     }
 
     val prefs: Flow<DownloadPrefs> = context.downloadDataStore.data
@@ -115,6 +122,7 @@ class DownloadPreferences(private val context: Context) {
                 // would have the evictor drop every span the moment it was written, which looks
                 // exactly like a cache that has stopped working.
                 streamingCacheBytes = normalisedStreamingCacheBytes(stored[Keys.StreamingCacheBytes]),
+                autoDownloadNewChapters = stored[Keys.AutoDownloadNew] ?: false,
             )
         }
 
@@ -126,6 +134,10 @@ class DownloadPreferences(private val context: Context) {
 
     suspend fun setKeepAheadChapters(chapters: Int) {
         context.downloadDataStore.edit { it[Keys.KeepAhead] = chapters.coerceAtLeast(0) }
+    }
+
+    suspend fun setAutoDownloadNewChapters(enabled: Boolean) {
+        context.downloadDataStore.edit { it[Keys.AutoDownloadNew] = enabled }
     }
 
     suspend fun setStreamingCacheBytes(bytes: Long) {

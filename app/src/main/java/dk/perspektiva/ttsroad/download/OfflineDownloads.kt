@@ -503,12 +503,19 @@ class OfflineDownloads(
             streamingCacheKeyFactory = scopedCacheKeyFactory,
         )
 
-    /** Queue [chapter] for download. A chapter with no audio yet is silently ignored. */
+    /**
+     * Queue [chapter] for download. A chapter with no audio yet is silently ignored.
+     *
+     * [queueWhenRefused] is for the background new-chapter job (#497), which may not start a
+     * service: the request then goes straight into the manager's index, which starts paused in a
+     * process with no download service, and runs at the next [resumeUnfinished].
+     */
     fun download(
         chapter: ChapterSummary,
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
         replaceExisting: Boolean = false,
+        queueWhenRefused: Boolean = false,
     ) {
         val identity = cacheIdentities.forServer(serverUrl.orEmpty(), activeCapabilities)
         val spec = chapterDownloadSpec(chapter, serverUrl, identity, origin) ?: return
@@ -526,7 +533,7 @@ class OfflineDownloads(
         synchronized(readerPinLock) {
             // Asked for again: an earlier deletion must not keep the migration from moving it, and a
             // rekey retained for it must not later overwrite it. Dropped only once the add went out.
-            identityMigration.restore(request.id, retainedScope()) { send(request) }
+            identityMigration.restore(request.id, retainedScope()) { send(request, queueWhenRefused) }
             chapter.resolvedChapterId.takeIf { it > 0 }?.let(::pinReadAlongFor)
         }
     }
@@ -546,8 +553,9 @@ class OfflineDownloads(
         serverUrl: String?,
         origin: DownloadOrigin = DownloadOrigin.Manual,
         replaceExisting: Boolean = false,
+        queueWhenRefused: Boolean = false,
     ) {
-        chapters.forEach { download(it, serverUrl, origin, replaceExisting) }
+        chapters.forEach { download(it, serverUrl, origin, replaceExisting, queueWhenRefused) }
     }
 
     /**
@@ -784,13 +792,18 @@ class OfflineDownloads(
         refreshCacheBytes()
     }
 
-    private fun send(request: DownloadRequest) {
-        DownloadService.sendAddDownload(
-            context,
-            TtsRoadDownloadService::class.java,
-            request,
-            /* foreground= */ false,
-        )
+    private fun send(request: DownloadRequest, queueWhenRefused: Boolean = false) {
+        try {
+            DownloadService.sendAddDownload(
+                context,
+                TtsRoadDownloadService::class.java,
+                request,
+                /* foreground= */ false,
+            )
+        } catch (e: IllegalStateException) {
+            if (!queueWhenRefused || !initializeManager) throw e
+            downloadManager.addDownload(request)
+        }
     }
 
     /**
