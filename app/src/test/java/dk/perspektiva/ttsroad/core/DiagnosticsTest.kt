@@ -10,8 +10,11 @@ import dk.perspektiva.ttsroad.serverLogLineText
 import dk.perspektiva.ttsroad.ui.ErrorDetailsToggleTag
 import dk.perspektiva.ttsroad.ui.ErrorLine
 import dk.perspektiva.ttsroad.ui.TtsRoadTheme
+import dk.perspektiva.ttsroad.ui.lastErrorDetailsFor
 import java.net.UnknownHostException
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -42,7 +45,26 @@ class DiagnosticsTest {
         assertTrue(report.contains("1.5.7"))
         assertTrue(report.contains("search"))
         assertTrue(report.contains(CantFindServerMessage))
-        assertFalse(report, report.contains("home.example.org:8443"))
+        assertFalse(report, report.contains("home.example.org"))
+    }
+
+    @Test
+    fun `a saved address that is not the current one is redacted too`() {
+        val old = "http://192.168.1.20:8000"
+        val error = java.net.ConnectException("Failed to connect to /192.168.1.20:8000 ($old/api)")
+            .toUserFacingError("x")
+        val report = diagnosticsReport("1", "14", "Pixel", ServerCapabilities(), error, listOf(server, old))
+        assertTrue(report.contains(CantReachServerMessage))
+        assertFalse(report, report.contains("192.168.1.20"))
+    }
+
+    @Test
+    fun `details follow the newest failure, including a prefixed sentence, and nothing else`() {
+        val error = UnknownHostException("raw").toUserFacingError("x")
+        assertEquals(error.details, lastErrorDetailsFor(error.message))
+        assertEquals(error.details, lastErrorDetailsFor("Could not empty your shelf: ${error.message}"))
+        assertNull(lastErrorDetailsFor("Some other failure."))
+        assertNull(lastErrorDetailsFor(null))
     }
 
     @Test

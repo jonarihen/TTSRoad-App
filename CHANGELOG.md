@@ -10,6 +10,11 @@ Notable changes to the TTSRoad Android client.
   address check now fold the raw text under Details; Settings > About has COPY DIAGNOSTICS (app,
   Android, server version, capabilities, last error; no token, server address redacted); each server
   log line has COPY LINE and selectable text. (#506)
+- Diagnostics: the rest of the error surfaces (full-screen errors for bookmarks, queue, sessions,
+  pronunciation reports and chapter text; book actions, search, add/edit fiction, account security,
+  new-chapter retries, emptying the shelf, the address check after sign-in) now fold the raw text
+  under Details too, and the server log has SHARE THESE LINES for every loaded line, server address
+  removed. (#506)
 - Updates: failures read in plain words (rate-limited, not found, no connection) instead of "GitHub
   returned 403"; the update dialog always opens with one plain line and keeps the changelog behind
   WHAT CHANGED IN DETAIL; Settings > About shows the SHA-256 of the certificate this install is

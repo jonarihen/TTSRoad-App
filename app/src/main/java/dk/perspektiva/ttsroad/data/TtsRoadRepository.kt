@@ -783,10 +783,8 @@ class TtsRoadRepository(
                 tokenSent = true,
             )
         } catch (e: Exception) {
-            return@withContext ServerAddressResult.Refused(
-                e.toUserFacingError("Could not reach that address").message,
-                tokenSent = true,
-            )
+            val described = e.toUserFacingError("Could not reach that address")
+            return@withContext ServerAddressResult.Refused(described.message, tokenSent = true, details = described.details)
         }
         if (me.user.username != session.username || (session.userId != null && me.user.id != session.userId)) {
             return@withContext ServerAddressResult.Refused(

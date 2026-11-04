@@ -63,6 +63,13 @@ const val ErrorDetailsToggleTag = "error-details-toggle"
 fun ErrorLine(message: String, modifier: Modifier = Modifier) {
     Column(modifier = modifier) {
         MetaText(text = message, color = AarisColor.Danger)
-        ErrorDetails(details = LastError.latest?.takeIf { it.message == message }?.details)
+        ErrorDetails(details = lastErrorDetailsFor(message))
     }
 }
+
+/**
+ * The raw text of the newest described failure, if [shown] is that failure's sentence — or ends with
+ * it, for a surface that prefixes it ("Could not empty your shelf: …"). Null otherwise (#506).
+ */
+fun lastErrorDetailsFor(shown: String?): String? =
+    LastError.latest?.takeIf { shown != null && shown.endsWith(it.message) }?.details
