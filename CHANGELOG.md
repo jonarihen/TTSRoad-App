@@ -46,6 +46,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- The app says "book" instead of "fiction" or "serial" everywhere a listener reads it: Home's
+  BOOKS section and "No books found", ADD BOOK and BOOK URL OR ID, the Android Auto "Books"
+  folder, notices, settings, storage and server logs. (#490)
 - Readable text is on by default when the system font scale is 130 % or more (turning it off still
   sticks), its own switch label is always readable, and every hard-coded capitals label now follows
   the setting. (#491)

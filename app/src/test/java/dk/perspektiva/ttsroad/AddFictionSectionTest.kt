@@ -53,7 +53,7 @@ class AddFictionSectionTest {
     fun `a server that takes both offers both`() {
         render(canAddByUrl = true, canUploadEpub = true)
 
-        compose.onNodeWithText("ADD FICTION").assertIsDisplayed()
+        compose.onNodeWithText("ADD BOOK").assertIsDisplayed()
         compose.onNodeWithText("UPLOAD AN EPUB").assertIsDisplayed()
     }
 
@@ -61,7 +61,7 @@ class AddFictionSectionTest {
     fun `a server without epub upload does not offer a file picker`() {
         render(canAddByUrl = true, canUploadEpub = false)
 
-        compose.onNodeWithText("ADD FICTION").assertIsDisplayed()
+        compose.onNodeWithText("ADD BOOK").assertIsDisplayed()
         compose.onNodeWithText("UPLOAD AN EPUB").assertDoesNotExist()
     }
 
@@ -71,9 +71,9 @@ class AddFictionSectionTest {
         // — `add_fiction` branches on `if body.sync_limit:` — so the form opening on anything but a
         // bounded window is how a 400-chapter serial quietly becomes 400 chapters of TTS.
         render(canAddByUrl = true, canUploadEpub = false)
-        compose.onNodeWithText("ADD FICTION").performClick()
+        compose.onNodeWithText("ADD BOOK").performClick()
 
-        compose.onNodeWithText("FICTION URL OR ID").assertIsDisplayed()
+        compose.onNodeWithText("BOOK URL OR ID").assertIsDisplayed()
         compose.onNodeWithText("NEWEST").assertIsSelected()
         compose.onNodeWithText("EVERYTHING").assertIsNotSelected()
         // Existence rather than display: on a 640 dp window the sheet does not open tall enough
@@ -87,7 +87,7 @@ class AddFictionSectionTest {
         // "All chapters" is a legitimate choice and a slow one, and the only place that is visible
         // before it is made is this line.
         render(canAddByUrl = true, canUploadEpub = false)
-        compose.onNodeWithText("ADD FICTION").performClick()
+        compose.onNodeWithText("ADD BOOK").performClick()
         compose.onNodeWithText("EVERYTHING").performClick()
 
         compose.onNodeWithText("HOW MANY CHAPTERS").assertDoesNotExist()
@@ -100,14 +100,14 @@ class AddFictionSectionTest {
         // The PATCH stores whatever string it is handed without checking it, so an unsigned "10"
         // does not fail on save — it fails hours later as a chapter that will not narrate.
         render(canAddByUrl = true, canUploadEpub = false)
-        compose.onNodeWithText("ADD FICTION").performClick()
-        compose.onNodeWithText("FICTION URL OR ID").performTextInput("12345")
+        compose.onNodeWithText("ADD BOOK").performClick()
+        compose.onNodeWithText("BOOK URL OR ID").performTextInput("12345")
         compose.onNodeWithText("SPEECH RATE").performTextInput("quickly")
 
         compose.onNodeWithText("A RATE READS LIKE +0%, +25% OR -10%.")
             .performScrollTo()
             .assertIsDisplayed()
-        compose.onAllNodesWithText("ADD FICTION").onLast().assertIsNotEnabled()
+        compose.onAllNodesWithText("ADD BOOK").onLast().assertIsNotEnabled()
     }
 
     @Test
@@ -117,7 +117,7 @@ class AddFictionSectionTest {
         render(canAddByUrl = false, canUploadEpub = true)
 
         compose.onNodeWithText("UPLOAD AN EPUB").assertIsDisplayed().assertIsEnabled()
-        compose.onNodeWithText("ADD FICTION").assertDoesNotExist()
+        compose.onNodeWithText("ADD BOOK").assertDoesNotExist()
     }
 
     @Test

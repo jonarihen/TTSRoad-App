@@ -175,7 +175,7 @@ class ServerStorageSectionTest {
 
         // A blank space under "per fiction" would read as a broken card. This is a real answer:
         // the fictions exist and nothing has been narrated yet.
-        compose.onNodeWithText("NO FICTION ON THIS SERVER HAS ANY AUDIO ON DISK YET.")
+        compose.onNodeWithText("NO BOOK ON THIS SERVER HAS ANY AUDIO ON DISK YET.")
             .performScrollTo()
             .assertIsDisplayed()
     }

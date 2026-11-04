@@ -487,7 +487,7 @@ class SettingsNavigationTest {
             }
             assertNull("Library failed: ${cache.library.value}; requests: ${requests.map { it.path }}", cache.library.value.error)
             if (succeeded) {
-                compose.onNodeWithText("NO FICTIONS FOUND").assertExists()
+                compose.onNodeWithText("NO BOOKS FOUND").assertExists()
                 compose.onNodeWithText("Cached book").assertDoesNotExist()
                 val shelf = cache.library.value.value!!
                 assertTrue(shelf.fictions.isEmpty())

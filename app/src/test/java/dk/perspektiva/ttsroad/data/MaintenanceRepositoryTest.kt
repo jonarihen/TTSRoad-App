@@ -286,6 +286,6 @@ class MaintenanceCapabilityTest {
     fun `both are named in the capability panel`() {
         // #120: an unnamed flag lists by its raw key, which is worse than a sentence.
         assertEquals("Repair a chapter", CapabilityCatalog.label("chapter_maintenance"))
-        assertEquals("Maintain a fiction", CapabilityCatalog.label("fiction_maintenance"))
+        assertEquals("Maintain a book", CapabilityCatalog.label("fiction_maintenance"))
     }
 }

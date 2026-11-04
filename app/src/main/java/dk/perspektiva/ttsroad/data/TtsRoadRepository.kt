@@ -906,7 +906,7 @@ class TtsRoadRepository(
         val message = response.errorBody().use { errorBody ->
             detailMessage(errorBody?.string())
         } ?: when (response.code()) {
-            404 -> "Fiction not found."
+            404 -> "Book not found."
             else -> "Export failed (HTTP ${response.code()})."
         }
         return EbookExportResult.Refused(message)
@@ -1009,7 +1009,7 @@ class TtsRoadRepository(
         options: AddFictionOptions = AddFictionOptions(),
     ): FictionAddResult {
         val trimmed = url.trim()
-        if (trimmed.isEmpty()) return FictionAddResult.Refused("Paste a fiction URL first.")
+        if (trimmed.isEmpty()) return FictionAddResult.Refused("Paste a book URL or Royal Road link first.")
         if (!_currentCapabilities.value.fictionManagement) {
             return FictionAddResult.Unsupported
         }
@@ -1020,7 +1020,7 @@ class TtsRoadRepository(
             if (e.code() == 401) throw e
             FictionAddResult.Refused(
                 detailMessage(e.response()?.errorBody()?.string())
-                    ?: "The server would not add that fiction.",
+                    ?: "The server would not add that book.",
             )
         }
     }

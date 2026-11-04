@@ -114,11 +114,11 @@ fun serverLogsEmptyNote(level: String?, fictionId: Int?): String {
     val wanted = level?.trim()?.uppercase()?.takeIf { it in ServerLogLevels }
     return when {
         wanted != null && fictionId != null ->
-            "Nothing at ${wanted.lowercase()} level for this fiction."
+            "Nothing at ${wanted.lowercase()} level for this book."
 
         wanted == "ERROR" -> "No errors. Nothing on this server has failed."
         wanted != null -> "Nothing at ${wanted.lowercase()} level."
-        fictionId != null -> "Nothing has been logged about this fiction."
+        fictionId != null -> "Nothing has been logged about this book."
         else -> "This server's log is empty. Nothing has run yet, or it has been cleared."
     }
 }
@@ -126,7 +126,7 @@ fun serverLogsEmptyNote(level: String?, fictionId: Int?): String {
 /** "MOTHER OF LEARNING · CHAPTER 88", or null when the line is about the install itself. */
 private fun logSource(entry: ServerLogEntry, titles: Map<Int, String>): String? {
     val fiction = entry.fictionId?.let { id ->
-        titles[id]?.takeIf { it.isNotBlank() } ?: "Fiction $id"
+        titles[id]?.takeIf { it.isNotBlank() } ?: "Book $id"
     }
     val chapter = entry.chapterId?.let { "Chapter $it" }
     return listOfNotNull(fiction, chapter).joinToString(" · ").takeIf { it.isNotEmpty() }

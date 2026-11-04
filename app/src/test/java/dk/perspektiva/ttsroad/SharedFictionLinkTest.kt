@@ -82,7 +82,7 @@ class SharedFictionLinkTest {
         SharedFictionInbox.offer("https://www.royalroad.com/fiction/4")
         compose.setContent { TtsRoadTheme { AddFictionSection(canAddByUrl = true) } }
 
-        compose.onNodeWithText("FICTION URL OR ID").assertIsDisplayed()
+        compose.onNodeWithText("BOOK URL OR ID").assertIsDisplayed()
         compose.onNodeWithText("https://www.royalroad.com/fiction/4").assertIsDisplayed()
         assertNull(SharedFictionInbox.pending.value)
     }
