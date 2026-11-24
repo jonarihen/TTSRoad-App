@@ -499,6 +499,24 @@ Response:
 
 Call this periodically during playback, on pause, and near completion. Mark `is_played=true` when playback reaches the app's completion threshold, for example 96% or last 20 seconds.
 
+**Conflicts with other devices (server 1.5.11+, TTSRoad#473/#474; client #526).** The app sends
+an optional `client_updated_at` (ISO-8601 UTC, at most 3 fractional digits) on every save: the
+moment the position was read off the player, not the moment it is sent. A 1.5.11 server applies it
+only if strictly newer than what it holds; otherwise it answers `200`
+`{"status": "stale", "reason": "newer_server_position", "chapter_id", "server_state": {...}}`, and
+the app drops that queued save rather than retrying it. An older server ignores the field and stays
+last-write-wins. `POST /api/mobile/playback/sync` (preferred when `batch_progress` is advertised)
+already orders by the same stamp.
+
+Every progress answer may also carry `other_device`: `null`, or
+`{"device", "chapter_id", "position_seconds", "last_listened_at", "window_seconds"}` for the newest
+position another token (or the web player, `"Web"`) moved in that fiction within the window.
+`/playback/sync` returns it as an object keyed by fiction id (string). No capability flag: an absent
+key means an older server and nothing happens. The app treats the first report after local play
+starts as a baseline (the other device may have just stopped); if a later save sees a different
+report for the playing fiction, it pauses, says "Paused: now playing on <device>", and skips the
+save that pause would make. It is advisory; the server never locks anything.
+
 ### Chapter Read-Along
 
 Gated on the `readalong` capability. Do not call it on a server that does not advertise the flag.
