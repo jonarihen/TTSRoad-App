@@ -221,7 +221,8 @@ internal fun rememberNewChapters(
                             }
                             if (!ownsSession()) return@repeatOnLifecycle
                             val owner = session ?: return@repeatOnLifecycle
-                            announceNewlyReady(response.notifications, owner, seenStore, notifier) { ownsSession() }
+                            val fresh = announceNewlyReady(response.notifications, owner, seenStore, notifier) { ownsSession() }
+                            autoDownloadNewlyReady(context.applicationContext, fresh, owner) { ownsSession() }
                         } else {
                             state.isUnsupported = true
                             state.error = null
