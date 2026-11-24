@@ -241,7 +241,7 @@ class LibraryCache(
             val next = runCatching { refreshedBrowseAll() }.fold(
                 onSuccess = { Cached(value = it) },
                 onFailure = { failure ->
-                    _browseAll.value.failedWith(failure, "Could not load fictions")
+                    _browseAll.value.failedWith(failure, "Could not load books")
                 },
             )
             ensureActive()

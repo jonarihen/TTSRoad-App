@@ -54,7 +54,7 @@ class ServerLogsTest {
         assertEquals("Mother of Learning · Chapter 88", known.source)
         // A fiction the shelf has never loaded — one this account does not follow — still gets a
         // usable line. Dropping the reference would hide which book the failure was about.
-        assertEquals("Fiction 7 · Chapter 88", unknown.source)
+        assertEquals("Book 7 · Chapter 88", unknown.source)
     }
 
     @Test
@@ -124,8 +124,8 @@ class ServerLogsTest {
         val byBoth = serverLogsEmptyNote("WARNING", 7)
 
         assertEquals(3, setOf(byLevel, byFiction, byBoth).size)
-        assertTrue(byFiction.contains("fiction"))
-        assertTrue(byBoth.contains("fiction"))
+        assertTrue(byFiction.contains("book"))
+        assertTrue(byBoth.contains("book"))
         assertTrue(byBoth.contains("warning"))
     }
 

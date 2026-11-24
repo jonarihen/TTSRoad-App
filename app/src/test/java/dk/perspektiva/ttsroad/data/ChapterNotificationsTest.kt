@@ -212,10 +212,10 @@ class ChapterNotificationsTest {
     fun `an empty list is described rather than left blank`() {
         // Here an empty list is usually the answer somebody came for.
         assertEquals(
-            "Every serial you follow is up to date.",
+            "Every book you follow is up to date.",
             chapterNotificationsEmptyNote(followsAnything = true),
         )
-        assertTrue(chapterNotificationsEmptyNote(followsAnything = false).contains("Follow a serial"))
+        assertTrue(chapterNotificationsEmptyNote(followsAnything = false).contains("Follow a book"))
     }
 
     @Test

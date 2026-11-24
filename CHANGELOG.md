@@ -11,7 +11,7 @@ Notable changes to the TTSRoad Android client.
   Android, server version, capabilities, last error; no token, server address redacted); each server
   log line has COPY LINE and selectable text. (#506)
 - Diagnostics: the rest of the error surfaces (full-screen errors for bookmarks, queue, sessions,
-  pronunciation reports and chapter text; book actions, search, add/edit fiction, account security,
+  pronunciation reports and chapter text; book actions, search, add/edit book, account security,
   new-chapter retries, emptying the shelf, the address check after sign-in) now fold the raw text
   under Details too, and the server log has SHARE THESE LINES for every loaded line, server address
   removed. (#506)
@@ -38,7 +38,7 @@ Notable changes to the TTSRoad Android client.
 - Settings > Offline lists what is downloaded per book, with DELETE PLAYED and DELETE ALL for each
   book and one DELETE PLAYED DOWNLOADS across the library. (#497)
 - Settings > Offline: **Download new chapters** (off by default, like keep-ahead) downloads a followed
-  serial's chapter as soon as the new-chapter check sees it become ready, on Wi-Fi when Wi-Fi only is
+  book's chapter as soon as the new-chapter check sees it become ready, on Wi-Fi when Wi-Fi only is
   on. Found with the app closed, it is queued and may wait until the app is next opened. Kept until
   you delete it. (#497)
 - Jump back: each row shows the sentence being read at that moment (when the server has timed text),
@@ -55,6 +55,9 @@ Notable changes to the TTSRoad Android client.
 
 ### Changed
 
+- The app says "book" instead of "fiction" or "serial" everywhere a listener reads it: Home's
+  BOOKS section and "No books found", ADD BOOK and BOOK URL OR ID, the Android Auto "Books"
+  folder, notices, settings, storage and server logs. (#490)
 - Readable text is on by default when the system font scale is 130 % or more (turning it off still
   sticks), its own switch label is always readable, and every hard-coded capitals label now follows
   the setting. (#491)
@@ -95,7 +98,7 @@ Notable changes to the TTSRoad Android client.
   away, without a pull-to-refresh. (#526)
 - The phone no longer overwrites newer progress from another device: single-chapter saves carry the
   time the position was heard, so a server 1.5.11+ keeps the newer one (a losing save is dropped,
-  not retried), and when another device keeps playing the same fiction the phone pauses and says
+  not retried), and when another device keeps playing the same book the phone pauses and says
   where it is playing, without saving the superseded position. Older servers behave as before. (#526)
 - Resuming from Android Auto or a headset on weak signal serves the saved library or downloaded
   chapter after 12 seconds instead of waiting out every network timeout, and skips capability

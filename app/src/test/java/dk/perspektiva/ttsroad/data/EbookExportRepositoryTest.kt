@@ -158,7 +158,7 @@ class EbookExportRepositoryTest {
         val repository = repository(true, store)
         server.enqueue(MockResponse().setResponseCode(404))
 
-        assertEquals(EbookExportResult.Refused("Fiction not found."), repository.exportEbook(42))
+        assertEquals(EbookExportResult.Refused("Book not found."), repository.exportEbook(42))
         assertEquals(0, store.clearTokenCalls)
         assertEquals("secret", store.current().token)
         assertNull(repository.sessionEnd.value)

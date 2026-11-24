@@ -157,7 +157,7 @@ internal fun ServerLogsScreen(
                 )
                 if (fictionId != null) {
                     MetaText(
-                        text = "Showing only ${fictionLabel ?: "fiction $fictionId"}",
+                        text = "Showing only ${fictionLabel ?: "book $fictionId"}",
                         color = AarisColor.Dim,
                     )
                     OutlinedButton(
@@ -165,7 +165,7 @@ internal fun ServerLogsScreen(
                         modifier = Modifier.heightIn(min = MinTouchTargetSize),
                         shape = RectangleShape,
                     ) {
-                        Text(labelCase("Show every fiction"))
+                        Text(labelCase("Show every book"))
                     }
                 } else {
                     MetaText(
@@ -424,7 +424,7 @@ private fun ServerLogListItem(
                 modifier = Modifier.heightIn(min = MinTouchTargetSize),
                 shape = RectangleShape,
             ) {
-                Text(row.source ?: "FICTION $fiction")
+                Text(row.source ?: "BOOK $fiction")
             }
         } else if (row.source != null) {
             MetaText(text = row.source, color = AarisColor.Dim)

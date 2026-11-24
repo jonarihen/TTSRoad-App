@@ -254,6 +254,6 @@ fun browseEmptyMessage(
         sources.size == 1 -> "Nothing from ${sources.first()}"
         sources.size > 1 -> "Nothing from the ${sources.size} selected sources"
         scope == BrowseScope.Following -> "You are not following anything yet"
-        else -> "No fictions found"
+        else -> "No books found"
     }
 }
