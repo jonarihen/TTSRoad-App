@@ -157,7 +157,7 @@ internal fun ServerLogsScreen(
                 )
                 if (fictionId != null) {
                     MetaText(
-                        text = "Showing only ${fictionLabel ?: "fiction $fictionId"}",
+                        text = "Showing only ${fictionLabel ?: "book $fictionId"}",
                         color = AarisColor.Dim,
                     )
                     OutlinedButton(

@@ -5293,7 +5293,7 @@ internal fun SettingsScreen(
                             MetaText(text = "Download new chapters")
                             Spacer(modifier = Modifier.height(2.dp))
                             MetaText(
-                                text = "When a serial you follow has a new chapter ready, it is " +
+                                text = "When a book you follow has a new chapter ready, it is " +
                                     "downloaded (on Wi-Fi only if that is on). With the app closed it " +
                                     "may wait until you next open it. These are kept until you " +
                                     "delete them.",
