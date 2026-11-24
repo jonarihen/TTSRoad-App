@@ -49,6 +49,9 @@ import dk.perspektiva.ttsroad.data.hasUnsavedRecoveryCodes
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.MetaText
+import dk.perspektiva.ttsroad.ui.ErrorDetails
+import dk.perspektiva.ttsroad.ui.ErrorLine
+import dk.perspektiva.ttsroad.ui.lastErrorDetailsFor
 import dk.perspektiva.ttsroad.core.userMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -186,8 +189,8 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                 }
             }
 
-            error?.let { MetaText(text = it, color = AarisColor.Danger) }
-            recoveryState.error?.let { MetaText(text = it, color = AarisColor.Danger) }
+            error?.let { ErrorLine(it) }
+            recoveryState.error?.let { ErrorLine(it) }
             note?.let { MetaText(text = it, color = AarisColor.Ok) }
         }
     }
@@ -209,7 +212,7 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                     ) {
                         MetaText(text = "The new passwords do not match.", color = AarisColor.Danger)
                     }
-                    error?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    error?.let { ErrorLine(it) }
                 }
             },
             confirmButton = {
@@ -286,8 +289,8 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().focusRequester(authenticationCodeFocus),
                     )
-                    error?.let { MetaText(text = it, color = AarisColor.Danger) }
-                    recoveryState.error?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    error?.let { ErrorLine(it) }
+                    recoveryState.error?.let { ErrorLine(it) }
                 }
             },
             confirmButton = {
@@ -315,8 +318,8 @@ internal fun AccountSecuritySettings(repository: TtsRoadRepository) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text("Every old recovery code will stop working immediately.")
-                    error?.let { MetaText(text = it, color = AarisColor.Danger) }
-                    recoveryState.error?.let { MetaText(text = it, color = AarisColor.Danger) }
+                    error?.let { ErrorLine(it) }
+                    recoveryState.error?.let { ErrorLine(it) }
                 }
             },
             confirmButton = {
@@ -421,6 +424,7 @@ internal fun DisableTwoFactorDialog(
                         color = AarisColor.Danger,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     )
+                    ErrorDetails(details = lastErrorDetailsFor(it))
                 }
             }
         },

@@ -376,6 +376,7 @@ import dk.perspektiva.ttsroad.ui.AarisPalette
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.ErrorDetails
 import dk.perspektiva.ttsroad.ui.ErrorLine
+import dk.perspektiva.ttsroad.ui.lastErrorDetailsFor
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
 import dk.perspektiva.ttsroad.ui.SectionHeader
@@ -1659,7 +1660,7 @@ private fun RefreshablePane(
                         .padding(horizontal = 16.dp, vertical = 6.dp)
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
-                ErrorDetails(details = errorDetails, modifier = Modifier.padding(horizontal = 4.dp))
+                ErrorDetails(details = errorDetails ?: lastErrorDetailsFor(it), modifier = Modifier.padding(horizontal = 4.dp))
             }
             content()
         }
@@ -2050,6 +2051,7 @@ private fun FictionScreen(
                         error?.let {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(text = it, color = MaterialTheme.colorScheme.error)
+                            ErrorDetails(details = lastErrorDetailsFor(it))
                         }
                         // What the server accepted, in its own numbers. Every one of these actions
                         // runs in the background, so "accepted" is genuinely all there is to say —
@@ -5468,7 +5470,10 @@ internal fun SettingsScreen(
                             "every one of those follows can raise a new-chapter notice.",
                         color = AarisColor.Dim,
                     )
-                    shelfNote?.let { MetaText(text = it, color = AarisColor.Ok) }
+                    shelfNote?.let {
+                        MetaText(text = it, color = AarisColor.Ok)
+                        ErrorDetails(details = lastErrorDetailsFor(it))
+                    }
                     OutlinedButton(
                         onClick = {
                             scope.launch {
@@ -8513,6 +8518,7 @@ internal fun AddFictionSection(
         }
         message?.let {
             MetaText(text = it, color = if (isError) AarisColor.Danger else AarisColor.Muted)
+            if (isError) ErrorDetails(details = lastErrorDetailsFor(it))
         }
     }
 
@@ -8808,7 +8814,7 @@ internal fun LazyGridScope.serverSearchSection(
     }
     error?.let { message ->
         fullWidthItem(key = "server-search-error") {
-            MetaText(text = message, color = AarisColor.Danger)
+            ErrorLine(message)
         }
     }
 
@@ -9364,7 +9370,7 @@ private fun AudiobookExportListItem(row: AudiobookExportRow, onShare: (String) -
 }
 
 /** Hand [text] to the system share sheet. [title] is what the chooser calls it. */
-private fun shareText(context: Context, text: String, title: String) {
+internal fun shareText(context: Context, text: String, title: String) {
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, text)
@@ -10061,6 +10067,7 @@ internal fun FictionEditScreen(
 
         message?.let {
             MetaText(text = it, color = if (isError) AarisColor.Danger else AarisColor.Muted)
+            if (isError) ErrorDetails(details = lastErrorDetailsFor(it))
         }
 
         if (editsEverything) {
@@ -11025,7 +11032,7 @@ private fun ErrorPane(
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
         )
-        ErrorDetails(details = details, horizontalAlignment = Alignment.CenterHorizontally)
+        ErrorDetails(details = details ?: lastErrorDetailsFor(message), horizontalAlignment = Alignment.CenterHorizontally)
         Spacer(modifier = Modifier.height(16.dp))
         Button(onClick = onRetry, shape = RectangleShape) {
             Text(labelCase("Retry"))

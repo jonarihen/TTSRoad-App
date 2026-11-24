@@ -41,6 +41,7 @@ import dk.perspektiva.ttsroad.data.presentation
 import dk.perspektiva.ttsroad.ui.AarisCard
 import dk.perspektiva.ttsroad.ui.AarisColor
 import dk.perspektiva.ttsroad.ui.ErrorDetails
+import dk.perspektiva.ttsroad.ui.lastErrorDetailsFor
 import dk.perspektiva.ttsroad.ui.AarisTag
 import dk.perspektiva.ttsroad.ui.MetaText
 import dk.perspektiva.ttsroad.ui.MinTouchTargetSize
@@ -170,6 +171,7 @@ internal fun NewChaptersScreen(
                 item {
                     Column {
                         Text(it, color = MaterialTheme.colorScheme.error)
+                        ErrorDetails(details = lastErrorDetailsFor(it))
                         TextButton(onClick = { actionError = null; refresh() }, enabled = !state.isLoading) {
                             Text(labelCase("Retry"))
                         }
