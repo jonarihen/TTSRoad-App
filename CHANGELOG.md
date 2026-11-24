@@ -4,6 +4,8 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+## 0.22.0 — 2026-11-24
+
 ### Added
 
 - Diagnostics: inline errors (feeds, backups, exports, bookmarks, queue, sessions and more) and the
