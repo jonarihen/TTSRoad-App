@@ -4,6 +4,15 @@ Notable changes to the TTSRoad Android client.
 
 ## Unreleased
 
+### Fixed
+
+- RESUME on a book's screen no longer starts a chapter you have already finished. It used to pick
+  the chapter with the largest saved position. Played chapters keep their position, so on a
+  well-read book that was the longest chapter you had ever heard, replayed from the top. It now
+  resumes the chapter you left part-way through most recently, or else the one after the furthest
+  you have heard, as the car's "Resume" row does. Batch downloads start from the same chapter.
+  (#558)
+
 ## 0.22.0 — 2026-11-24
 
 ### Added

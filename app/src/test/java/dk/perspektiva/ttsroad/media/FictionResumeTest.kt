@@ -12,20 +12,30 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.time.Instant
 
 /** #328: a fiction in the car can be played as a whole, and its list opens on where you are. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class FictionResumeTest {
 
-    private fun chapter(id: Int, position: Double = 0.0, played: Boolean = false) = ChapterSummary(
+    private fun chapter(
+        id: Int,
+        position: Double = 0.0,
+        played: Boolean = false,
+        duration: Double = 600.0,
+        heardAt: String? = null,
+    ) = ChapterSummary(
         id = id,
         fictionId = 3,
         title = "Chapter $id",
-        audioDuration = 600.0,
+        audioDuration = duration,
         audio = AudioInfo(url = "https://server.example.com/audio/$id.mp3"),
-        playback = PlaybackInfo(positionSeconds = position, isPlayed = played),
+        playback = PlaybackInfo(positionSeconds = position, isPlayed = played, lastListenedAt = heardAt),
     )
+
+    /** A server stamp [hours] after a fixed start, so tests can say which was heard later. */
+    private fun heard(hours: Long): String = Instant.parse("2026-11-01T00:00:00Z").plusSeconds(hours * 3600).toString()
 
     @Test
     fun `the continue-listening chapter wins when the fiction has it`() {
@@ -65,6 +75,63 @@ class FictionResumeTest {
         val chapters = listOf(chapter(1, played = true), chapter(2))
 
         assertEquals(2, resumeChapterIn(chapters, continueChapterId = 99)?.resolvedChapterId)
+    }
+
+    @Test
+    fun `a played chapter is not resumed for being the longest one heard`() {
+        // #558, the reported screen: everything up to 39 played, each saved a few seconds short of
+        // its end, and chapter 34 — 17:23 against ~10 minutes — holding the largest position by far.
+        // RESUME used to start the chapter with the largest position, i.e. chapter 34, from the top.
+        val chapters = (1..39).map { id ->
+            val duration = if (id == 34) 1043.0 else 600.0
+            chapter(id, position = duration - 10.0, played = true, duration = duration, heardAt = heard(id.toLong()))
+        } + chapter(40) + chapter(41)
+
+        assertEquals(40, resumeChapterIn(chapters)?.resolvedChapterId)
+    }
+
+    @Test
+    fun `replaying a played chapter does not drag resume back to it`() {
+        // What the old RESUME left behind: chapter 34 started again, heard most recently, but still
+        // played, because the flag is sticky. It is heard, not somewhere to pick up.
+        val chapters = listOf(
+            chapter(33, position = 590.0, played = true, heardAt = heard(1)),
+            chapter(34, position = 12.0, played = true, heardAt = heard(9)),
+            chapter(35, position = 590.0, played = true, heardAt = heard(3)),
+            chapter(36),
+        )
+
+        assertEquals(36, resumeChapterIn(chapters)?.resolvedChapterId)
+    }
+
+    @Test
+    fun `of two chapters left part-way, the one heard last is resumed`() {
+        val back = listOf(
+            chapter(5, position = 300.0, heardAt = heard(1)),
+            chapter(6, played = true, heardAt = heard(2)),
+            chapter(7, position = 100.0, heardAt = heard(3)),
+            chapter(8),
+        )
+        // Recency, not order: going back to an earlier chapter is where you left off too.
+        val returned = back.map { if (it.id == 5) chapter(5, position = 300.0, heardAt = heard(4)) else it }
+
+        assertEquals(7, resumeChapterIn(back)?.resolvedChapterId)
+        assertEquals(5, resumeChapterIn(returned)?.resolvedChapterId)
+    }
+
+    @Test
+    fun `with no stamps the furthest chapter left part-way is resumed`() {
+        val chapters = listOf(chapter(5, position = 300.0), chapter(6, played = true), chapter(7, position = 100.0), chapter(8))
+
+        assertEquals(7, resumeChapterIn(chapters)?.resolvedChapterId)
+    }
+
+    @Test
+    fun `a chapter stopped in its last twenty seconds counts as heard, not part-way`() {
+        // It would start from the top (#451), so resuming it would replay something just finished.
+        val chapters = listOf(chapter(1, played = true), chapter(2, position = 590.0), chapter(3))
+
+        assertEquals(3, resumeChapterIn(chapters)?.resolvedChapterId)
     }
 
     @Test
