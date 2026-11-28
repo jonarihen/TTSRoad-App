@@ -271,6 +271,53 @@ class FictionHeaderLayoutTest {
     }
 
     @Test
+    fun `resume starts after the furthest chapter heard, not the longest played one`() {
+        // #558: the longest played chapter held the largest saved position, and RESUME used to
+        // start it — from the top, since it was played — however far behind the listener it was.
+        fun read(id: Int, duration: Double) = ChapterSummary(
+            id = id,
+            fictionId = 1,
+            title = "Chapter $id",
+            audioDuration = duration,
+            audio = AudioInfo(url = "https://example.test/$id.mp3"),
+            playback = PlaybackInfo(positionSeconds = duration - 12.0, isPlayed = true),
+        )
+        val chapters = listOf(read(33, 683.0), read(34, 1043.0), read(35, 442.0)) + ChapterSummary(
+            id = 36,
+            fictionId = 1,
+            title = "Chapter 36",
+            audio = AudioInfo(url = "https://example.test/36.mp3"),
+        )
+        var played: ChapterSummary? = null
+        compose.setContent {
+            TtsRoadTheme { FictionDetailHeader(fiction = fiction, chapters = chapters, onPlay = { played = it }) }
+        }
+
+        // Still RESUME, not PLAY: the book is started even though the chapter is not.
+        compose.onNodeWithText("RESUME").performClick()
+
+        assertEquals(36, played?.resolvedChapterId)
+    }
+
+    @Test
+    fun `a book never started plays its first chapter with audio`() {
+        val chapters = listOf(
+            ChapterSummary(id = 1, fictionId = 1, title = "Chapter 1"),
+            ChapterSummary(id = 2, fictionId = 1, title = "Chapter 2", audio = AudioInfo(url = "https://example.test/2.mp3")),
+            ChapterSummary(id = 3, fictionId = 1, title = "Chapter 3", audio = AudioInfo(url = "https://example.test/3.mp3")),
+        )
+        var played: ChapterSummary? = null
+        compose.setContent {
+            TtsRoadTheme { FictionDetailHeader(fiction = fiction, chapters = chapters, onPlay = { played = it }) }
+        }
+
+        compose.onNodeWithText("RESUME").assertDoesNotExist()
+        compose.onNodeWithText("PLAY").performClick()
+
+        assertEquals(2, played?.resolvedChapterId)
+    }
+
+    @Test
     fun `housekeeping is behind the door, not on the header`() {
         render()
 

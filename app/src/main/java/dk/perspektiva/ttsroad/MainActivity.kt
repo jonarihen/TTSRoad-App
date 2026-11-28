@@ -326,6 +326,7 @@ import dk.perspektiva.ttsroad.download.streamingCacheChoiceLabel
 import dk.perspektiva.ttsroad.media.PronunciationReportOutcome
 import dk.perspektiva.ttsroad.media.pronunciationReportOutcomeFor
 import dk.perspektiva.ttsroad.media.pronunciationWordAt
+import dk.perspektiva.ttsroad.media.resumeChapterIn
 import dk.perspektiva.ttsroad.media.TtsRoadMediaIds
 import dk.perspektiva.ttsroad.nav.SettingsCategory
 import dk.perspektiva.ttsroad.nav.AppScreen
@@ -1907,12 +1908,10 @@ private fun FictionScreen(
             val rowKeys = remember(visible) { visible.chapterRowKeys() }
             val currentChapterId = playerState.queue.getOrNull(playerState.currentIndex)
                 ?.let { TtsRoadMediaIds.chapterId(it.mediaId) }
-            // Where a batch download starts: what is playing, else the furthest-progressed chapter,
-            // else the top of the fiction. Same reasoning as the header's RESUME button.
+            // Where a batch download starts: what is playing, else where RESUME would start, else
+            // the top of the fiction.
             val downloadStartId = currentChapterId ?: remember(chapters) {
-                chapters.filter { it.audio != null && it.resolvedPositionSeconds > 0.0 }
-                    .maxByOrNull { it.resolvedPositionSeconds }
-                    ?.resolvedChapterId
+                resumeChapterIn(chapters.filter { it.audio != null })?.resolvedChapterId
             }
             // Row index inside [visible]; the header occupies list index 0, so rows are offset by 1.
             val currentRow = remember(visible, currentChapterId) {
@@ -9092,11 +9091,12 @@ internal fun FictionDetailHeader(
 ) {
     var descExpanded by remember(fiction.id) { mutableStateOf(false) }
     var descCanExpand by remember(fiction.id) { mutableStateOf(false) }
-    val target = remember(chapters) {
-        chapters.filter { it.audio != null && it.resolvedPositionSeconds > 0.0 }
-            .maxByOrNull { it.resolvedPositionSeconds }
-            ?: chapters.firstOrNull { it.audio != null }
-    }
+    // The rule behind the car's "Resume" row (#328), applied to this screen's own chapter list,
+    // which is fresher than the library's continue-listening memo. This used to be the chapter with
+    // the largest saved position: on a well-read fiction, the longest chapter ever heard — played,
+    // and so replayed from the top (#558).
+    val resume = remember(chapters) { resumeChapterIn(chapters.filter { it.audio != null }) }
+    val target = resume ?: chapters.firstOrNull { it.audio != null }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.Top) {
@@ -9139,7 +9139,9 @@ internal fun FictionDetailHeader(
                 shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (chapter.resolvedPositionSeconds > 0.0) labelCase("Resume") else labelCase("Play"))
+                // RESUME for a fiction already started, even when that means the top of the next
+                // chapter; PLAY only for one never begun.
+                Text(if (resume != null) labelCase("Resume") else labelCase("Play"))
             }
         }
 
